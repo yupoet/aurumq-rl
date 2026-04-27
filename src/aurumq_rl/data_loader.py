@@ -40,9 +40,21 @@ from __future__ import annotations
 
 import datetime
 import re
-from enum import StrEnum
+import sys
 from pathlib import Path
 from typing import NamedTuple
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:  # pragma: no cover — Python 3.10 compat shim
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        """Python 3.10 backport of :class:`enum.StrEnum`."""
+
+        def __str__(self) -> str:  # type: ignore[override]
+            return str(self.value)
+
 
 import numpy as np
 import polars as pl
