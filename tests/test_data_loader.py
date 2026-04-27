@@ -19,7 +19,6 @@ from aurumq_rl.data_loader import (
     filter_universe,
 )
 
-
 # ---------------------------------------------------------------------------
 # discover_factor_columns
 # ---------------------------------------------------------------------------
@@ -58,9 +57,7 @@ def test_discover_factor_columns_returns_sorted() -> None:
 
 
 def test_discover_factor_columns_truncates_to_n_factors() -> None:
-    df = pl.DataFrame(
-        {f"alpha_{i:02d}": [0.0] for i in range(20)}
-    )
+    df = pl.DataFrame({f"alpha_{i:02d}": [0.0] for i in range(20)})
     cols = discover_factor_columns(df, n_factors=5)
     assert len(cols) == 5
     assert cols == [f"alpha_{i:02d}" for i in range(5)]
@@ -74,8 +71,18 @@ def test_discover_factor_columns_empty_when_no_match() -> None:
 def test_factor_col_prefixes_constant_unchanged() -> None:
     """Guard the documented prefix list — changing it is a contract break."""
     expected = {
-        "alpha_", "mf_", "hm_", "hk_", "inst_", "mg_",
-        "cyq_", "senti_", "sh_", "fund_", "ind_", "mkt_",
+        "alpha_",
+        "mf_",
+        "hm_",
+        "hk_",
+        "inst_",
+        "mg_",
+        "cyq_",
+        "senti_",
+        "sh_",
+        "fund_",
+        "ind_",
+        "mkt_",
     }
     assert set(FACTOR_COL_PREFIXES) == expected
 
@@ -90,17 +97,17 @@ def universe_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
             "ts_code": [
-                "600519.SH",   # SH main
-                "000001.SZ",   # SZ main
-                "300750.SZ",   # ChiNext (filtered out)
-                "688981.SH",   # STAR (filtered out)
-                "830799.BJ",   # BSE (filtered out)
-                "002594.SZ",   # SZ main
-                "601398.SH",   # SH main
+                "600519.SH",  # SH main
+                "000001.SZ",  # SZ main
+                "300750.SZ",  # ChiNext (filtered out)
+                "688981.SH",  # STAR (filtered out)
+                "830799.BJ",  # BSE (filtered out)
+                "002594.SZ",  # SZ main
+                "601398.SH",  # SH main
             ],
             "name": [
                 "贵州茅台",
-                "*ST平安",   # ST → filtered
+                "*ST平安",  # ST → filtered
                 "宁德时代",
                 "中芯国际",
                 "贝特瑞",
@@ -160,9 +167,7 @@ def test_filter_st_skipped_when_name_col_missing() -> None:
 
 
 def test_build_synthetic_shapes() -> None:
-    panel = FactorPanelLoader.build_synthetic(
-        n_dates=20, n_stocks=10, n_factors=5, seed=1
-    )
+    panel = FactorPanelLoader.build_synthetic(n_dates=20, n_stocks=10, n_factors=5, seed=1)
     assert isinstance(panel, FactorPanel)
     assert panel.factor_array.shape == (20, 10, 5)
     assert panel.return_array.shape == (20, 10)
@@ -182,9 +187,7 @@ def test_build_synthetic_uses_synthetic_codes() -> None:
 
 
 def test_build_synthetic_factors_zscored() -> None:
-    panel = FactorPanelLoader.build_synthetic(
-        n_dates=50, n_stocks=200, n_factors=4, seed=42
-    )
+    panel = FactorPanelLoader.build_synthetic(n_dates=50, n_stocks=200, n_factors=4, seed=42)
     # Cross-section z-score: per (date, factor), mean ~ 0 and std ~ 1 across stocks
     arr = panel.factor_array
     means = np.nanmean(arr, axis=1)

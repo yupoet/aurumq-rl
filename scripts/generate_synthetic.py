@@ -48,18 +48,32 @@ DEFAULT_OUT: str = "data/synthetic_demo.parquet"
 
 # Per-prefix factor counts (kept small so the file stays well under 10 MB)
 FACTOR_GROUPS: dict[str, int] = {
-    "alpha_": 8,   # alpha101-style quant-volume factors
-    "mf_": 4,      # main-force capital flow
-    "hm_": 3,      # hot-money seats
-    "hk_": 2,      # northbound holdings
-    "fund_": 3,    # fundamentals
-    "ind_": 2,     # industry relative
+    "alpha_": 8,  # alpha101-style quant-volume factors
+    "mf_": 4,  # main-force capital flow
+    "hm_": 3,  # hot-money seats
+    "hk_": 2,  # northbound holdings
+    "fund_": 3,  # fundamentals
+    "ind_": 2,  # industry relative
 }
 
 # Stock-name template — fully synthetic
 NAME_PREFIXES: tuple[str, ...] = (
-    "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta",
-    "Iota", "Kappa", "Lambda", "Mu", "Nu", "Xi", "Omicron", "Pi",
+    "Alpha",
+    "Beta",
+    "Gamma",
+    "Delta",
+    "Epsilon",
+    "Zeta",
+    "Eta",
+    "Theta",
+    "Iota",
+    "Kappa",
+    "Lambda",
+    "Mu",
+    "Nu",
+    "Xi",
+    "Omicron",
+    "Pi",
 )
 
 # Industries (1..N_INDUSTRIES) — neutral integer codes
@@ -107,10 +121,7 @@ def _generate_stock_static(
         int8 array in [1, N_INDUSTRIES].
     """
     ts_codes = [f"SYN_{i:05d}" for i in range(1, n_stocks + 1)]
-    names = [
-        f"{NAME_PREFIXES[i % len(NAME_PREFIXES)]}Corp_{i:03d}"
-        for i in range(n_stocks)
-    ]
+    names = [f"{NAME_PREFIXES[i % len(NAME_PREFIXES)]}Corp_{i:03d}" for i in range(n_stocks)]
     is_st = rng.random(n_stocks) < ST_RATE
     industry_codes = rng.integers(1, N_INDUSTRIES + 1, size=n_stocks).astype(np.int16)
     return ts_codes, names, is_st, industry_codes

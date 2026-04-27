@@ -15,7 +15,6 @@ from aurumq_rl.env import (
     _apply_trading_mask,
 )
 
-
 # ---------------------------------------------------------------------------
 # Pure helper functions (no gymnasium needed)
 # ---------------------------------------------------------------------------
@@ -74,7 +73,11 @@ def test_apply_trading_mask_dynamic_price_limit() -> None:
     susp = np.zeros(2, dtype=bool)
     days_ipo = np.array([100, 100])
     masked = _apply_trading_mask(
-        returns, pct, is_st, susp, days_ipo,
+        returns,
+        pct,
+        is_st,
+        susp,
+        days_ipo,
         stock_codes=["600000.SH", "600519.SH"],
         respect_dynamic_price_limits=True,
     )
@@ -161,7 +164,9 @@ def test_stock_picking_env_smoke_step() -> None:
     from aurumq_rl.env import StockPickingEnv  # type: ignore[no-redef]
 
     n_dates, n_stocks, n_factors = 30, 10, 4
-    factor = np.random.default_rng(0).standard_normal((n_dates, n_stocks, n_factors)).astype(np.float32)
+    factor = (
+        np.random.default_rng(0).standard_normal((n_dates, n_stocks, n_factors)).astype(np.float32)
+    )
     ret = np.random.default_rng(1).standard_normal((n_dates, n_stocks)).astype(np.float32) * 0.01
 
     config = StockPickingConfig(

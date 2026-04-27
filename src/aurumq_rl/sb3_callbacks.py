@@ -128,8 +128,7 @@ else:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
-                "stable-baselines3 not installed. "
-                "Install with: pip install aurumq-rl[train]"
+                "stable-baselines3 not installed. Install with: pip install aurumq-rl[train]"
             )
 
     class CheckpointArtifactCallback:  # type: ignore[no-redef]
@@ -137,8 +136,7 @@ else:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
-                "stable-baselines3 not installed. "
-                "Install with: pip install aurumq-rl[train]"
+                "stable-baselines3 not installed. Install with: pip install aurumq-rl[train]"
             )
 
 

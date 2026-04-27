@@ -127,9 +127,7 @@ class RlAgentInference:
         elif obs.ndim == len(expected) + 1 and obs.shape[1:] == expected:
             obs_batched = obs
         else:
-            raise ValueError(
-                f"observation shape mismatch: got {obs.shape}, expected {expected}"
-            )
+            raise ValueError(f"observation shape mismatch: got {obs.shape}, expected {expected}")
 
         # ORT prefers 2D input (batch, features)
         batch_size = obs_batched.shape[0]

@@ -125,8 +125,7 @@ def export_sb3_policy_to_onnx(
 
     if not SB3_AVAILABLE:
         raise ImportError(
-            "stable-baselines3 not installed. "
-            "Install with: pip install aurumq-rl[train]"
+            "stable-baselines3 not installed. Install with: pip install aurumq-rl[train]"
         )
 
     if not model_path.exists():

@@ -9,16 +9,14 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from aurumq_rl.data_loader import FACTOR_COL_PREFIXES, REQUIRED_COLUMNS, OPTIONAL_COLUMNS
-
 # Importing from the scripts/ directory works because conftest adds it to sys.path
 from generate_synthetic import (
-    DEFAULT_OUT,
     FACTOR_GROUPS,
     build_synthetic_dataframe,
     write_synthetic_parquet,
 )
 
+from aurumq_rl.data_loader import FACTOR_COL_PREFIXES, OPTIONAL_COLUMNS, REQUIRED_COLUMNS
 
 # ---------------------------------------------------------------------------
 # Direct API
@@ -75,8 +73,7 @@ def test_build_dataframe_invalid_args() -> None:
 def test_build_dataframe_factor_groups_present() -> None:
     df = build_synthetic_dataframe(n_stocks=10, n_dates=5, seed=1)
     seen_prefixes = {
-        prefix for prefix in FACTOR_GROUPS
-        if any(c.startswith(prefix) for c in df.columns)
+        prefix for prefix in FACTOR_GROUPS if any(c.startswith(prefix) for c in df.columns)
     }
     assert seen_prefixes == set(FACTOR_GROUPS)
 
@@ -114,10 +111,14 @@ def test_cli_creates_parquet(tmp_path: Path, project_root: Path) -> None:
     cmd = [
         sys.executable,
         str(project_root / "scripts" / "generate_synthetic.py"),
-        "--n-stocks", "10",
-        "--n-dates", "10",
-        "--seed", "9",
-        "--out", str(out),
+        "--n-stocks",
+        "10",
+        "--n-dates",
+        "10",
+        "--seed",
+        "9",
+        "--out",
+        str(out),
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
     assert res.returncode == 0, f"CLI failed: {res.stderr!r}"
@@ -145,8 +146,7 @@ def test_demo_parquet_schema_complete(demo_parquet: Path) -> None:
 def test_demo_parquet_factor_groups(demo_parquet: Path) -> None:
     df = pl.read_parquet(str(demo_parquet))
     prefixes_seen = {
-        prefix for prefix in FACTOR_COL_PREFIXES
-        if any(c.startswith(prefix) for c in df.columns)
+        prefix for prefix in FACTOR_COL_PREFIXES if any(c.startswith(prefix) for c in df.columns)
     }
     assert len(prefixes_seen) >= 6, (
         f"Demo parquet must include at least 6 prefix groups, got {prefixes_seen}"

@@ -11,7 +11,6 @@ import pytest
 
 from aurumq_rl.inference import RlAgentInference, RlAgentMetadata
 
-
 # ---------------------------------------------------------------------------
 # Metadata
 # ---------------------------------------------------------------------------

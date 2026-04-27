@@ -3,15 +3,19 @@
 > An open-source reinforcement learning stock selection framework for the China A-share market, with multi-source factor inputs (alpha101 + main force flow + hot money seats + northbound capital + institutional + fundamentals).
 
 <p align="left">
+  <a href="https://github.com/yupoet/aurumq-rl/actions/workflows/ci.yml"><img src="https://github.com/yupoet/aurumq-rl/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yupoet/aurumq-rl/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg" alt="Python 3.10+"></a>
-  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/status-beta-orange.svg" alt="Status: Beta"></a>
-  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version 0.1.0"></a>
+  <a href="https://github.com/yupoet/aurumq-rl/releases"><img src="https://img.shields.io/github/v/release/yupoet/aurumq-rl?include_prereleases&label=release" alt="Latest release"></a>
   <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/tests-115%20passed-brightgreen.svg" alt="Tests: 115 passed"></a>
   <a href="https://stable-baselines3.readthedocs.io/"><img src="https://img.shields.io/badge/RL-Stable--Baselines3-blueviolet.svg" alt="Stable-Baselines3"></a>
   <a href="https://onnxruntime.ai/"><img src="https://img.shields.io/badge/inference-ONNX%20Runtime-yellow.svg" alt="ONNX Runtime"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
   <a href="https://github.com/yupoet/aurumq-rl/stargazers"><img src="https://img.shields.io/github/stars/yupoet/aurumq-rl?style=social" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/social-preview.png" alt="AurumQ-RL — Reinforcement learning stock selection for China A-share market" width="720">
 </p>
 
 <p align="left">

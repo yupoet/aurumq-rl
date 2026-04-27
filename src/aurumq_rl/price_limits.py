@@ -26,9 +26,9 @@ class StockBoard(StrEnum):
 
     SH_MAIN = "sh_main"  # Shanghai main board (60xxxx)
     SZ_MAIN = "sz_main"  # Shenzhen main board (00xxxx)
-    GEM = "gem"          # ChiNext (300/301)
-    STAR = "star"        # STAR market (688)
-    BJ = "bj"            # BSE (8/4)
+    GEM = "gem"  # ChiNext (300/301)
+    STAR = "star"  # STAR market (688)
+    BJ = "bj"  # BSE (8/4)
 
 
 # Listing-day price limits (public rules)

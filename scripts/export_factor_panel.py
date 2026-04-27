@@ -111,10 +111,7 @@ ORDER BY trade_date, ts_code
 # clause via a wrapping subquery, so they work regardless of source query.
 UNIVERSE_FILTERS: dict[str, str] = {
     "all": "TRUE",
-    "main_board": (
-        "(ts_code ~ '^60[0135][0-9]{3}\\.SH$' "
-        " OR ts_code ~ '^00[0123][0-9]{3}\\.SZ$')"
-    ),
+    "main_board": ("(ts_code ~ '^60[0135][0-9]{3}\\.SH$'  OR ts_code ~ '^00[0123][0-9]{3}\\.SZ$')"),
     "main_board_non_st": (
         "(ts_code ~ '^60[0135][0-9]{3}\\.SH$' "
         " OR ts_code ~ '^00[0123][0-9]{3}\\.SZ$') "
@@ -264,10 +261,7 @@ def _wrap_with_universe_filter(sql: str, universe_filter: str) -> str:
     predicate = UNIVERSE_FILTERS[universe_filter]
     # Strip trailing semicolons so we can wrap safely
     inner = sql.rstrip().rstrip(";")
-    return (
-        f"SELECT * FROM (\n{inner}\n) AS panel_inner\n"
-        f"WHERE {predicate}"
-    )
+    return f"SELECT * FROM (\n{inner}\n) AS panel_inner\nWHERE {predicate}"
 
 
 def _validate_date(date_str: str, label: str) -> str:
@@ -277,9 +271,7 @@ def _validate_date(date_str: str, label: str) -> str:
     try:
         _dt.date.fromisoformat(date_str)
     except ValueError as exc:
-        raise SystemExit(
-            f"Invalid {label} (expected YYYY-MM-DD): {date_str!r} ({exc})"
-        ) from exc
+        raise SystemExit(f"Invalid {label} (expected YYYY-MM-DD): {date_str!r} ({exc})") from exc
     return date_str
 
 
@@ -426,8 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         connection.set_session(readonly=True, autocommit=False)
         print(
-            f"Executing query (universe={args.universe_filter}, "
-            f"chunk_size={args.chunk_size:,})...",
+            f"Executing query (universe={args.universe_filter}, chunk_size={args.chunk_size:,})...",
             flush=True,
         )
         columns, rows = _execute_paged(
@@ -441,8 +432,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not rows:
         raise SystemExit(
-            "Query returned 0 rows. Check date range, universe filter, "
-            "and source tables."
+            "Query returned 0 rows. Check date range, universe filter, and source tables."
         )
 
     print(f"\nBuilding polars DataFrame ({len(rows):,} rows x {len(columns)} cols)...")
@@ -468,10 +458,7 @@ def main(argv: list[str] | None = None) -> int:
 
     size_bytes = args.out.stat().st_size
     size_mb = size_bytes / (1024 * 1024)
-    print(
-        f"Done. Wrote {len(rows):,} rows, "
-        f"{len(columns)} columns, {size_mb:,.1f} MB."
-    )
+    print(f"Done. Wrote {len(rows):,} rows, {len(columns)} columns, {size_mb:,.1f} MB.")
     return 0
 
 

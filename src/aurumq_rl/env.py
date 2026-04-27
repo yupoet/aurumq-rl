@@ -90,7 +90,9 @@ class StockPickingConfig:
 
     def __post_init__(self) -> None:
         if self.start_date >= self.end_date:
-            raise ValueError(f"start_date={self.start_date} must be before end_date={self.end_date}")
+            raise ValueError(
+                f"start_date={self.start_date} must be before end_date={self.end_date}"
+            )
         if self.top_k < 1:
             raise ValueError(f"top_k={self.top_k} must be >= 1")
         if self.n_factors < 1:
@@ -268,9 +270,7 @@ if GYM_AVAILABLE:
             self._days_since_ipo_panel = (
                 days_since_ipo_panel.astype(np.float32)
                 if days_since_ipo_panel is not None
-                else np.full(
-                    (n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32
-                )
+                else np.full((n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32)
             )
             self._industry_codes = (
                 industry_codes.astype(np.int32)
@@ -315,9 +315,7 @@ if GYM_AVAILABLE:
             info = {"step": 0, "n_stocks": self.n_stocks, "n_factors": self.n_factors}
             return obs, info
 
-        def step(
-            self, action: np.ndarray
-        ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
             t = self._current_step
 
             selected_idx = _apply_industry_constraint(

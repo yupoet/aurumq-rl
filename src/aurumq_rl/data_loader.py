@@ -169,14 +169,10 @@ def filter_universe(
 
     if mode == UniverseFilter.MAIN_BOARD_NON_ST:
         # Apply main-board filter
-        df = df.filter(
-            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-        )
+        df = df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
         # ST exclusion (only if name column exists)
         if name_col in df.columns:
-            df = df.filter(
-                ~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退")
-            )
+            df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
         return df
 
     # Index-component modes require an `index_code` membership column we can't
@@ -184,14 +180,10 @@ def filter_universe(
     if mode == UniverseFilter.HS300:
         # Heuristic: HS300 stocks are large-cap on main boards.
         # In production, plug in actual index membership from your DB.
-        return df.filter(
-            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-        )
+        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
     # ZZ500 / ZZ1000 require explicit membership info; fall back to main board
-    return df.filter(
-        pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-    )
+    return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
 
 # ---------------------------------------------------------------------------
@@ -328,13 +320,9 @@ class FactorPanelLoader:
         df_lazy = pl.scan_parquet(str(self.parquet_path))
 
         # Date filter
-        df = (
-            df_lazy.filter(
-                (pl.col("trade_date") >= start_date)
-                & (pl.col("trade_date") <= end_date)
-            )
-            .collect()
-        )
+        df = df_lazy.filter(
+            (pl.col("trade_date") >= start_date) & (pl.col("trade_date") <= end_date)
+        ).collect()
 
         if df.is_empty():
             raise ValueError(
@@ -452,7 +440,12 @@ class FactorPanelLoader:
         try:
             df = (
                 pl.scan_parquet(str(self.parquet_path))
-                .select([pl.col("trade_date").min().alias("min"), pl.col("trade_date").max().alias("max")])
+                .select(
+                    [
+                        pl.col("trade_date").min().alias("min"),
+                        pl.col("trade_date").max().alias("max"),
+                    ]
+                )
                 .collect()
             )
             return (df["min"][0], df["max"][0])

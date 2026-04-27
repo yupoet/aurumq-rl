@@ -53,13 +53,13 @@ __all__ = [
 ]
 
 # Always-available imports (no PyTorch required)
-from aurumq_rl.inference import RlAgentInference, RlAgentMetadata
 from aurumq_rl.data_loader import FactorPanel, FactorPanelLoader
+from aurumq_rl.inference import RlAgentInference, RlAgentMetadata
 from aurumq_rl.price_limits import (
     StockBoard,
     identify_board,
-    is_at_limit_up,
     is_at_limit_down,
+    is_at_limit_up,
 )
 
 

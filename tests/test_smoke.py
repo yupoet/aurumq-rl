@@ -12,9 +12,7 @@ import pytest
 
 
 @pytest.mark.smoke
-def test_train_smoke_test_runs_and_writes_summary(
-    project_root: Path, tmp_path: Path
-) -> None:
+def test_train_smoke_test_runs_and_writes_summary(project_root: Path, tmp_path: Path) -> None:
     out_dir = tmp_path / "smoke_out"
     cmd = [
         sys.executable,

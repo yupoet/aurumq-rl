@@ -52,7 +52,6 @@ from aurumq_rl.reward_functions import (
     sortino_reward,
 )
 
-
 # Constants
 DEFAULT_MAX_POSITION_PCT: float = 0.05
 DEFAULT_MAX_INDUSTRY_PCT: float = 0.30
@@ -86,13 +85,9 @@ class PortfolioWeightConfig:
         if self.forward_period < 1:
             raise ValueError(f"forward_period={self.forward_period} must be >= 1")
         if not 0.0 < self.max_position_pct <= 1.0:
-            raise ValueError(
-                f"max_position_pct={self.max_position_pct} must be in (0, 1]"
-            )
+            raise ValueError(f"max_position_pct={self.max_position_pct} must be in (0, 1]")
         if not 0.0 < self.max_industry_pct <= 1.0:
-            raise ValueError(
-                f"max_industry_pct={self.max_industry_pct} must be in (0, 1]"
-            )
+            raise ValueError(f"max_industry_pct={self.max_industry_pct} must be in (0, 1]")
         if self.reward_type not in {"return", "sharpe", "sortino", "mean_variance"}:
             raise ValueError(f"reward_type={self.reward_type!r} not supported")
         if self.risk_aversion < 0.0:
@@ -263,9 +258,7 @@ if GYM_AVAILABLE:
             self._days_since_ipo_panel = (
                 days_since_ipo_panel.astype(np.float32)
                 if days_since_ipo_panel is not None
-                else np.full(
-                    (n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32
-                )
+                else np.full((n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32)
             )
             self._industry_codes = (
                 industry_panel.astype(np.int32) if industry_panel is not None else None
@@ -275,9 +268,7 @@ if GYM_AVAILABLE:
             self.observation_space = spaces.Box(
                 low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
             )
-            self.action_space = spaces.Box(
-                low=0.0, high=1.0, shape=(n_stocks,), dtype=np.float32
-            )
+            self.action_space = spaces.Box(low=0.0, high=1.0, shape=(n_stocks,), dtype=np.float32)
 
             self._current_step: int = 0
             self._current_weights: np.ndarray = np.zeros(n_stocks, dtype=np.float64)
@@ -304,9 +295,7 @@ if GYM_AVAILABLE:
             info = {"step": 0, "n_stocks": self.n_stocks, "n_factors": self.n_factors}
             return obs, info
 
-        def step(
-            self, action: np.ndarray
-        ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
             t = self._current_step
 
             trading_mask = self._compute_trading_mask(t)
@@ -432,6 +421,7 @@ if GYM_AVAILABLE:
             raise ValueError(f"Unknown reward_type: {rtype!r}")
 
 else:
+
     class PortfolioWeightEnv:  # type: ignore[no-redef]
         """Placeholder when gymnasium is not installed."""
 

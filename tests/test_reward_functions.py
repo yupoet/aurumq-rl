@@ -13,7 +13,6 @@ from aurumq_rl.reward_functions import (
     sortino_reward,
 )
 
-
 # ---------------------------------------------------------------------------
 # simple_return_reward
 # ---------------------------------------------------------------------------
@@ -88,7 +87,9 @@ def test_sharpe_shape_mismatch_raises() -> None:
 def test_sharpe_uses_annualization_factor() -> None:
     weights_history = np.tile(np.array([1.0, 0.0]), (5, 1))
     panel = np.tile(np.array([0.01, 0.0]), (5, 1))
-    s = sharpe_reward(weights_history, panel, rolling_window=5, annualization_factor=ANNUALIZATION_FACTOR)
+    s = sharpe_reward(
+        weights_history, panel, rolling_window=5, annualization_factor=ANNUALIZATION_FACTOR
+    )
     assert s > 0
 
 

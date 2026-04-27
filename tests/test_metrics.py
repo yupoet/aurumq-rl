@@ -121,11 +121,7 @@ def test_load_metrics_skips_malformed_lines(tmp_path: Path) -> None:
     p = tmp_path / "bad.jsonl"
     good = _make_metric(50)
     p.write_text(
-        "not-json\n"
-        + good.model_dump_json()
-        + "\n"
-        + '{"missing": "fields"}\n'
-        + "\n",
+        "not-json\n" + good.model_dump_json() + "\n" + '{"missing": "fields"}\n' + "\n",
         encoding="utf-8",
     )
     loaded = load_metrics(p)

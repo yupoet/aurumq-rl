@@ -348,10 +348,7 @@ def run_smoke_test(args: argparse.Namespace) -> int:
         forward_period=args.forward_period,
         seed=args.seed,
     )
-    print(
-        f"[smoke] panel: factors={panel.factor_array.shape}, "
-        f"returns={panel.return_array.shape}"
-    )
+    print(f"[smoke] panel: factors={panel.factor_array.shape}, returns={panel.return_array.shape}")
 
     assert panel.factor_array.ndim == 3
     assert panel.return_array.ndim == 2
