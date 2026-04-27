@@ -2,6 +2,22 @@
 
 > An open-source reinforcement learning stock selection framework for the China A-share market, with multi-source factor inputs (alpha101 + main force flow + hot money seats + northbound capital + institutional + fundamentals).
 
+<p align="left">
+  <a href="https://github.com/yupoet/aurumq-rl/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg" alt="Python 3.10+"></a>
+  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/status-beta-orange.svg" alt="Status: Beta"></a>
+  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version 0.1.0"></a>
+  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/tests-115%20passed-brightgreen.svg" alt="Tests: 115 passed"></a>
+  <a href="https://stable-baselines3.readthedocs.io/"><img src="https://img.shields.io/badge/RL-Stable--Baselines3-blueviolet.svg" alt="Stable-Baselines3"></a>
+  <a href="https://onnxruntime.ai/"><img src="https://img.shields.io/badge/inference-ONNX%20Runtime-yellow.svg" alt="ONNX Runtime"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
+  <a href="https://github.com/yupoet/aurumq-rl/stargazers"><img src="https://img.shields.io/github/stars/yupoet/aurumq-rl?style=social" alt="GitHub stars"></a>
+</p>
+
+<p align="left">
+  <strong>📊 China A-share · 🤖 PPO/A2C/SAC · 🚀 GPU Train + CPU Infer · 📈 alpha101 + Main-Force + Hot-Money + Northbound</strong>
+</p>
+
 [English](#english) · [中文](#中文)
 
 ---
