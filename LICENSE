@@ -1,0 +1,45 @@
+MIT License
+
+Copyright (c) 2026 Paris Yu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+ADDITIONAL DISCLAIMER FOR FINANCIAL USE
+========================================
+
+This software is intended for educational and research purposes only. It is
+NOT financial advice and does NOT constitute a recommendation to buy, sell,
+or hold any security.
+
+Past performance, including backtested or simulated results, is NOT indicative
+of future results. Reinforcement learning models trained on historical data
+may fail catastrophically when market regimes change.
+
+Use of this software for live trading is at your own risk. The authors and
+contributors disclaim all liability for any financial losses, regulatory
+violations, or other damages arising from the use of this software.
+
+Users are solely responsible for:
+  1. Compliance with all applicable financial regulations in their jurisdiction
+  2. Proper risk management and position sizing
+  3. Verification that any data sources used are properly licensed
+  4. Independent validation of all trading signals before use
+
+By using this software, you acknowledge that you understand and accept these
+risks.

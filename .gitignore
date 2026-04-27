@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+pip-wheel-metadata/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache
+*.cover
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Linting
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project-specific: never commit these
+.env
+.env.local
+.env.*.local
+*.secret
+
+# Training outputs (never commit ~5MB ONNX, ~50MB SB3 zips, ~10GB tb_logs)
+models/
+checkpoints/
+*.onnx
+*.zip
+tb_logs/
+wandb/
+runs/
+logs/
+
+# Real data (never commit Parquet > 1MB; use Git LFS or external host)
+data/factor_panel.parquet
+data/full_panel.parquet
+data/*.duckdb
+data/*.db
+data/cache/
+
+# DO commit synthetic demo (small)
+!data/synthetic_demo.parquet
+
+# Notebook outputs
+*.ipynb_checkpoints
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Profiling
+*.prof
+*.pstats

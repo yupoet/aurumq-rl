@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aurumq-rl"
+version = "0.1.0"
+description = "Reinforcement learning stock selection framework for China A-share market"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Paris Yu" }
+]
+keywords = [
+    "reinforcement-learning",
+    "quantitative-finance",
+    "stock-selection",
+    "a-share",
+    "china-stock-market",
+    "alpha101",
+    "ppo",
+    "stable-baselines3",
+    "onnx",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心依赖（推理 only，~50MB，CPU 即可跑通 smoke test 和 inference）
+dependencies = [
+    "numpy>=1.24",
+    "polars>=0.20",
+    "pyarrow>=14.0",
+    "duckdb>=0.10",
+    "onnxruntime>=1.17",
+    "pydantic>=2.5",
+    "tqdm>=4.66",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# 训练依赖（GPU 实例安装，~3GB）
+train = [
+    "torch>=2.0",
+    "stable-baselines3>=2.2",
+    "gymnasium>=0.29",
+    "onnx>=1.15",
+    "onnxscript>=0.1.0",
+    "wandb>=0.16",
+    "tensorboard>=2.15",
+]
+
+# 因子计算依赖（运行 export_factor_panel.py 才需要）
+factors = [
+    "psycopg2-binary>=2.9",
+    "sqlalchemy>=2.0",
+    "pandas>=2.0",
+    "scipy>=1.11",
+]
+
+# 全部依赖
+all = [
+    "aurumq-rl[train]",
+    "aurumq-rl[factors]",
+]
+
+# 开发工具
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-benchmark>=4.0",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "pre-commit>=3.5",
+]
+
+[project.scripts]
+aurumq-rl-train = "aurumq_rl.scripts.train:main"
+aurumq-rl-infer = "aurumq_rl.scripts.infer:main"
+aurumq-rl-export = "aurumq_rl.scripts.export_factor_panel:main"
+
+[project.urls]
+Homepage = "https://github.com/yupoet/aurumq-rl"
+Documentation = "https://github.com/yupoet/aurumq-rl/tree/main/docs"
+Repository = "https://github.com/yupoet/aurumq-rl"
+Issues = "https://github.com/yupoet/aurumq-rl/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aurumq_rl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "smoke: end-to-end smoke tests (no GPU required)",
+    "factors: factor computation tests",
+    "env: gym environment tests",
+    "slow: tests that take > 5s",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "N803",  # argument lowercase (allow numpy-style: X, y)
+    "N806",  # variable lowercase in function (allow: X_train)
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false  # gradually adopt strict
+warn_unused_ignores = true
+disallow_untyped_defs = false
+no_implicit_optional = true
