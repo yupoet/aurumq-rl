@@ -119,6 +119,8 @@ export function BacktestSeriesPanel({
                 <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
                 <XAxis
                   dataKey="bin"
+                  type="number"
+                  domain={["dataMin", "dataMax"]}
                   tick={{ fontSize: 10 }}
                   tickFormatter={(v: number) => v.toFixed(2)}
                 />
