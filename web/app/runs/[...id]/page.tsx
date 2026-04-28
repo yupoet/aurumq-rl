@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   isRunLive,
+  metricsJsonlSize,
   readBacktest,
   readMetricsJsonl,
   readSummary,
@@ -27,24 +28,17 @@ export default async function RunDetailPage({
   const { id } = await params;
   const decoded = id.map((s) => decodeURIComponent(s)).join("/");
 
-  const [summary, metrics, backtest, live] = await Promise.all([
+  const [summary, metrics, backtest, live, initialOffset] = await Promise.all([
     readSummary(decoded),
     readMetricsJsonl(decoded),
     readBacktest(decoded),
     isRunLive(decoded),
+    metricsJsonlSize(decoded),
   ]);
 
   if (!summary && metrics.length === 0 && !backtest) {
     notFound();
   }
-
-  const initialOffset =
-    metrics.length === 0
-      ? 0
-      : Buffer.byteLength(
-          metrics.map((m) => JSON.stringify(m)).join("\n") + "\n",
-          "utf-8"
-        );
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-8 space-y-6">

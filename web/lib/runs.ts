@@ -209,3 +209,14 @@ export async function tailMetricsJsonl(
     await fh.close();
   }
 }
+
+export async function metricsJsonlSize(id: string): Promise<number> {
+  const dir = path.join(RUNS_DIR, ...id.split("/"));
+  const target = path.join(dir, "training_metrics.jsonl");
+  try {
+    const stat = await fs.stat(target);
+    return stat.size;
+  } catch {
+    return 0;
+  }
+}
