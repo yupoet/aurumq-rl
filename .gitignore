@@ -61,12 +61,12 @@ wandb/
 runs/
 logs/
 
-# Real data (never commit Parquet > 1MB; use Git LFS or external host)
-data/factor_panel.parquet
-data/full_panel.parquet
+# Real data — never commit any Parquet by default; route via OSS / rsync (see docs/DATA_EXTRACTION.md).
+data/*.parquet
 data/*.duckdb
 data/*.db
 data/cache/
+queries/
 
 # DO commit synthetic demo (small)
 !data/synthetic_demo.parquet
