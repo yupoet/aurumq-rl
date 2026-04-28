@@ -144,3 +144,12 @@ export async function readMetricsJsonl(
   }
   return out;
 }
+
+export async function readBacktestSeries(id: string): Promise<unknown | null> {
+  const p = path.join(RUNS_DIR, ...id.split("/"), "backtest_series.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf-8"));
+  } catch {
+    return null;
+  }
+}
