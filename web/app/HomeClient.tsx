@@ -17,12 +17,12 @@ interface Props {
 
 function Inner({ runs, algorithms, rewardTypes, universes }: Props) {
   const sp = useSearchParams();
-  const filters = {
+  const filters = useMemo(() => ({
     q: sp.get("q") ?? "",
     algorithm: sp.get("algo") ?? "",
     reward_type: sp.get("reward") ?? "",
     universe_filter: sp.get("universe") ?? "",
-  };
+  }), [sp]);
 
   const visible = useMemo(() => applyFilters(runs, filters), [runs, filters]);
   const grouped = useMemo(() => groupRuns(visible), [visible]);
