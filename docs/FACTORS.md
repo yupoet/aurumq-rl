@@ -24,6 +24,7 @@ is fixed (changing it is a contract break) and lives in
 | `fund_*` | Fundamentals | 3-6 | PE / PB / ROE / revenue growth, point-in-time aware. |
 | `ind_*` | Industry relative | 2-3 | Stock return − industry-index return, rolling rank. |
 | `mkt_*` | Market regime | 2-3 | Index-level features: trend, volatility, breadth. |
+| `gtja_*` | 国泰君安 Alpha191 短周期量价因子 | 191 | 日频 OHLCV + vwap + amount (+ benchmark for ~10 factors) |
 
 **Suggested dimensions** are starting points, not hard requirements. You can
 ship 200 alpha columns or zero `mf_*` columns; the loader handles both.

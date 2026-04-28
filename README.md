@@ -34,7 +34,7 @@
 
 **核心特色**：
 
-1. **多源因子开箱即用**：data_loader 自动识别 12 种因子前缀（`alpha_*` / `mf_*` / `hm_*` / `hk_*` / `inst_*` / `mg_*` / `cyq_*` / `senti_*` / `sh_*` / `fund_*` / `ind_*` / `mkt_*`），输入 Parquet 含哪些就用哪些
+1. **多源因子开箱即用**：data_loader 自动识别 13 种因子前缀（`alpha_*` / `mf_*` / `hm_*` / `hk_*` / `inst_*` / `mg_*` / `cyq_*` / `senti_*` / `sh_*` / `fund_*` / `ind_*` / `mkt_*` / `gtja_*`），输入 Parquet 含哪些就用哪些
 2. **A 股专属约束完整支持**：T+1、板别动态涨跌停（沪深主板 ±10% / 科创创业 ±20% / 北交 ±30% / ST ±5%）、ST 剔除、停牌剔除、新股 60 日保护、单行业 30% 暴露上限
 3. **股票池可配置过滤**：默认沪深主板非 ST（约 3500 只），剔除科创板 / 创业板 / 北交所 / ST
 4. **离线训练 + CPU 推理分离**：训练在 GPU（推荐本地 RTX 4070+）做，推理走 ONNX + onnxruntime CPU only，~150ms/5000 股
@@ -145,6 +145,7 @@ bash scripts/web_dashboard.sh        # macOS / Linux / Git Bash
 | `fund_*` | 基本面 PE/PB/ROE/营收增速 | 4 | 基本面表 |
 | `ind_*` | 申万行业相对强度 | 2 | 行业指数 |
 | `mkt_*` | 大盘 + 拥挤度 | 2 | 指数日表 |
+| `gtja_*` | 国泰君安 Alpha191 短周期量价因子 | 191 | 日频 OHLCV + vwap + amount |
 
 总维度可灵活：纯 alpha101 = 64 维 / 全部因子 ≈ 108 维 / 自定义任意组合。
 

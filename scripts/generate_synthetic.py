@@ -54,6 +54,7 @@ FACTOR_GROUPS: dict[str, int] = {
     "hk_": 2,  # northbound holdings
     "fund_": 3,  # fundamentals
     "ind_": 2,  # industry relative
+    "gtja_": 6,  # Guotai Junan Alpha191 (subset for prefix-detection coverage)
 }
 
 # Stock-name template — fully synthetic

@@ -28,7 +28,7 @@ Parquet 必须含字段：
 - `close` (float): 收盘价
 - `pct_chg` (float): 涨跌幅（**小数形式**，+10% = 0.10）
 - `vol` (float): 成交量（== 0 视为停牌）
-- 因子列（**至少一组前缀**）：`alpha_*` / `mf_*` / `hm_*` / `hk_*` / `inst_*` / `mg_*` / `cyq_*` / `senti_*` / `sh_*` / `fund_*` / `ind_*` / `mkt_*`
+- 因子列（**至少一组前缀**）：`alpha_*` / `mf_*` / `hm_*` / `hk_*` / `inst_*` / `mg_*` / `cyq_*` / `senti_*` / `sh_*` / `fund_*` / `ind_*` / `mkt_*` / `gtja_*`
 
 可选字段（提供则使用，不提供则降级）：
 - `is_st` (bool): ST 标记
@@ -102,6 +102,7 @@ Parquet 必须含字段：
 | `fund_*` | fundamentals（基本面） |
 | `ind_*` | industry（行业） |
 | `mkt_*` | market（大盘） |
+| `gtja_*` | 国泰君安 Alpha191（短周期量价因子） |
 
 ## 测试约定
 
