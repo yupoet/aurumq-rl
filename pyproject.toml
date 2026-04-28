@@ -58,6 +58,7 @@ train = [
     "onnxscript>=0.1.0",
     "wandb>=0.16",
     "tensorboard>=2.15",
+    "rich>=13.0",
 ]
 
 # 因子计算依赖（运行 export_factor_panel.py 才需要）
