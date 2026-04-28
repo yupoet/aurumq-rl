@@ -97,10 +97,12 @@ function Chip({
   );
 }
 
-export function applyFilters(
-  runs: { id: string; summary: { algorithm?: string; reward_type?: string; universe_filter?: string } | null }[],
-  filters: FilterValues
-) {
+export function applyFilters<
+  T extends {
+    id: string;
+    summary: { algorithm?: string; reward_type?: string; universe_filter?: string } | null;
+  }
+>(runs: T[], filters: FilterValues): T[] {
   const q = filters.q.toLowerCase();
   return runs.filter((r) => {
     if (q && !r.id.toLowerCase().includes(q) && !(r.summary?.reward_type ?? "").toLowerCase().includes(q)) {
