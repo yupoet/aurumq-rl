@@ -6,6 +6,16 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+
+def _json_default(o: Any) -> Any:
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
 # Optional dependency — SB3 only needed for training
 try:
     from stable_baselines3.common.callbacks import BaseCallback
@@ -63,7 +73,7 @@ if SB3_AVAILABLE:
             record = {"timestep": self.num_timesteps, **metrics}
             try:
                 with self._jsonl.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
             except OSError:
                 pass
 

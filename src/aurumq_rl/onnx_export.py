@@ -185,6 +185,7 @@ def _export_policy_onnx(
     """Export the policy network using torch.onnx.export."""
     policy = model.policy
     policy.set_training_mode(False)
+    policy = policy.to("cpu")
 
     dummy_obs = torch.zeros(1, *obs_shape, dtype=torch.float32)
 
@@ -200,6 +201,7 @@ def _export_policy_onnx(
             "action": {0: "batch_size"},
         },
         export_params=True,
+        dynamo=False,
     )
 
 

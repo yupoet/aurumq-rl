@@ -53,6 +53,41 @@ SMOKE_N_FACTORS: int = 8
 SMOKE_N_DATES: int = 60
 
 
+def _make_lr_schedule(initial_lr: float, mode: str):
+    """Return either a float (constant) or a callable taking remaining_progress."""
+    import math
+
+    if mode == "constant":
+        return initial_lr
+    if mode == "linear":
+        return lambda progress_remaining: initial_lr * progress_remaining
+    if mode == "cosine":
+        return lambda progress_remaining: 0.5 * initial_lr * (
+            1.0 + math.cos(math.pi * (1.0 - progress_remaining))
+        )
+    raise ValueError(f"Unknown learning-rate-schedule mode: {mode!r}")
+
+
+def _parse_policy_kwargs(json_str: str) -> dict:
+    """Parse --policy-kwargs-json. Maps activation_fn strings to torch classes."""
+    raw = json.loads(json_str or "{}")
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"--policy-kwargs-json must decode to a JSON object, got {type(raw).__name__}"
+        )
+
+    if "activation_fn" in raw and isinstance(raw["activation_fn"], str):
+        import torch.nn as nn
+
+        mapping = {"relu": nn.ReLU, "tanh": nn.Tanh, "elu": nn.ELU, "gelu": nn.GELU}
+        name = raw["activation_fn"].lower()
+        if name not in mapping:
+            raise ValueError(f"Unsupported activation_fn: {raw['activation_fn']!r}")
+        raw["activation_fn"] = mapping[name]
+
+    return raw
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -168,6 +203,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=42,
         help="Random seed (default 42)",
+    )
+    parser.add_argument(
+        "--vec-normalize",
+        action="store_true",
+        help=(
+            "Wrap VecEnv with stable_baselines3.common.vec_env.VecNormalize "
+            "to normalize observations and rewards. Stats are saved to "
+            "<out-dir>/vec_normalize.pkl alongside the final model."
+        ),
+    )
+    parser.add_argument(
+        "--learning-rate-schedule",
+        choices=["constant", "linear", "cosine"],
+        default="constant",
+        help=(
+            "Learning rate schedule (default constant). 'linear' decays "
+            "linearly from --learning-rate to 0 across training. 'cosine' "
+            "decays as 0.5 * lr * (1 + cos(pi * (1 - p))) for p in [0,1]."
+        ),
+    )
+    parser.add_argument(
+        "--policy-kwargs-json",
+        default="{}",
+        help=(
+            "JSON string passed as policy_kwargs to the SB3 algorithm. "
+            'Example: \'{"net_arch": [512, 256], "activation_fn": "relu"}\'. '
+            "activation_fn strings ('relu', 'tanh', 'elu', 'gelu') are mapped "
+            "to torch.nn classes."
+        ),
     )
 
     # Parallelism
@@ -471,16 +535,31 @@ def run_training(args: argparse.Namespace) -> int:
         print("[train] using DummyVecEnv n_envs=1...")
         vec_env = DummyVecEnv(env_fns)
 
+    if args.vec_normalize:
+        from stable_baselines3.common.vec_env import VecNormalize
+
+        vec_env = VecNormalize(
+            vec_env,
+            norm_obs=True,
+            norm_reward=True,
+            clip_obs=10.0,
+            clip_reward=10.0,
+        )
+        print("[train] VecNormalize wrapped (norm_obs=True, norm_reward=True)")
+
     # 4) wandb
     wandb_logger = _make_wandb_logger(args, out_dir)
 
     # 5) Create model
     print(f"[train] initializing {args.algorithm} agent...")
     algo_cls = {"PPO": PPO, "A2C": A2C, "SAC": SAC}[args.algorithm]
+    lr = _make_lr_schedule(args.learning_rate, args.learning_rate_schedule)
+    policy_kwargs = _parse_policy_kwargs(args.policy_kwargs_json)
     model = algo_cls(
         "MlpPolicy",
         vec_env,
-        learning_rate=args.learning_rate,
+        learning_rate=lr,
+        policy_kwargs=policy_kwargs or None,
         verbose=1,
         seed=args.seed,
         tensorboard_log=str(out_dir / "tb_logs"),
@@ -515,6 +594,12 @@ def run_training(args: argparse.Namespace) -> int:
         callback=[checkpoint_cb, wandb_metrics_cb, wandb_artifact_cb],
         progress_bar=True,
     )
+
+    if args.vec_normalize:
+        stats_path = out_dir / "vec_normalize.pkl"
+        vec_env.save(str(stats_path))
+        print(f"[train] VecNormalize stats saved: {stats_path}")
+
     vec_env.close()
 
     # 8) Save final model
