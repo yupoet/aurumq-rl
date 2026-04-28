@@ -229,3 +229,51 @@ export async function readBacktestSeries(id: string): Promise<unknown | null> {
     return null;
   }
 }
+
+export interface RunGroup {
+  parent: string;
+  children: RunListEntry[];
+  modifiedAt: number;
+}
+
+export type RunDisplay =
+  | { kind: "single"; run: RunListEntry }
+  | { kind: "group"; group: RunGroup };
+
+export function groupRuns(runs: RunListEntry[]): RunDisplay[] {
+  const buckets = new Map<string, RunListEntry[]>();
+  const standalone: RunListEntry[] = [];
+
+  for (const r of runs) {
+    const slash = r.id.indexOf("/");
+    if (slash < 0) {
+      standalone.push(r);
+      continue;
+    }
+    const parent = r.id.slice(0, slash);
+    const arr = buckets.get(parent);
+    if (arr) arr.push(r);
+    else buckets.set(parent, [r]);
+  }
+
+  const out: RunDisplay[] = [];
+  for (const [parent, children] of buckets) {
+    if (children.length === 1) {
+      // Singleton: render as standalone instead of group of 1
+      out.push({ kind: "single", run: children[0] });
+    } else {
+      const modifiedAt = Math.max(...children.map((c) => c.modifiedAt));
+      children.sort((a, b) => b.modifiedAt - a.modifiedAt);
+      out.push({ kind: "group", group: { parent, children, modifiedAt } });
+    }
+  }
+  for (const r of standalone) {
+    out.push({ kind: "single", run: r });
+  }
+  out.sort((a, b) => {
+    const ta = a.kind === "single" ? a.run.modifiedAt : a.group.modifiedAt;
+    const tb = b.kind === "single" ? b.run.modifiedAt : b.group.modifiedAt;
+    return tb - ta;
+  });
+  return out;
+}

@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { listRuns } from "@/lib/runs";
-import { RunCard } from "@/components/RunCard";
+import HomeClient from "./HomeClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
   const runs = await listRuns();
+  const algorithms = uniq(runs.map((r) => r.summary?.algorithm).filter(Boolean) as string[]);
+  const rewardTypes = uniq(runs.map((r) => r.summary?.reward_type).filter(Boolean) as string[]);
+  const universes = uniq(runs.map((r) => r.summary?.universe_filter).filter(Boolean) as string[]);
+
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
       <header className="flex items-baseline justify-between mb-6">
@@ -17,14 +21,16 @@ export default async function Page() {
           对比 →
         </Link>
       </header>
-      <p className="text-sm text-zinc-500 mb-4">
-        发现 {runs.length} 次训练。最近修改在前。
-      </p>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {runs.map((r) => (
-          <RunCard key={r.id} run={r} />
-        ))}
-      </div>
+      <HomeClient
+        runs={runs}
+        algorithms={algorithms}
+        rewardTypes={rewardTypes}
+        universes={universes}
+      />
     </main>
   );
+}
+
+function uniq<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr));
 }
