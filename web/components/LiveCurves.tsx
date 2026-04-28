@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LineChart,
   Line,
@@ -40,19 +40,17 @@ export function LiveCurves({
 }) {
   const [rows, setRows] = useState<MetricRow[]>(initialRows);
   const [streamLive, setStreamLive] = useState(isLive);
-  const offsetRef = useRef(initialOffset);
 
   useEffect(() => {
     if (!isLive) return;
     const path = id.split("/").map(encodeURIComponent).join("/");
-    const url = `/api/runs/${path}?part=stream&offset=${offsetRef.current}`;
+    const url = `/api/runs/${path}?part=stream&offset=${initialOffset}`;
     const es = new EventSource(url);
 
     es.onmessage = (ev) => {
       try {
         const row = JSON.parse(ev.data) as MetricRow;
         setRows((prev) => [...prev, row]);
-        offsetRef.current += ev.data.length + 8; // approximate, harmless
       } catch {
         // ignore malformed
       }
@@ -62,7 +60,7 @@ export function LiveCurves({
       es.close();
     };
     return () => es.close();
-  }, [id, isLive]);
+  }, [id, isLive, initialOffset]);
 
   const allKeys = new Set<string>();
   for (const r of rows) {
