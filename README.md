@@ -94,6 +94,29 @@ python scripts/infer.py \
     --top-k 30
 ```
 
+### Windows 注意事项
+
+Windows 上 `pip install -e ".[train]"` 默认会从 PyPI 装 **CPU-only torch**。要拿到 CUDA 版需要先单独装：
+
+```bash
+# 推荐先装 CUDA torch 再装 [train] 其余依赖（按你 NVIDIA 驱动支持的 CUDA 版本选 cuXYZ）
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+pip install -e ".[train]"
+
+# 验证
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+ONNX 导出阶段会输出含 emoji 的提示文本，简体中文 Windows 控制台默认 GBK 编码无法编码：
+
+```bash
+# bash / git-bash
+export PYTHONIOENCODING=utf-8
+
+# PowerShell
+$env:PYTHONIOENCODING = "utf-8"
+```
+
 ### 因子前缀约定
 
 `data_loader` 通过列名前缀识别因子组。**输入 Parquet 中存在的前缀就被自动加载，不存在的自动跳过**。
