@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   readBacktest,
+  readBacktestSeries,
   readMetricsJsonl,
   readSummary,
   tailMetricsJsonl,
@@ -27,6 +28,9 @@ export async function GET(
   }
   if (part === "backtest") {
     return NextResponse.json(await readBacktest(decoded));
+  }
+  if (part === "backtest_series") {
+    return NextResponse.json(await readBacktestSeries(decoded));
   }
   if (part === "summary") {
     return NextResponse.json(await readSummary(decoded));

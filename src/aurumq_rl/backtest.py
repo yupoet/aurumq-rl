@@ -58,6 +58,30 @@ def _per_date_ics(predictions: np.ndarray, returns: np.ndarray) -> list[float]:
     return ics
 
 
+def _per_date_ics_aligned(predictions: np.ndarray, returns: np.ndarray) -> list[float]:
+    """Per-date IC aligned to predictions.shape[0]. 0.0 for degenerate days.
+
+    Unlike ``_per_date_ics`` (which is the canonical helper for scalar
+    statistics and SKIPS degenerate days), this returns one entry per row of
+    ``predictions`` so the result can be plotted directly against a dates
+    axis. Use this for per-date series, never for scalar IC / IC-IR.
+    """
+    if predictions.shape != returns.shape:
+        raise ValueError(
+            f"shape mismatch: predictions {predictions.shape} vs returns {returns.shape}"
+        )
+    out: list[float] = []
+    for t in range(predictions.shape[0]):
+        p, r = predictions[t], returns[t]
+        mask = np.isfinite(p) & np.isfinite(r)
+        if mask.sum() < 2 or np.std(p[mask]) < 1e-12 or np.std(r[mask]) < 1e-12:
+            out.append(0.0)
+            continue
+        c = np.corrcoef(p[mask], r[mask])[0, 1]
+        out.append(float(c) if np.isfinite(c) else 0.0)
+    return out
+
+
 def compute_ic(predictions: np.ndarray, returns: np.ndarray) -> float:
     """Mean per-date Pearson IC between predictions and forward returns.
 
@@ -172,12 +196,119 @@ def run_backtest(
     )
 
 
+@dataclass
+class BacktestSeries:
+    """Per-date series produced alongside the BacktestResult."""
+
+    dates: list[str]
+    ic: list[float]
+    top_k_returns: list[float]
+    equity_curve: list[float]
+    random_baseline_sharpes: list[float] = field(default_factory=list)
+
+    def to_json(self, path: Path | str) -> None:
+        Path(path).write_text(
+            json.dumps(asdict(self), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def from_json(cls, path: Path | str) -> "BacktestSeries":
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(**data)
+
+
+def _per_date_top_k_returns(
+    predictions: np.ndarray, returns: np.ndarray, top_k: int
+) -> list[float]:
+    out: list[float] = []
+    for t in range(predictions.shape[0]):
+        p, r = predictions[t], returns[t]
+        mask = np.isfinite(p) & np.isfinite(r)
+        if mask.sum() < top_k:
+            out.append(0.0)
+            continue
+        idx = np.argsort(-p[mask])[:top_k]
+        out.append(float(r[mask][idx].mean()))
+    return out
+
+
+def _random_sharpes(
+    returns: np.ndarray, top_k: int, n_simulations: int, seed: int
+) -> list[float]:
+    rng = np.random.default_rng(seed)
+    out: list[float] = []
+    for _ in range(n_simulations):
+        preds = rng.normal(size=returns.shape)
+        out.append(compute_top_k_sharpe(preds, returns, top_k=top_k))
+    return out
+
+
+def run_backtest_with_series(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    dates: list,
+    top_k: int = 30,
+    n_random_simulations: int = 100,
+    random_seed: int = 0,
+) -> tuple["BacktestResult", "BacktestSeries"]:
+    """One-shot evaluation that also returns per-date / per-simulation series.
+
+    The scalar BacktestResult uses identical semantics to ``run_backtest`` —
+    degenerate days are SKIPPED, not padded — so ``backtest.json`` is stable
+    across both code paths. The per-date series, by contrast, must align to
+    every entry in ``dates``; degenerate days are filled with 0.0 in the
+    series so chart positions line up with the date axis.
+    """
+    if predictions.shape != returns.shape:
+        raise ValueError("shape mismatch")
+    if len(dates) != predictions.shape[0]:
+        raise ValueError(
+            f"dates length {len(dates)} != n_dates {predictions.shape[0]}"
+        )
+
+    # Canonical scalars — same semantics as run_backtest() so backtest.json is stable.
+    result = run_backtest(
+        predictions=predictions,
+        returns=returns,
+        top_k=top_k,
+        n_random_simulations=n_random_simulations,
+        random_seed=random_seed,
+    )
+
+    # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
+    ic_per_date = _per_date_ics_aligned(predictions, returns)
+    top_k_rets = _per_date_top_k_returns(predictions, returns, top_k)
+
+    equity = []
+    cum = 1.0
+    for ret in top_k_rets:
+        cum *= 1.0 + ret
+        equity.append(cum)
+
+    random_sharpes = _random_sharpes(
+        returns, top_k=top_k, n_simulations=n_random_simulations, seed=random_seed
+    )
+
+    series = BacktestSeries(
+        dates=[str(d) for d in dates],
+        ic=ic_per_date,
+        top_k_returns=top_k_rets,
+        equity_curve=equity,
+        random_baseline_sharpes=random_sharpes,
+    )
+
+    return result, series
+
+
 __all__ = [
     "BacktestResult",
+    "BacktestSeries",
     "compute_ic",
     "compute_ic_ir",
     "compute_top_k_sharpe",
     "compute_top_k_cumret",
     "random_baseline",
     "run_backtest",
+    "run_backtest_with_series",
 ]

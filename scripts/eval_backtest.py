@@ -24,7 +24,7 @@ sys.path.insert(0, str(_root / "src"))
 
 import numpy as np
 
-from aurumq_rl.backtest import run_backtest
+from aurumq_rl.backtest import run_backtest_with_series
 from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
 
 
@@ -104,17 +104,21 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[backtest] predictions shape: {out.shape}")
 
-    result = run_backtest(
+    result, series = run_backtest_with_series(
         predictions=out,
         returns=panel.return_array,
+        dates=panel.dates,
         top_k=args.top_k,
         n_random_simulations=args.n_random_simulations,
         random_seed=args.seed,
     )
 
     out_path = args.run_dir / "backtest.json"
+    series_path = args.run_dir / "backtest_series.json"
     result.to_json(out_path)
+    series.to_json(series_path)
     print(f"[backtest] wrote {out_path}")
+    print(f"[backtest] wrote {series_path}")
     print(
         f"[backtest] IC={result.ic:+.4f} IR={result.ic_ir:+.3f} "
         f"top{args.top_k}_Sharpe={result.top_k_sharpe:+.3f} "

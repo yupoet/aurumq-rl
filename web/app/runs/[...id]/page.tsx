@@ -4,6 +4,7 @@ import {
   isRunLive,
   metricsJsonlSize,
   readBacktest,
+  readBacktestSeries,
   readMetricsJsonl,
   readSummary,
 } from "@/lib/runs";
@@ -12,6 +13,10 @@ import {
   BacktestSummary,
   type BacktestData,
 } from "@/components/BacktestSummary";
+import {
+  BacktestSeriesPanel,
+  type BacktestSeriesData,
+} from "@/components/BacktestSeriesPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +33,15 @@ export default async function RunDetailPage({
   const { id } = await params;
   const decoded = id.map((s) => decodeURIComponent(s)).join("/");
 
-  const [summary, metrics, backtest, live, initialOffset] = await Promise.all([
-    readSummary(decoded),
-    readMetricsJsonl(decoded),
-    readBacktest(decoded),
-    isRunLive(decoded),
-    metricsJsonlSize(decoded),
-  ]);
+  const [summary, metrics, backtest, series, live, initialOffset] =
+    await Promise.all([
+      readSummary(decoded),
+      readMetricsJsonl(decoded),
+      readBacktest(decoded) as Promise<BacktestData | null>,
+      readBacktestSeries(decoded) as Promise<BacktestSeriesData | null>,
+      isRunLive(decoded),
+      metricsJsonlSize(decoded),
+    ]);
 
   if (!summary && metrics.length === 0 && !backtest) {
     notFound();
@@ -71,8 +78,9 @@ export default async function RunDetailPage({
         isLive={live}
       />
 
-      {backtest != null && (
-        <BacktestSummary data={backtest as BacktestData} />
+      {backtest != null && <BacktestSummary data={backtest} />}
+      {series != null && backtest != null && (
+        <BacktestSeriesPanel data={series} realizedSharpe={backtest.top_k_sharpe} />
       )}
     </main>
   );

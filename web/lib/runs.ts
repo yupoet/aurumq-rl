@@ -220,3 +220,12 @@ export async function metricsJsonlSize(id: string): Promise<number> {
     return 0;
   }
 }
+
+export async function readBacktestSeries(id: string): Promise<unknown | null> {
+  const p = path.join(RUNS_DIR, ...id.split("/"), "backtest_series.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf-8"));
+  } catch {
+    return null;
+  }
+}
