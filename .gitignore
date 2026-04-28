@@ -58,7 +58,7 @@ checkpoints/
 *.zip
 tb_logs/
 wandb/
-runs/
+/runs/
 logs/
 
 # Real data — never commit any Parquet by default; route via OSS / rsync (see docs/DATA_EXTRACTION.md).
