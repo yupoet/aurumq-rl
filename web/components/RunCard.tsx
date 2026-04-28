@@ -36,6 +36,11 @@ export function RunCard({ run }: { run: RunListEntry }) {
         </dl>
       )}
       <div className="mt-3 flex gap-1.5 text-[10px] uppercase tracking-wider">
+        {run.isLive && (
+          <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200 animate-pulse">
+            live
+          </span>
+        )}
         <Badge ok={run.hasMetrics}>metrics</Badge>
         <Badge ok={run.hasOnnx}>onnx</Badge>
         <Badge ok={run.hasBacktest}>backtest</Badge>
