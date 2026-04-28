@@ -90,6 +90,16 @@ python scripts/infer.py \
     --top-k 30
 ```
 
+### 本地 web dashboard
+
+```bash
+# 启动（自动 npm install + npm run dev）
+bash scripts/web_dashboard.sh        # macOS / Linux / Git Bash
+.\scripts\web_dashboard.ps1          # PowerShell
+```
+
+打开 http://localhost:3000 查看训练历史。`/runs/<id>` 是单次详情（含 backtest 摘要 + 训练曲线），`/compare?ids=a,b,c` 多次叠加对比。前端 Next.js 14 server route 直接读取 `runs/` 目录，无需后端。
+
 ### 因子前缀约定
 
 `data_loader` 通过列名前缀识别因子组。**输入 Parquet 中存在的前缀就被自动加载，不存在的自动跳过**。
