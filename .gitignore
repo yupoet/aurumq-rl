@@ -61,7 +61,7 @@ wandb/
 /runs/
 logs/
 
-# Real data — never commit any Parquet by default; route via OSS / rsync (see docs/DATA_EXTRACTION.md).
+# Real data — never commit any Parquet by default; route via your own object storage / rsync.
 data/*.parquet
 data/*.duckdb
 data/*.db
