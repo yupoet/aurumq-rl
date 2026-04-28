@@ -94,6 +94,8 @@ REQUIRED_COLUMNS: tuple[str, ...] = ("ts_code", "trade_date", "close", "pct_chg"
 
 # Built-in fallback SQL — minimal, deliberately *no* factor columns.
 # Use --sql-file to point at docs/example_query.sql or your own template.
+# For a SQL template that includes HS300/ZZ500 membership flags and the full
+# factor join, see docs/example_query_with_index.sql.
 DEFAULT_SQL: str = """
 SELECT
     trade_date,
