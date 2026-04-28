@@ -58,6 +58,30 @@ def _per_date_ics(predictions: np.ndarray, returns: np.ndarray) -> list[float]:
     return ics
 
 
+def _per_date_ics_aligned(predictions: np.ndarray, returns: np.ndarray) -> list[float]:
+    """Per-date IC aligned to predictions.shape[0]. 0.0 for degenerate days.
+
+    Unlike ``_per_date_ics`` (which is the canonical helper for scalar
+    statistics and SKIPS degenerate days), this returns one entry per row of
+    ``predictions`` so the result can be plotted directly against a dates
+    axis. Use this for per-date series, never for scalar IC / IC-IR.
+    """
+    if predictions.shape != returns.shape:
+        raise ValueError(
+            f"shape mismatch: predictions {predictions.shape} vs returns {returns.shape}"
+        )
+    out: list[float] = []
+    for t in range(predictions.shape[0]):
+        p, r = predictions[t], returns[t]
+        mask = np.isfinite(p) & np.isfinite(r)
+        if mask.sum() < 2 or np.std(p[mask]) < 1e-12 or np.std(r[mask]) < 1e-12:
+            out.append(0.0)
+            continue
+        c = np.corrcoef(p[mask], r[mask])[0, 1]
+        out.append(float(c) if np.isfinite(c) else 0.0)
+    return out
+
+
 def compute_ic(predictions: np.ndarray, returns: np.ndarray) -> float:
     """Mean per-date Pearson IC between predictions and forward returns.
 
@@ -253,10 +277,7 @@ def run_backtest_with_series(
     )
 
     # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
-    ic_per_date = _per_date_ics(predictions, returns)
-    if len(ic_per_date) < predictions.shape[0]:
-        # Pad to align with dates; degenerate days fill with 0.0
-        ic_per_date = ic_per_date + [0.0] * (predictions.shape[0] - len(ic_per_date))
+    ic_per_date = _per_date_ics_aligned(predictions, returns)
     top_k_rets = _per_date_top_k_returns(predictions, returns, top_k)
 
     equity = []
