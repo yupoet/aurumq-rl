@@ -228,7 +228,14 @@ def run_backtest_with_series(
     n_random_simulations: int = 100,
     random_seed: int = 0,
 ) -> tuple["BacktestResult", "BacktestSeries"]:
-    """One-shot evaluation that also returns per-date / per-simulation series."""
+    """One-shot evaluation that also returns per-date / per-simulation series.
+
+    The scalar BacktestResult uses identical semantics to ``run_backtest`` —
+    degenerate days are SKIPPED, not padded — so ``backtest.json`` is stable
+    across both code paths. The per-date series, by contrast, must align to
+    every entry in ``dates``; degenerate days are filled with 0.0 in the
+    series so chart positions line up with the date axis.
+    """
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
     if len(dates) != predictions.shape[0]:
@@ -236,6 +243,16 @@ def run_backtest_with_series(
             f"dates length {len(dates)} != n_dates {predictions.shape[0]}"
         )
 
+    # Canonical scalars — same semantics as run_backtest() so backtest.json is stable.
+    result = run_backtest(
+        predictions=predictions,
+        returns=returns,
+        top_k=top_k,
+        n_random_simulations=n_random_simulations,
+        random_seed=random_seed,
+    )
+
+    # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
     ic_per_date = _per_date_ics(predictions, returns)
     if len(ic_per_date) < predictions.shape[0]:
         # Pad to align with dates; degenerate days fill with 0.0
@@ -250,42 +267,6 @@ def run_backtest_with_series(
 
     random_sharpes = _random_sharpes(
         returns, top_k=top_k, n_simulations=n_random_simulations, seed=random_seed
-    )
-
-    arr = np.asarray(top_k_rets)
-    sharpe = (
-        float(arr.mean() / arr.std(ddof=1) * np.sqrt(252))
-        if arr.size > 1 and arr.std(ddof=1) > 1e-12
-        else 0.0
-    )
-    cumret = float(equity[-1] - 1.0) if equity else 0.0
-
-    arr_ic = np.asarray(ic_per_date)
-    ic_mean = float(arr_ic.mean()) if arr_ic.size else 0.0
-    ic_ir = (
-        float(arr_ic.mean() / arr_ic.std(ddof=1))
-        if arr_ic.size > 1 and arr_ic.std(ddof=1) > 1e-12
-        else 0.0
-    )
-
-    arr_rs = np.asarray(random_sharpes)
-    baseline = {
-        "mean_sharpe": float(arr_rs.mean()) if arr_rs.size else 0.0,
-        "std_sharpe": float(arr_rs.std(ddof=1)) if arr_rs.size > 1 else 0.0,
-        "p05_sharpe": float(np.percentile(arr_rs, 5)) if arr_rs.size else 0.0,
-        "p50_sharpe": float(np.percentile(arr_rs, 50)) if arr_rs.size else 0.0,
-        "p95_sharpe": float(np.percentile(arr_rs, 95)) if arr_rs.size else 0.0,
-    }
-
-    result = BacktestResult(
-        ic=ic_mean,
-        ic_ir=ic_ir,
-        top_k_sharpe=sharpe,
-        top_k_cumret=cumret,
-        random_baseline=baseline,
-        n_dates=predictions.shape[0],
-        n_stocks=predictions.shape[1],
-        top_k=top_k,
     )
 
     series = BacktestSeries(
