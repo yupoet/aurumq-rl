@@ -57,6 +57,8 @@ factor groups — the model just sees those positions as zero.
 | `days_since_ipo`  | `INTEGER`  | Trading days since IPO. Drives new-stock protection. |
 | `industry_code`   | `INTEGER`  | SW level-1 industry code. Used for risk caps. |
 | `name`            | `TEXT`     | Stock name (lets the loader detect ST/退 from text). |
+| `is_hs300`        | `BOOLEAN`  | True if stock is a HS300 constituent on `trade_date`. Per-row, supports historical changes. Consumed by `--universe-filter hs300`. |
+| `is_zz500`        | `BOOLEAN`  | True if stock is a CSI500 constituent on `trade_date`. Consumed by `--universe-filter zz500`. |
 
 ## Recommended source tables
 

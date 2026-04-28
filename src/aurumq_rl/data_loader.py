@@ -187,15 +187,26 @@ def filter_universe(
             df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
         return df
 
-    # Index-component modes require an `index_code` membership column we can't
-    # universally guarantee, so we approximate by code prefix:
+    # Index-component modes: prefer explicit boolean column when present,
+    # fall back to main-board heuristic otherwise.
     if mode == UniverseFilter.HS300:
-        # Heuristic: HS300 stocks are large-cap on main boards.
-        # In production, plug in actual index membership from your DB.
-        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
+        if "is_hs300" in df.columns:
+            return df.filter(pl.col("is_hs300") == True)  # noqa: E712
+        return df.filter(
+            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
+        )
 
-    # ZZ500 / ZZ1000 require explicit membership info; fall back to main board
-    return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
+    if mode == UniverseFilter.ZZ500:
+        if "is_zz500" in df.columns:
+            return df.filter(pl.col("is_zz500") == True)  # noqa: E712
+        return df.filter(
+            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
+        )
+
+    # ZZ1000 (and any future enum value) — fall back to main-board heuristic.
+    return df.filter(
+        pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
+    )
 
 
 # ---------------------------------------------------------------------------
