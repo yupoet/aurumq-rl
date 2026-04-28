@@ -44,6 +44,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import json
+
     import onnxruntime as ort
 
     args = parse_args(argv)
@@ -64,10 +66,33 @@ def main(argv: list[str] | None = None) -> int:
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[backtest] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
+    expected_obs_dim = n_stocks * n_factors
+    meta_path = args.run_dir / "metadata.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        recorded = meta.get("obs_shape")
+        if isinstance(recorded, list) and len(recorded) == 1:
+            expected_obs_dim = int(recorded[0])
+            print(f"[backtest] obs_shape from metadata: {recorded}")
+
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     input_name = sess.get_inputs()[0].name
 
-    obs = panel.factor_array.reshape(n_dates, n_stocks * n_factors).astype(np.float32)
+    factor_flat = panel.factor_array.reshape(n_dates, n_stocks * n_factors).astype(np.float32)
+    if expected_obs_dim == n_stocks * n_factors:
+        obs = factor_flat
+    elif expected_obs_dim == n_stocks * (n_factors + 1):
+        weights_pad = np.zeros((n_dates, n_stocks), dtype=np.float32)
+        obs = np.concatenate([factor_flat, weights_pad], axis=1)
+        print("[backtest] padded zero current-weights for portfolio_weight env")
+    else:
+        print(
+            f"[error] obs_dim mismatch: panel gives {n_stocks * n_factors}, "
+            f"model expects {expected_obs_dim}",
+            file=sys.stderr,
+        )
+        return 3
+
     raw_out = sess.run(None, {input_name: obs})[0]
 
     if raw_out.ndim == 1:
