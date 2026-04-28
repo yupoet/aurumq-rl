@@ -34,6 +34,8 @@ Parquet 必须含字段：
 - `is_st` (bool): ST 标记
 - `days_since_ipo` (int): 上市以来交易日数
 - `industry_code` (int): 申万一级行业编码
+- `is_hs300` (bool): 是否沪深 300 成分股（按 trade_date，支持历史变更）
+- `is_zz500` (bool): 是否中证 500 成分股（按 trade_date）
 
 **数据怎么来不是本项目的关心范围**。用户可以：
 1. 用 `scripts/export_factor_panel.py` 从自己的 PG 数据仓库抽取（含 SQL 模板）
