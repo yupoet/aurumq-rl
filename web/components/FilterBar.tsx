@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export interface FilterValues {
@@ -25,8 +25,13 @@ export function FilterBar({
   const [algo, setAlgo] = useState(sp.get("algo") ?? "");
   const [reward, setReward] = useState(sp.get("reward") ?? "");
   const [universe, setUniverse] = useState(sp.get("universe") ?? "");
+  const isFirstRender = useRef(true);
 
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (algo) params.set("algo", algo);
