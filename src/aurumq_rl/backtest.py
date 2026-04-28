@@ -172,12 +172,141 @@ def run_backtest(
     )
 
 
+@dataclass
+class BacktestSeries:
+    """Per-date series produced alongside the BacktestResult."""
+
+    dates: list[str]
+    ic: list[float]
+    top_k_returns: list[float]
+    equity_curve: list[float]
+    random_baseline_sharpes: list[float] = field(default_factory=list)
+
+    def to_json(self, path: Path | str) -> None:
+        Path(path).write_text(
+            json.dumps(asdict(self), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def from_json(cls, path: Path | str) -> "BacktestSeries":
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(**data)
+
+
+def _per_date_top_k_returns(
+    predictions: np.ndarray, returns: np.ndarray, top_k: int
+) -> list[float]:
+    out: list[float] = []
+    for t in range(predictions.shape[0]):
+        p, r = predictions[t], returns[t]
+        mask = np.isfinite(p) & np.isfinite(r)
+        if mask.sum() < top_k:
+            out.append(0.0)
+            continue
+        idx = np.argsort(-p[mask])[:top_k]
+        out.append(float(r[mask][idx].mean()))
+    return out
+
+
+def _random_sharpes(
+    returns: np.ndarray, top_k: int, n_simulations: int, seed: int
+) -> list[float]:
+    rng = np.random.default_rng(seed)
+    out: list[float] = []
+    for _ in range(n_simulations):
+        preds = rng.normal(size=returns.shape)
+        out.append(compute_top_k_sharpe(preds, returns, top_k=top_k))
+    return out
+
+
+def run_backtest_with_series(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    dates: list,
+    top_k: int = 30,
+    n_random_simulations: int = 100,
+    random_seed: int = 0,
+) -> tuple["BacktestResult", "BacktestSeries"]:
+    """One-shot evaluation that also returns per-date / per-simulation series."""
+    if predictions.shape != returns.shape:
+        raise ValueError("shape mismatch")
+    if len(dates) != predictions.shape[0]:
+        raise ValueError(
+            f"dates length {len(dates)} != n_dates {predictions.shape[0]}"
+        )
+
+    ic_per_date = _per_date_ics(predictions, returns)
+    if len(ic_per_date) < predictions.shape[0]:
+        # Pad to align with dates; degenerate days fill with 0.0
+        ic_per_date = ic_per_date + [0.0] * (predictions.shape[0] - len(ic_per_date))
+    top_k_rets = _per_date_top_k_returns(predictions, returns, top_k)
+
+    equity = []
+    cum = 1.0
+    for ret in top_k_rets:
+        cum *= 1.0 + ret
+        equity.append(cum)
+
+    random_sharpes = _random_sharpes(
+        returns, top_k=top_k, n_simulations=n_random_simulations, seed=random_seed
+    )
+
+    arr = np.asarray(top_k_rets)
+    sharpe = (
+        float(arr.mean() / arr.std(ddof=1) * np.sqrt(252))
+        if arr.size > 1 and arr.std(ddof=1) > 1e-12
+        else 0.0
+    )
+    cumret = float(equity[-1] - 1.0) if equity else 0.0
+
+    arr_ic = np.asarray(ic_per_date)
+    ic_mean = float(arr_ic.mean()) if arr_ic.size else 0.0
+    ic_ir = (
+        float(arr_ic.mean() / arr_ic.std(ddof=1))
+        if arr_ic.size > 1 and arr_ic.std(ddof=1) > 1e-12
+        else 0.0
+    )
+
+    arr_rs = np.asarray(random_sharpes)
+    baseline = {
+        "mean_sharpe": float(arr_rs.mean()) if arr_rs.size else 0.0,
+        "std_sharpe": float(arr_rs.std(ddof=1)) if arr_rs.size > 1 else 0.0,
+        "p05_sharpe": float(np.percentile(arr_rs, 5)) if arr_rs.size else 0.0,
+        "p50_sharpe": float(np.percentile(arr_rs, 50)) if arr_rs.size else 0.0,
+        "p95_sharpe": float(np.percentile(arr_rs, 95)) if arr_rs.size else 0.0,
+    }
+
+    result = BacktestResult(
+        ic=ic_mean,
+        ic_ir=ic_ir,
+        top_k_sharpe=sharpe,
+        top_k_cumret=cumret,
+        random_baseline=baseline,
+        n_dates=predictions.shape[0],
+        n_stocks=predictions.shape[1],
+        top_k=top_k,
+    )
+
+    series = BacktestSeries(
+        dates=[str(d) for d in dates],
+        ic=ic_per_date,
+        top_k_returns=top_k_rets,
+        equity_curve=equity,
+        random_baseline_sharpes=random_sharpes,
+    )
+
+    return result, series
+
+
 __all__ = [
     "BacktestResult",
+    "BacktestSeries",
     "compute_ic",
     "compute_ic_ir",
     "compute_top_k_sharpe",
     "compute_top_k_cumret",
     "random_baseline",
     "run_backtest",
+    "run_backtest_with_series",
 ]
