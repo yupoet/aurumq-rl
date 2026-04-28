@@ -503,6 +503,18 @@ def run_training(args: argparse.Namespace) -> int:
         print("[train] using DummyVecEnv n_envs=1...")
         vec_env = DummyVecEnv(env_fns)
 
+    if args.vec_normalize:
+        from stable_baselines3.common.vec_env import VecNormalize
+
+        vec_env = VecNormalize(
+            vec_env,
+            norm_obs=True,
+            norm_reward=True,
+            clip_obs=10.0,
+            clip_reward=10.0,
+        )
+        print("[train] VecNormalize wrapped (norm_obs=True, norm_reward=True)")
+
     # 4) wandb
     wandb_logger = _make_wandb_logger(args, out_dir)
 
@@ -547,6 +559,12 @@ def run_training(args: argparse.Namespace) -> int:
         callback=[checkpoint_cb, wandb_metrics_cb, wandb_artifact_cb],
         progress_bar=True,
     )
+
+    if args.vec_normalize:
+        stats_path = out_dir / "vec_normalize.pkl"
+        vec_env.save(str(stats_path))
+        print(f"[train] VecNormalize stats saved: {stats_path}")
+
     vec_env.close()
 
     # 8) Save final model
