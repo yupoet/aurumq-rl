@@ -169,6 +169,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=42,
         help="Random seed (default 42)",
     )
+    parser.add_argument(
+        "--vec-normalize",
+        action="store_true",
+        help=(
+            "Wrap VecEnv with stable_baselines3.common.vec_env.VecNormalize "
+            "to normalize observations and rewards. Stats are saved to "
+            "<out-dir>/vec_normalize.pkl alongside the final model."
+        ),
+    )
+    parser.add_argument(
+        "--learning-rate-schedule",
+        choices=["constant", "linear", "cosine"],
+        default="constant",
+        help=(
+            "Learning rate schedule (default constant). 'linear' decays "
+            "linearly from --learning-rate to 0 across training. 'cosine' "
+            "decays as 0.5 * lr * (1 + cos(pi * (1 - p))) for p in [0,1]."
+        ),
+    )
+    parser.add_argument(
+        "--policy-kwargs-json",
+        default="{}",
+        help=(
+            "JSON string passed as policy_kwargs to the SB3 algorithm. "
+            'Example: \'{"net_arch": [512, 256], "activation_fn": "relu"}\'. '
+            "activation_fn strings ('relu', 'tanh', 'elu', 'gelu') are mapped "
+            "to torch.nn classes."
+        ),
+    )
 
     # Parallelism
     parser.add_argument(
