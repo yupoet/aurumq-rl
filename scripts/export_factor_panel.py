@@ -88,6 +88,7 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "fund_",
     "ind_",
     "mkt_",
+    "gtja_",
 )
 
 REQUIRED_COLUMNS: tuple[str, ...] = ("ts_code", "trade_date", "close", "pct_chg", "vol")

@@ -17,7 +17,7 @@
 | `name` | str | optional | Used by ST-detection regex when `is_st` is missing. |
 | `is_hs300` | bool | optional | True if stock is a HS300 constituent on `trade_date`. Per-row, history-aware. Consumed by `--universe-filter hs300`. |
 | `is_zz500` | bool | optional | True if stock is a CSI500 constituent on `trade_date`. Consumed by `--universe-filter zz500`. |
-| `alpha_*`, `mf_*`, `hm_*`, `hk_*`, `inst_*`, `mg_*`, `cyq_*`, `senti_*`, `sh_*`, `fund_*`, `ind_*`, `mkt_*` | float32 | at-least-one | Factor columns; recognised by prefix. See `docs/FACTORS.md`. |
+| `alpha_*`, `mf_*`, `hm_*`, `hk_*`, `inst_*`, `mg_*`, `cyq_*`, `senti_*`, `sh_*`, `fund_*`, `ind_*`, `mkt_*`, `gtja_*` | float32 | at-least-one | Factor columns; recognised by prefix. See `docs/FACTORS.md`. |
 
 ## Example schema (synthetic demo)
 

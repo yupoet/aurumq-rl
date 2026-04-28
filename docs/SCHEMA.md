@@ -45,6 +45,7 @@ by `aurumq_rl.data_loader.discover_factor_columns`. Prefixes are defined in
 | `fund_*`     | Fundamentals (PE/PB/ROE/...).                     |
 | `ind_*`      | Industry relative strength.                       |
 | `mkt_*`      | Market regime / breadth.                          |
+| `gtja_*`     | Guotai Junan Alpha191 short-period price-volume factors. |
 
 You decide which prefixes to include. AurumQ-RL never errors on missing
 factor groups — the model just sees those positions as zero.
@@ -242,7 +243,7 @@ df = pl.scan_parquet("data/factor_panel.parquet").collect()
 print(df.shape)
 print([c for c in df.columns if any(c.startswith(p) for p in (
     "alpha_", "mf_", "hm_", "hk_", "inst_", "mg_",
-    "cyq_", "senti_", "sh_", "fund_", "ind_", "mkt_",
+    "cyq_", "senti_", "sh_", "fund_", "ind_", "mkt_", "gtja_",
 ))])
 ```
 

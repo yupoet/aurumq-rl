@@ -16,6 +16,7 @@ Input Parquet must contain columns prefixed with one of:
 * ``fund_*``    fundamentals (PE/PB/ROE/...)
 * ``ind_*``     industry relative strength
 * ``mkt_*``     market regime
+* ``gtja_*``    Guotai Junan Alpha191 (GTJA short-period price-volume alphas)
 
 The loader picks **all** matching columns (sorted alphabetically) up to
 ``n_factors``. Missing prefixes are silently skipped — RL never errors out
@@ -80,6 +81,7 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "fund_",
     "ind_",
     "mkt_",
+    "gtja_",
 )
 
 # Required columns in input Parquet
