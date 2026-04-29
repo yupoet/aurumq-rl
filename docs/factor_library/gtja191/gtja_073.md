@@ -1,6 +1,6 @@
 # gtja_073 — -TS_RANK(decay-decay-corr(C,V)) - RANK(decay-corr(VWAP, MA30(V)))
 
-> **Category**: volume_price | **Direction**: reverse | **Quality**: ok
+> **Category**: volume_price | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

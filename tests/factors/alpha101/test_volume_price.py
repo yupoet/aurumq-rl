@@ -1,4 +1,5 @@
-"""Tests for alpha101.volume_price (29 factors)."""
+"""Tests for alpha101.volume_price (31 factors)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,15 +14,51 @@ from aurumq_rl.factors.alpha101 import volume_price as vp
 
 # Alphas covered by this category file.
 TARGET_IDS = (
-    "alpha002", "alpha003", "alpha005", "alpha006", "alpha012", "alpha013",
-    "alpha014", "alpha022", "alpha025", "alpha026", "alpha028", "alpha035",
-    "alpha043", "alpha044", "alpha055", "alpha060", "alpha065", "alpha068",
-    "alpha071", "alpha072", "alpha074", "alpha077", "alpha078", "alpha081",
-    "alpha083", "alpha085", "alpha088", "alpha094", "alpha099",
+    "alpha002",
+    "alpha003",
+    "alpha005",
+    "alpha006",
+    "alpha012",
+    "alpha013",
+    "alpha014",
+    "alpha015",
+    "alpha022",
+    "alpha025",
+    "alpha026",
+    "alpha028",
+    "alpha035",
+    "alpha043",
+    "alpha044",
+    "alpha055",
+    "alpha060",
+    "alpha065",
+    "alpha068",
+    "alpha071",
+    "alpha072",
+    "alpha073",
+    "alpha074",
+    "alpha077",
+    "alpha078",
+    "alpha081",
+    "alpha083",
+    "alpha085",
+    "alpha088",
+    "alpha094",
+    "alpha099",
 )
 
 # Alphas missing from STHSF reference parquet — skip ref-match.
-NOT_IN_STHSF = frozenset({"alpha005", "alpha068", "alpha071", "alpha077", "alpha088"})
+NOT_IN_STHSF = frozenset(
+    {
+        "alpha005",
+        "alpha015",
+        "alpha068",
+        "alpha071",
+        "alpha073",
+        "alpha077",
+        "alpha088",
+    }
+)
 
 # Alphas where AQML uses ``Ts_Sum`` but STHSF uses ``sma`` (rolling mean) —
 # parity diverges deterministically by a constant scale factor.
@@ -29,10 +66,22 @@ AQML_SUM_VS_STHSF_SMA = frozenset({"alpha065", "alpha074", "alpha081", "alpha099
 
 # Alphas where STHSF replaces inf/NaN with 0 inside the alpha (we keep them
 # as NaN per polars idiom) — parity drops on those rows.
-STHSF_REPLACES_INF = frozenset({
-    "alpha002", "alpha003", "alpha006", "alpha014", "alpha022", "alpha026",
-    "alpha028", "alpha044", "alpha045", "alpha055", "alpha074", "alpha099",
-})
+STHSF_REPLACES_INF = frozenset(
+    {
+        "alpha002",
+        "alpha003",
+        "alpha006",
+        "alpha014",
+        "alpha022",
+        "alpha026",
+        "alpha028",
+        "alpha044",
+        "alpha045",
+        "alpha055",
+        "alpha074",
+        "alpha099",
+    }
+)
 
 # Alphas whose final output is bounded in [-1, 0, 1] (sign-style).
 SIGN_LIKE = frozenset({"alpha065", "alpha068", "alpha074", "alpha081", "alpha099"})
@@ -107,12 +156,33 @@ def test_centered_per_day_loose(synthetic_panel, alpha_id):
 # 0- vs 1-indexed, etc). We assert via assert_allclose but allow xfail to
 # avoid blocking the migration on numerical perfectionism. Phase D will
 # reconcile these once the AurumQ AQML compiler is tightened.
-_KNOWN_PARITY_DIVERGENT = frozenset({
-    "alpha002", "alpha005", "alpha012", "alpha013", "alpha022", "alpha025",
-    "alpha028", "alpha035", "alpha043", "alpha055", "alpha060", "alpha065",
-    "alpha068", "alpha071", "alpha072", "alpha074", "alpha077", "alpha078",
-    "alpha083", "alpha085", "alpha088", "alpha094", "alpha099",
-})
+_KNOWN_PARITY_DIVERGENT = frozenset(
+    {
+        "alpha002",
+        "alpha005",
+        "alpha012",
+        "alpha013",
+        "alpha022",
+        "alpha025",
+        "alpha028",
+        "alpha035",
+        "alpha043",
+        "alpha055",
+        "alpha060",
+        "alpha065",
+        "alpha068",
+        "alpha071",
+        "alpha072",
+        "alpha074",
+        "alpha077",
+        "alpha078",
+        "alpha083",
+        "alpha085",
+        "alpha088",
+        "alpha094",
+        "alpha099",
+    }
+)
 
 
 @pytest.mark.parametrize("alpha_id", TARGET_IDS)
@@ -177,7 +247,7 @@ def test_matches_sthsf_reference(synthetic_panel, alpha101_reference, alpha_id):
 
 
 def test_all_factors_registered():
-    """All 29 volume_price factors self-register at import time."""
+    """All 31 volume_price factors self-register at import time."""
     from aurumq_rl.factors.registry import ALPHA101_REGISTRY
 
     for alpha_id in TARGET_IDS:

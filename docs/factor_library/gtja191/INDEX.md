@@ -51,12 +51,12 @@
 | gtja_047 | mean_reversion | reverse | Smoothed inverse-RSV: SMA((TSMAX(H,6)-C)/(TSMAX(H,6)-TSMIN(L,6))×100, 9, 1) | ok |
 | gtja_048 | momentum | reverse | -Rank(3-day sign sum) × SUM(V,5)/SUM(V,20) | ok |
 | gtja_049 | volatility | reverse | Down-day range share over 12d | ok |
-| gtja_050 | volatility | reverse | Down-share - Up-share asymmetric range ratio over 12d | ok |
-| gtja_051 | volatility | reverse | Down-share asymmetric range ratio over 12d | ok |
+| gtja_050 | volatility | reverse | Down-share - Up-share asymmetric range ratio over 12d | warn |
+| gtja_051 | volatility | reverse | Down-share asymmetric range ratio over 12d | warn |
 | gtja_052 | momentum | normal | 26d typical-price up/down pressure ratio × 100 | ok |
 | gtja_053 | momentum | normal | % of up-days over 12d × 100 | ok |
 | gtja_054 | volatility | reverse | -Rank(STD(\|C-O\|+(C-O), 10) + CORR(C, O, 10)) | ok |
-| gtja_055 | momentum | normal | 20d sum of TR-normalised acceleration × max(\|H-C-1\|,\|L-C-1\|) | ok |
+| gtja_055 | momentum | normal | 20d sum of TR-normalised acceleration × max(\|H-C-1\|,\|L-C-1\|) | warn |
 | gtja_056 | volume_price | reverse | Rank-inequality: open-min vs rank-corr^5 (returns 0/1) | ok |
 | gtja_057 | momentum | normal | 3-period EWMA of 9-period stochastic %K | ok |
 | gtja_058 | momentum | normal | % of up-days over 20d × 100 (vwap-anchored) | ok |
@@ -70,11 +70,11 @@
 | gtja_066 | mean_reversion | reverse | (close - MA6) / MA6 × 100 | ok |
 | gtja_067 | momentum | normal | 24-day RSI | ok |
 | gtja_068 | volume_price | normal | EWMA(15,2) of mid-price acceleration × (H-L)/V | ok |
-| gtja_069 | momentum | normal | DTM/DBM 20-day asymmetric momentum ratio | ok |
+| gtja_069 | momentum | normal | DTM/DBM 20-day asymmetric momentum ratio | warn |
 | gtja_070 | volatility | normal | 6-day std of amount | ok |
 | gtja_071 | mean_reversion | reverse | (close - MA24) / MA24 × 100 | ok |
 | gtja_072 | mean_reversion | reverse | SMA((TSMAX(H,6)-C)/(TSMAX(H,6)-TSMIN(L,6)) × 100, 15, 1) | ok |
-| gtja_073 | volume_price | reverse | -TS_RANK(decay-decay-corr(C,V)) - RANK(decay-corr(VWAP, MA30(V))) | ok |
+| gtja_073 | volume_price | reverse | -TS_RANK(decay-decay-corr(C,V)) - RANK(decay-corr(VWAP, MA30(V))) | warn |
 | gtja_074 | volume_price | normal | Rank-corr-sum-weighted-prices + Rank-corr-rank(VWAP, V) | ok |
 | gtja_075 | momentum | normal | Up-day count ratio vs CS-mean-return-as-benchmark down-days (50d) | ok |
 | gtja_076 | volatility | reverse | STD(\|ret\|/V, 20) / MEAN(\|ret\|/V, 20) | ok |

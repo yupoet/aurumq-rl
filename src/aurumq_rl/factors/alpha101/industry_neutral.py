@@ -119,9 +119,7 @@ def alpha016(panel: pl.DataFrame) -> pl.Series:
     staged2 = staged.with_columns(
         ts_cov(pl.col("__a016_rh"), pl.col("__a016_rv"), 5).alias("__a016_cov")
     )
-    return staged2.select(
-        (-1.0 * cs_rank(pl.col("__a016_cov"))).alias("alpha016")
-    ).to_series()
+    return staged2.select((-1.0 * cs_rank(pl.col("__a016_cov"))).alias("alpha016")).to_series()
 
 
 def alpha020(panel: pl.DataFrame) -> pl.Series:
@@ -227,9 +225,7 @@ def alpha048(panel: pl.DataFrame) -> pl.Series:
         (pl.col("__a048_dc") / delay(pl.col("close"), 1)).alias("__a048_pct"),
     )
     staged3 = staged2.with_columns(
-        (pl.col("__a048_corr") * pl.col("__a048_dc") / pl.col("close")).alias(
-            "__a048_num"
-        ),
+        (pl.col("__a048_corr") * pl.col("__a048_dc") / pl.col("close")).alias("__a048_num"),
         ts_sum(pl.col("__a048_pct").pow(2.0), 250).alias("__a048_den"),
     )
     staged4 = staged3.with_columns(
@@ -272,14 +268,9 @@ def alpha027(panel: pl.DataFrame) -> pl.Series:
     staged2 = staged.with_columns(
         ts_corr(pl.col("__a027_rv"), pl.col("__a027_rw"), 6).alias("__a027_corr")
     )
-    staged3 = staged2.with_columns(
-        (ts_sum(pl.col("__a027_corr"), 2) / 2.0).alias("__a027_avg")
-    )
+    staged3 = staged2.with_columns((ts_sum(pl.col("__a027_corr"), 2) / 2.0).alias("__a027_avg"))
     return staged3.select(
-        pl.when(cs_rank(pl.col("__a027_avg")) > 0.5)
-        .then(-1.0)
-        .otherwise(1.0)
-        .alias("alpha027")
+        pl.when(cs_rank(pl.col("__a027_avg")) > 0.5).then(-1.0).otherwise(1.0).alias("alpha027")
     ).to_series()
 
 
@@ -308,23 +299,15 @@ def alpha029(panel: pl.DataFrame) -> pl.Series:
     staged = panel.with_columns(
         cs_rank(cs_rank(inner)).alias("__a029_rr"),
     )
-    staged2 = staged.with_columns(
-        ts_min(pl.col("__a029_rr"), 2).alias("__a029_min2")
-    )
-    staged3 = staged2.with_columns(
-        ts_sum(pl.col("__a029_min2"), 1).alias("__a029_sum1")
-    )
+    staged2 = staged.with_columns(ts_min(pl.col("__a029_rr"), 2).alias("__a029_min2"))
+    staged3 = staged2.with_columns(ts_sum(pl.col("__a029_min2"), 1).alias("__a029_sum1"))
     # log of strictly-positive sum of (rank-of-rank) values; clip at tiny
     # positive epsilon to avoid log(0).
     eps = 1e-12
     staged4 = staged3.with_columns(
-        cs_scale(log_(pl.col("__a029_sum1").clip(lower_bound=eps))).alias(
-            "__a029_scale"
-        )
+        cs_scale(log_(pl.col("__a029_sum1").clip(lower_bound=eps))).alias("__a029_scale")
     )
-    staged5 = staged4.with_columns(
-        cs_rank(cs_rank(pl.col("__a029_scale"))).alias("__a029_rrs")
-    )
+    staged5 = staged4.with_columns(cs_rank(cs_rank(pl.col("__a029_scale"))).alias("__a029_rrs"))
     staged6 = staged5.with_columns(
         ts_min(pl.col("__a029_rrs"), 5).alias("__a029_part1"),
         ts_rank(delay(-1.0 * pl.col("returns"), 6), 5).alias("__a029_part2"),
@@ -379,21 +362,15 @@ def alpha031(panel: pl.DataFrame) -> pl.Series:
     """
     inner_neg_rr = -1.0 * cs_rank(cs_rank(delta(pl.col("close"), 10)))
     staged = panel.with_columns(inner_neg_rr.alias("__a031_inner"))
-    staged2 = staged.with_columns(
-        ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec")
-    )
+    staged2 = staged.with_columns(ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec"))
     staged3 = staged2.with_columns(
         cs_rank(cs_rank(cs_rank(pl.col("__a031_dec")))).alias("__a031_p1"),
         cs_rank(-1.0 * delta(pl.col("close"), 3)).alias("__a031_p2"),
         ts_corr(pl.col("adv20"), pl.col("low"), 12).alias("__a031_corr"),
     )
-    staged4 = staged3.with_columns(
-        sign_(cs_scale(pl.col("__a031_corr"))).alias("__a031_p3")
-    )
+    staged4 = staged3.with_columns(sign_(cs_scale(pl.col("__a031_corr"))).alias("__a031_p3"))
     return staged4.select(
-        (pl.col("__a031_p1") + pl.col("__a031_p2") + pl.col("__a031_p3")).alias(
-            "alpha031"
-        )
+        (pl.col("__a031_p1") + pl.col("__a031_p2") + pl.col("__a031_p3")).alias("alpha031")
     ).to_series()
 
 
@@ -420,9 +397,7 @@ def alpha036(panel: pl.DataFrame) -> pl.Series:
         (pl.col("open") - pl.col("close")).alias("__a036_oc"),
         ts_rank(delay(-1.0 * pl.col("returns"), 6), 5).alias("__a036_tr"),
         ts_corr(pl.col("vwap"), pl.col("adv20"), 6).alias("__a036_c2"),
-        (
-            (ts_mean(pl.col("close"), 200) - pl.col("open")) * co
-        ).alias("__a036_p5"),
+        ((ts_mean(pl.col("close"), 200) - pl.col("open")) * co).alias("__a036_p5"),
     )
     return staged.select(
         (
@@ -456,15 +431,12 @@ def alpha039(panel: pl.DataFrame) -> pl.Series:
         ts_sum(pl.col("returns"), 250).alias("__a039_sret"),
     )
     staged2 = staged.with_columns(
-        (
-            pl.col("__a039_dc") * (1.0 - cs_rank(pl.col("__a039_dec")))
-        ).alias("__a039_inner")
+        (pl.col("__a039_dc") * (1.0 - cs_rank(pl.col("__a039_dec")))).alias("__a039_inner")
     )
     return staged2.select(
-        (
-            (-1.0 * cs_rank(pl.col("__a039_inner")))
-            * (1.0 + cs_rank(pl.col("__a039_sret")))
-        ).alias("alpha039")
+        ((-1.0 * cs_rank(pl.col("__a039_inner"))) * (1.0 + cs_rank(pl.col("__a039_sret")))).alias(
+            "alpha039"
+        )
     ).to_series()
 
 
@@ -483,10 +455,9 @@ def alpha049(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    inner = (
-        (delay(pl.col("close"), 20) - delay(pl.col("close"), 10)) / 10.0
-        - (delay(pl.col("close"), 10) - pl.col("close")) / 10.0
-    )
+    inner = (delay(pl.col("close"), 20) - delay(pl.col("close"), 10)) / 10.0 - (
+        delay(pl.col("close"), 10) - pl.col("close")
+    ) / 10.0
     return panel.select(
         pl.when(inner < -0.1)
         .then(pl.lit(1.0))
@@ -515,12 +486,8 @@ def alpha050(panel: pl.DataFrame) -> pl.Series:
     staged2 = staged.with_columns(
         ts_corr(pl.col("__a050_rv"), pl.col("__a050_rw"), 5).alias("__a050_corr")
     )
-    staged3 = staged2.with_columns(
-        cs_rank(pl.col("__a050_corr")).alias("__a050_rc")
-    )
-    return staged3.select(
-        (-1.0 * ts_max(pl.col("__a050_rc"), 5)).alias("alpha050")
-    ).to_series()
+    staged3 = staged2.with_columns(cs_rank(pl.col("__a050_corr")).alias("__a050_rc"))
+    return staged3.select((-1.0 * ts_max(pl.col("__a050_rc"), 5)).alias("alpha050")).to_series()
 
 
 def alpha058(panel: pl.DataFrame) -> pl.Series:
@@ -545,18 +512,12 @@ def alpha058(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    staged = panel.with_columns(
-        ind_neutralize(pl.col("vwap"), "industry").alias("__a058_ivwap")
-    )
+    staged = panel.with_columns(ind_neutralize(pl.col("vwap"), "industry").alias("__a058_ivwap"))
     staged2 = staged.with_columns(
         ts_corr(pl.col("__a058_ivwap"), pl.col("volume"), 4).alias("__a058_corr")
     )
-    staged3 = staged2.with_columns(
-        ts_decay_linear(pl.col("__a058_corr"), 8).alias("__a058_dec")
-    )
-    return staged3.select(
-        (-1.0 * ts_rank(pl.col("__a058_dec"), 6)).alias("alpha058")
-    ).to_series()
+    staged3 = staged2.with_columns(ts_decay_linear(pl.col("__a058_corr"), 8).alias("__a058_dec"))
+    return staged3.select((-1.0 * ts_rank(pl.col("__a058_dec"), 6)).alias("alpha058")).to_series()
 
 
 def alpha059(panel: pl.DataFrame) -> pl.Series:
@@ -583,18 +544,12 @@ def alpha059(panel: pl.DataFrame) -> pl.Series:
     Category: ``industry_neutral``
     """
     blend = pl.col("vwap") * 0.728317 + pl.col("vwap") * (1.0 - 0.728317)
-    staged = panel.with_columns(
-        ind_neutralize(blend, "industry").alias("__a059_iv")
-    )
+    staged = panel.with_columns(ind_neutralize(blend, "industry").alias("__a059_iv"))
     staged2 = staged.with_columns(
         ts_corr(pl.col("__a059_iv"), pl.col("volume"), 4).alias("__a059_corr")
     )
-    staged3 = staged2.with_columns(
-        ts_decay_linear(pl.col("__a059_corr"), 16).alias("__a059_dec")
-    )
-    return staged3.select(
-        (-1.0 * ts_rank(pl.col("__a059_dec"), 8)).alias("alpha059")
-    ).to_series()
+    staged3 = staged2.with_columns(ts_decay_linear(pl.col("__a059_corr"), 16).alias("__a059_dec"))
+    return staged3.select((-1.0 * ts_rank(pl.col("__a059_dec"), 8)).alias("alpha059")).to_series()
 
 
 def alpha062(panel: pl.DataFrame) -> pl.Series:
@@ -618,9 +573,7 @@ def alpha062(panel: pl.DataFrame) -> pl.Series:
     staged2 = staged.with_columns(
         ts_corr(pl.col("vwap"), pl.col("__a062_sadv"), 10).alias("__a062_c1")
     )
-    inner_b = (
-        cs_rank(pl.col("open")) + cs_rank(pl.col("open"))
-    ).cast(pl.Float64) < (
+    inner_b = (cs_rank(pl.col("open")) + cs_rank(pl.col("open"))).cast(pl.Float64) < (
         cs_rank((pl.col("high") + pl.col("low")) / 2.0) + cs_rank(pl.col("high"))
     ).cast(pl.Float64)
     staged3 = staged2.with_columns(
@@ -628,9 +581,7 @@ def alpha062(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("__a062_c1")).alias("__a062_p1"),
     )
     return staged3.select(
-        (
-            (pl.col("__a062_p1") < pl.col("__a062_p2")).cast(pl.Float64) * -1.0
-        ).alias("alpha062")
+        ((pl.col("__a062_p1") < pl.col("__a062_p2")).cast(pl.Float64) * -1.0).alias("alpha062")
     ).to_series()
 
 
@@ -651,27 +602,19 @@ def alpha063(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    staged = panel.with_columns(
-        ind_neutralize(pl.col("close"), "industry").alias("__a063_ic")
-    )
+    staged = panel.with_columns(ind_neutralize(pl.col("close"), "industry").alias("__a063_ic"))
     staged2 = staged.with_columns(
         delta(pl.col("__a063_ic"), 2).alias("__a063_dic"),
         ts_sum(pl.col("adv180"), 37).alias("__a063_sadv"),
-        (pl.col("vwap") * 0.318108 + pl.col("open") * (1.0 - 0.318108)).alias(
-            "__a063_blend"
-        ),
+        (pl.col("vwap") * 0.318108 + pl.col("open") * (1.0 - 0.318108)).alias("__a063_blend"),
     )
     staged3 = staged2.with_columns(
         ts_corr(pl.col("__a063_blend"), pl.col("__a063_sadv"), 14).alias("__a063_c"),
         ts_decay_linear(pl.col("__a063_dic"), 8).alias("__a063_d1"),
     )
-    staged4 = staged3.with_columns(
-        ts_decay_linear(pl.col("__a063_c"), 12).alias("__a063_d2")
-    )
+    staged4 = staged3.with_columns(ts_decay_linear(pl.col("__a063_c"), 12).alias("__a063_d2"))
     return staged4.select(
-        (
-            (cs_rank(pl.col("__a063_d1")) - cs_rank(pl.col("__a063_d2"))) * -1.0
-        ).alias("alpha063")
+        ((cs_rank(pl.col("__a063_d1")) - cs_rank(pl.col("__a063_d2"))) * -1.0).alias("alpha063")
     ).to_series()
 
 
@@ -704,9 +647,7 @@ def alpha066(panel: pl.DataFrame) -> pl.Series:
         ts_decay_linear(pl.col("__a066_skew"), 11).alias("__a066_d2"),
     )
     return staged2.select(
-        (
-            (cs_rank(pl.col("__a066_d1")) + ts_rank(pl.col("__a066_d2"), 7)) * -1.0
-        ).alias("alpha066")
+        ((cs_rank(pl.col("__a066_d1")) + ts_rank(pl.col("__a066_d2"), 7)) * -1.0).alias("alpha066")
     ).to_series()
 
 
@@ -735,10 +676,9 @@ def alpha067(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a067_iv"), pl.col("__a067_ia"), 6).alias("__a067_corr")
     )
     return staged2.select(
-        (
-            (cs_rank(pl.col("__a067_diff")).pow(cs_rank(pl.col("__a067_corr"))))
-            * -1.0
-        ).alias("alpha067")
+        ((cs_rank(pl.col("__a067_diff")).pow(cs_rank(pl.col("__a067_corr")))) * -1.0).alias(
+            "alpha067"
+        )
     ).to_series()
 
 
@@ -758,26 +698,19 @@ def alpha069(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    staged = panel.with_columns(
-        ind_neutralize(pl.col("vwap"), "industry").alias("__a069_iv")
-    )
-    staged2 = staged.with_columns(
-        delta(pl.col("__a069_iv"), 3).alias("__a069_div")
-    )
+    staged = panel.with_columns(ind_neutralize(pl.col("vwap"), "industry").alias("__a069_iv"))
+    staged2 = staged.with_columns(delta(pl.col("__a069_iv"), 3).alias("__a069_div"))
     staged3 = staged2.with_columns(
         ts_max(pl.col("__a069_div"), 5).alias("__a069_max"),
-        (pl.col("close") * 0.490655 + pl.col("vwap") * (1.0 - 0.490655)).alias(
-            "__a069_blend"
-        ),
+        (pl.col("close") * 0.490655 + pl.col("vwap") * (1.0 - 0.490655)).alias("__a069_blend"),
     )
     staged4 = staged3.with_columns(
         ts_corr(pl.col("__a069_blend"), pl.col("adv20"), 5).alias("__a069_corr")
     )
     return staged4.select(
-        (
-            (cs_rank(pl.col("__a069_max")).pow(ts_rank(pl.col("__a069_corr"), 9)))
-            * -1.0
-        ).alias("alpha069")
+        ((cs_rank(pl.col("__a069_max")).pow(ts_rank(pl.col("__a069_corr"), 9))) * -1.0).alias(
+            "alpha069"
+        )
     ).to_series()
 
 
@@ -804,10 +737,9 @@ def alpha070(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a070_ic"), pl.col("adv50"), 18).alias("__a070_corr")
     )
     return staged2.select(
-        (
-            (cs_rank(pl.col("__a070_dv")).pow(ts_rank(pl.col("__a070_corr"), 18)))
-            * -1.0
-        ).alias("alpha070")
+        ((cs_rank(pl.col("__a070_dv")).pow(ts_rank(pl.col("__a070_corr"), 18))) * -1.0).alias(
+            "alpha070"
+        )
     ).to_series()
 
 
@@ -838,17 +770,13 @@ def alpha076(panel: pl.DataFrame) -> pl.Series:
         ts_rank(pl.col("__a076_corr"), 20).alias("__a076_tr1"),
         ts_decay_linear(pl.col("__a076_dv"), 12).alias("__a076_dec1"),
     )
-    staged4 = staged3.with_columns(
-        ts_decay_linear(pl.col("__a076_tr1"), 17).alias("__a076_dec2")
-    )
+    staged4 = staged3.with_columns(ts_decay_linear(pl.col("__a076_tr1"), 17).alias("__a076_dec2"))
     staged5 = staged4.with_columns(
         cs_rank(pl.col("__a076_dec1")).alias("__a076_p1"),
         ts_rank(pl.col("__a076_dec2"), 19).alias("__a076_p2"),
     )
     return staged5.select(
-        (
-            pl.max_horizontal(pl.col("__a076_p1"), pl.col("__a076_p2")) * -1.0
-        ).alias("alpha076")
+        (pl.max_horizontal(pl.col("__a076_p1"), pl.col("__a076_p2")) * -1.0).alias("alpha076")
     ).to_series()
 
 
@@ -869,9 +797,7 @@ def alpha079(panel: pl.DataFrame) -> pl.Series:
     Category: ``industry_neutral``
     """
     blend = pl.col("close") * 0.60733 + pl.col("open") * (1.0 - 0.60733)
-    staged = panel.with_columns(
-        ind_neutralize(blend, "industry").alias("__a079_ib")
-    )
+    staged = panel.with_columns(ind_neutralize(blend, "industry").alias("__a079_ib"))
     staged2 = staged.with_columns(
         delta(pl.col("__a079_ib"), 1).alias("__a079_dib"),
         ts_rank(pl.col("vwap"), 4).alias("__a079_trv"),
@@ -881,9 +807,9 @@ def alpha079(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a079_trv"), pl.col("__a079_tra"), 15).alias("__a079_c")
     )
     return staged3.select(
-        (
-            cs_rank(pl.col("__a079_dib")) < cs_rank(pl.col("__a079_c"))
-        ).cast(pl.Float64).alias("alpha079")
+        (cs_rank(pl.col("__a079_dib")) < cs_rank(pl.col("__a079_c")))
+        .cast(pl.Float64)
+        .alias("alpha079")
     ).to_series()
 
 
@@ -910,18 +836,15 @@ def alpha080(panel: pl.DataFrame) -> pl.Series:
     Category: ``industry_neutral``
     """
     blend = pl.col("open") * 0.868128 + pl.col("high") * (1.0 - 0.868128)
-    staged = panel.with_columns(
-        ind_neutralize(blend, "industry").alias("__a080_ib")
-    )
+    staged = panel.with_columns(ind_neutralize(blend, "industry").alias("__a080_ib"))
     staged2 = staged.with_columns(
         sign_(delta(pl.col("__a080_ib"), 4)).alias("__a080_sd"),
         ts_corr(pl.col("high"), pl.col("adv15"), 5).alias("__a080_corr"),
     )
     return staged2.select(
-        (
-            (cs_rank(pl.col("__a080_sd")).pow(ts_rank(pl.col("__a080_corr"), 6)))
-            * -1.0
-        ).alias("alpha080")
+        ((cs_rank(pl.col("__a080_sd")).pow(ts_rank(pl.col("__a080_corr"), 6))) * -1.0).alias(
+            "alpha080"
+        )
     ).to_series()
 
 
@@ -952,17 +875,13 @@ def alpha082(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a082_iv"), blend_open, 17).alias("__a082_corr"),
         ts_decay_linear(pl.col("__a082_do"), 15).alias("__a082_d1"),
     )
-    staged3 = staged2.with_columns(
-        ts_decay_linear(pl.col("__a082_corr"), 7).alias("__a082_d2")
-    )
+    staged3 = staged2.with_columns(ts_decay_linear(pl.col("__a082_corr"), 7).alias("__a082_d2"))
     staged4 = staged3.with_columns(
         cs_rank(pl.col("__a082_d1")).alias("__a082_p1"),
         ts_rank(pl.col("__a082_d2"), 13).alias("__a082_p2"),
     )
     return staged4.select(
-        (
-            pl.min_horizontal(pl.col("__a082_p1"), pl.col("__a082_p2")) * -1.0
-        ).alias("alpha082")
+        (pl.min_horizontal(pl.col("__a082_p1"), pl.col("__a082_p2")) * -1.0).alias("alpha082")
     ).to_series()
 
 
@@ -992,9 +911,7 @@ def alpha086(panel: pl.DataFrame) -> pl.Series:
         cs_rank(rhs).alias("__a086_p2"),
     )
     return staged3.select(
-        (
-            (pl.col("__a086_p1") < pl.col("__a086_p2")).cast(pl.Float64) * -1.0
-        ).alias("alpha086")
+        ((pl.col("__a086_p1") < pl.col("__a086_p2")).cast(pl.Float64) * -1.0).alias("alpha086")
     ).to_series()
 
 
@@ -1032,9 +949,7 @@ def alpha087(panel: pl.DataFrame) -> pl.Series:
         ts_rank(pl.col("__a087_d2"), 14).alias("__a087_p2"),
     )
     return staged4.select(
-        (
-            pl.max_horizontal(pl.col("__a087_p1"), pl.col("__a087_p2")) * -1.0
-        ).alias("alpha087")
+        (pl.max_horizontal(pl.col("__a087_p1"), pl.col("__a087_p2")) * -1.0).alias("alpha087")
     ).to_series()
 
 
@@ -1067,13 +982,9 @@ def alpha089(panel: pl.DataFrame) -> pl.Series:
         delta(pl.col("__a089_iv"), 3).alias("__a089_div"),
         ts_decay_linear(pl.col("__a089_corr"), 6).alias("__a089_dec1"),
     )
-    staged3 = staged2.with_columns(
-        ts_decay_linear(pl.col("__a089_div"), 10).alias("__a089_dec2")
-    )
+    staged3 = staged2.with_columns(ts_decay_linear(pl.col("__a089_div"), 10).alias("__a089_dec2"))
     return staged3.select(
-        (
-            ts_rank(pl.col("__a089_dec1"), 4) - ts_rank(pl.col("__a089_dec2"), 15)
-        ).alias("alpha089")
+        (ts_rank(pl.col("__a089_dec1"), 4) - ts_rank(pl.col("__a089_dec2"), 15)).alias("alpha089")
     ).to_series()
 
 
@@ -1100,10 +1011,9 @@ def alpha090(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a090_ia"), pl.col("low"), 5).alias("__a090_corr")
     )
     return staged2.select(
-        (
-            (cs_rank(pl.col("__a090_diff")).pow(ts_rank(pl.col("__a090_corr"), 3)))
-            * -1.0
-        ).alias("alpha090")
+        ((cs_rank(pl.col("__a090_diff")).pow(ts_rank(pl.col("__a090_corr"), 3))) * -1.0).alias(
+            "alpha090"
+        )
     ).to_series()
 
 
@@ -1123,9 +1033,7 @@ def alpha091(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    staged = panel.with_columns(
-        ind_neutralize(pl.col("close"), "industry").alias("__a091_ic")
-    )
+    staged = panel.with_columns(ind_neutralize(pl.col("close"), "industry").alias("__a091_ic"))
     staged2 = staged.with_columns(
         ts_corr(pl.col("__a091_ic"), pl.col("volume"), 10).alias("__a091_c1"),
         ts_corr(pl.col("vwap"), pl.col("adv30"), 4).alias("__a091_c2"),
@@ -1138,13 +1046,9 @@ def alpha091(panel: pl.DataFrame) -> pl.Series:
         ts_decay_linear(pl.col("__a091_c2"), 3).alias("__a091_dec2"),
     )
     return staged4.select(
-        (
-            (
-                ts_rank(pl.col("__a091_dec_outer"), 5)
-                - cs_rank(pl.col("__a091_dec2"))
-            )
-            * -1.0
-        ).alias("alpha091")
+        ((ts_rank(pl.col("__a091_dec_outer"), 5) - cs_rank(pl.col("__a091_dec2"))) * -1.0).alias(
+            "alpha091"
+        )
     ).to_series()
 
 
@@ -1177,9 +1081,7 @@ def alpha093(panel: pl.DataFrame) -> pl.Series:
         ts_decay_linear(pl.col("__a093_db"), 16).alias("__a093_d2"),
     )
     return staged3.select(
-        (
-            ts_rank(pl.col("__a093_d1"), 8) / cs_rank(pl.col("__a093_d2"))
-        ).alias("alpha093")
+        (ts_rank(pl.col("__a093_d1"), 8) / cs_rank(pl.col("__a093_d2"))).alias("alpha093")
     ).to_series()
 
 
@@ -1214,17 +1116,13 @@ def alpha096(panel: pl.DataFrame) -> pl.Series:
         ts_decay_linear(pl.col("__a096_c1"), 4).alias("__a096_d1"),
         ts_argmax(pl.col("__a096_c2"), 13).alias("__a096_am"),
     )
-    staged4 = staged3.with_columns(
-        ts_decay_linear(pl.col("__a096_am"), 14).alias("__a096_d2")
-    )
+    staged4 = staged3.with_columns(ts_decay_linear(pl.col("__a096_am"), 14).alias("__a096_d2"))
     staged5 = staged4.with_columns(
         ts_rank(pl.col("__a096_d1"), 8).alias("__a096_p1"),
         ts_rank(pl.col("__a096_d2"), 13).alias("__a096_p2"),
     )
     return staged5.select(
-        (
-            pl.max_horizontal(pl.col("__a096_p1"), pl.col("__a096_p2")) * -1.0
-        ).alias("alpha096")
+        (pl.max_horizontal(pl.col("__a096_p1"), pl.col("__a096_p2")) * -1.0).alias("alpha096")
     ).to_series()
 
 
@@ -1260,17 +1158,9 @@ def alpha097(panel: pl.DataFrame) -> pl.Series:
         ts_rank(pl.col("__a097_corr"), 19).alias("__a097_tr1"),
         ts_decay_linear(pl.col("__a097_dib"), 20).alias("__a097_d1"),
     )
-    staged4 = staged3.with_columns(
-        ts_decay_linear(pl.col("__a097_tr1"), 16).alias("__a097_d2")
-    )
+    staged4 = staged3.with_columns(ts_decay_linear(pl.col("__a097_tr1"), 16).alias("__a097_d2"))
     return staged4.select(
-        (
-            (
-                cs_rank(pl.col("__a097_d1"))
-                - ts_rank(pl.col("__a097_d2"), 7)
-            )
-            * -1.0
-        ).alias("alpha097")
+        ((cs_rank(pl.col("__a097_d1")) - ts_rank(pl.col("__a097_d2"), 7)) * -1.0).alias("alpha097")
     ).to_series()
 
 
@@ -1300,20 +1190,14 @@ def alpha098(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("vwap"), pl.col("__a098_sadv"), 5).alias("__a098_c1"),
         ts_corr(pl.col("__a098_ro"), pl.col("__a098_ra"), 21).alias("__a098_c2"),
     )
-    staged3 = staged2.with_columns(
-        ts_argmin(pl.col("__a098_c2"), 9).alias("__a098_am")
-    )
+    staged3 = staged2.with_columns(ts_argmin(pl.col("__a098_c2"), 9).alias("__a098_am"))
     staged4 = staged3.with_columns(
         ts_rank(pl.col("__a098_am"), 7).alias("__a098_tr"),
         ts_decay_linear(pl.col("__a098_c1"), 7).alias("__a098_d1"),
     )
-    staged5 = staged4.with_columns(
-        ts_decay_linear(pl.col("__a098_tr"), 8).alias("__a098_d2")
-    )
+    staged5 = staged4.with_columns(ts_decay_linear(pl.col("__a098_tr"), 8).alias("__a098_d2"))
     return staged5.select(
-        (cs_rank(pl.col("__a098_d1")) - cs_rank(pl.col("__a098_d2"))).alias(
-            "alpha098"
-        )
+        (cs_rank(pl.col("__a098_d1")) - cs_rank(pl.col("__a098_d2"))).alias("alpha098")
     ).to_series()
 
 
@@ -1362,13 +1246,9 @@ def alpha100(panel: pl.DataFrame) -> pl.Series:
         cs_scale(pl.col("__a100_n2")).alias("__a100_s1"),
     )
     staged5 = staged4.with_columns(
-        ind_neutralize(pl.col("__a100_part2_inner"), "sub_industry").alias(
-            "__a100_n3"
-        )
+        ind_neutralize(pl.col("__a100_part2_inner"), "sub_industry").alias("__a100_n3")
     )
-    staged6 = staged5.with_columns(
-        cs_scale(pl.col("__a100_n3")).alias("__a100_s2")
-    )
+    staged6 = staged5.with_columns(cs_scale(pl.col("__a100_n3")).alias("__a100_s2"))
     return staged6.select(
         (
             -1.0
@@ -1393,8 +1273,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="industry_neutral",
         description=(
-            "(rank(ts_max((vwap-close),3)) + rank(ts_min((vwap-close),3))) "
-            "* rank(delta(volume,3))"
+            "(rank(ts_max((vwap-close),3)) + rank(ts_min((vwap-close),3))) * rank(delta(volume,3))"
         ),
         references=("Kakushadze 2015, eq. 11",),
     ),
@@ -1412,8 +1291,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="industry_neutral",
         description=(
-            "-1 * rank(open-delay(high,1)) * rank(open-delay(close,1)) "
-            "* rank(open-delay(low,1))"
+            "-1 * rank(open-delay(high,1)) * rank(open-delay(close,1)) * rank(open-delay(low,1))"
         ),
         references=("Kakushadze 2015, eq. 20",),
     ),
@@ -1446,9 +1324,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha027,
         direction="reverse",
         category="industry_neutral",
-        description=(
-            "Sign threshold of rank(sum(corr(rank(volume), rank(vwap), 6), 2)/2)"
-        ),
+        description=("Sign threshold of rank(sum(corr(rank(volume), rank(vwap), 6), 2)/2)"),
         references=("Kakushadze 2015, eq. 27",),
     ),
     FactorEntry(
@@ -1468,8 +1344,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="industry_neutral",
         description=(
-            "(1 - rank(sum(sign(delta(close,1)) over last 3 days))) "
-            "* sum(volume,5)/sum(volume,20)"
+            "(1 - rank(sum(sign(delta(close,1)) over last 3 days))) * sum(volume,5)/sum(volume,20)"
         ),
         references=("Kakushadze 2015, eq. 30",),
     ),
@@ -1482,6 +1357,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "Triple-rank decay of -rank(rank(delta(close,10))) "
             "+ rank(-delta(close,3)) + sign(scale(corr(adv20,low,12)))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 31",),
     ),
     FactorEntry(
@@ -1508,9 +1384,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha049,
         direction="reverse",
         category="industry_neutral",
-        description=(
-            "If close-acceleration < -0.1 then 1 else -delta(close,1)"
-        ),
+        description=("If close-acceleration < -0.1 then 1 else -delta(close,1)"),
         references=("Kakushadze 2015, eq. 49",),
     ),
     FactorEntry(
@@ -1526,9 +1400,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha058,
         direction="reverse",
         category="industry_neutral",
-        description=(
-            "-ts_rank(decay_linear(corr(IndNeutralize(vwap,industry), volume, 4), 8), 6)"
-        ),
+        description=("-ts_rank(decay_linear(corr(IndNeutralize(vwap,industry), volume, 4), 8), 6)"),
         references=("Kakushadze 2015, eq. 58",),
     ),
     FactorEntry(
@@ -1546,9 +1418,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha062,
         direction="reverse",
         category="industry_neutral",
-        description=(
-            "rank(corr(vwap,sum(adv20,22),10)) < rank(open-rank vs midpoint inequality)"
-        ),
+        description=("rank(corr(vwap,sum(adv20,22),10)) < rank(open-rank vs midpoint inequality)"),
         references=("Kakushadze 2015, eq. 62",),
     ),
     FactorEntry(
@@ -1615,6 +1485,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "-max(rank(decay_linear(delta(vwap,1),12)), "
             "ts_rank(decay_linear(ts_rank(corr(IndNeutralize(low,industry), adv81, 8), 20), 17), 19))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 76",),
     ),
     FactorEntry(
@@ -1626,6 +1497,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "rank(delta(IndNeutralize(close-open blend,industry),1)) "
             "< rank(corr(ts_rank(vwap,4), ts_rank(adv150,9), 15))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 79",),
     ),
     FactorEntry(
@@ -1648,6 +1520,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "-min(rank(decay_linear(delta(open,1),15)), "
             "ts_rank(decay_linear(corr(IndNeutralize(volume,industry), open, 17), 7), 13))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 82",),
     ),
     FactorEntry(
@@ -1656,8 +1529,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="industry_neutral",
         description=(
-            "(ts_rank(corr(close,sum(adv20,15),6),20) "
-            "< rank((open+close)-(vwap+open))) * -1"
+            "(ts_rank(corr(close,sum(adv20,15),6),20) < rank((open+close)-(vwap+open))) * -1"
         ),
         references=("Kakushadze 2015, eq. 86",),
     ),
@@ -1670,6 +1542,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "-max(rank(decay_linear(delta(close-vwap blend,2),3)), "
             "ts_rank(decay_linear(abs(corr(IndNeutralize(adv81,industry), close, 13)), 5), 14))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 87",),
     ),
     FactorEntry(
@@ -1681,6 +1554,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "ts_rank(decay_linear(corr(low blend, adv10, 7), 6), 4) - "
             "ts_rank(decay_linear(delta(IndNeutralize(vwap,industry),3), 10), 15)"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 89",),
     ),
     FactorEntry(
@@ -1691,6 +1565,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         description=(
             "(rank(close-ts_max(close,5)) ^ ts_rank(corr(IndNeutralize(adv40,sub_industry), low, 5), 3)) * -1"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 90",),
     ),
     FactorEntry(
@@ -1713,6 +1588,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "ts_rank(decay_linear(corr(IndNeutralize(vwap,industry), adv81, 17), 20), 8) "
             "/ rank(decay_linear(delta(close-vwap blend, 3), 16))"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 93",),
     ),
     FactorEntry(
@@ -1735,6 +1611,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "(rank(decay_linear(delta(IndNeutralize(low-vwap blend,industry),3),20)) "
             "- ts_rank(decay_linear(ts_rank(corr(ts_rank(low,8),ts_rank(adv60,17),5),19),16),7)) * -1"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 97",),
     ),
     FactorEntry(
@@ -1758,6 +1635,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "scale(IndNeutralize(corr(close,rank(adv20),5)-rank(ts_argmin(close,30)), sub_industry)), "
             "weighted by volume/adv20"
         ),
+        quality_flag=1,
         references=("Kakushadze 2015, eq. 100",),
     ),
 )

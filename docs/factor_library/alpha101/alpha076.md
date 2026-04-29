@@ -1,6 +1,6 @@
 # alpha076 — -max(rank(decay_linear(delta(vwap,1),12)), ts_rank(decay_linear(ts_rank(corr(IndNeutralize(low,industry), adv81, 8), 20), 17), 19))
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

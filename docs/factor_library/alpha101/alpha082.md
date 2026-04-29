@@ -1,6 +1,6 @@
 # alpha082 — -min(rank(decay_linear(delta(open,1),15)), ts_rank(decay_linear(corr(IndNeutralize(volume,industry), open, 17), 7), 13))
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

@@ -1,6 +1,6 @@
 # gtja_055 — 20d sum of TR-normalised acceleration × max(|H-C-1|,|L-C-1|)
 
-> **Category**: momentum | **Direction**: normal | **Quality**: ok
+> **Category**: momentum | **Direction**: normal | **Quality**: warn
 
 ## Original WorldQuant Formula
 

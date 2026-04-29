@@ -1,6 +1,6 @@
 # alpha031 — Triple-rank decay of -rank(rank(delta(close,10))) + rank(-delta(close,3)) + sign(scale(corr(adv20,low,12)))
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

@@ -1,6 +1,6 @@
 # gtja_050 — Down-share - Up-share asymmetric range ratio over 12d
 
-> **Category**: volatility | **Direction**: reverse | **Quality**: ok
+> **Category**: volatility | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

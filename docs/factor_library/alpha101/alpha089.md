@@ -1,6 +1,6 @@
 # alpha089 — ts_rank(decay_linear(corr(low blend, adv10, 7), 6), 4) - ts_rank(decay_linear(delta(IndNeutralize(vwap,industry),3), 10), 15)
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

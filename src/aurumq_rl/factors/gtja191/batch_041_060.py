@@ -2,6 +2,7 @@
 
 Translated from Daic115/alpha191 (formula reference, no code vendored).
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -47,9 +48,7 @@ def gtja_041(panel: pl.DataFrame) -> pl.Series:
     inner = ts_max(delta(pl.col("vwap"), 3), 5)
     staged = panel.with_columns(inner.alias("__g041_x"))
     return staged.select(
-        (rank(pl.col("__g041_x")) * -1.0)
-        .alias("gtja_041")
-        .cast(pl.Float64)
+        (rank(pl.col("__g041_x")) * -1.0).alias("gtja_041").cast(pl.Float64)
     ).to_series()
 
 
@@ -76,9 +75,7 @@ def gtja_042(panel: pl.DataFrame) -> pl.Series:
         corr(pl.col("high"), pl.col("volume"), 10).alias("__g042_c"),
     )
     return staged.select(
-        (-1.0 * rank(pl.col("__g042_s")) * pl.col("__g042_c"))
-        .alias("gtja_042")
-        .cast(pl.Float64)
+        (-1.0 * rank(pl.col("__g042_s")) * pl.col("__g042_c")).alias("gtja_042").cast(pl.Float64)
     ).to_series()
 
 
@@ -103,9 +100,7 @@ def gtja_043(panel: pl.DataFrame) -> pl.Series:
     vwap = pl.col("vwap")
     cond = vwap > delay(vwap, 1)
     signed_vol = ifelse(cond, pl.col("volume"), -pl.col("volume"))
-    return panel.select(
-        sum_(signed_vol, 6).alias("gtja_043").cast(pl.Float64)
-    ).to_series()
+    return panel.select(sum_(signed_vol, 6).alias("gtja_043").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +125,7 @@ def gtja_044(panel: pl.DataFrame) -> pl.Series:
     cor_inner = corr(pl.col("low"), mean(pl.col("volume"), 10), 7)
     arm1 = ts_rank(decay_linear(cor_inner, 6), 4)
     arm2 = ts_rank(decay_linear(delta(pl.col("vwap"), 3), 10), 15)
-    return panel.select(
-        (arm1 + arm2).alias("gtja_044").cast(pl.Float64)
-    ).to_series()
+    return panel.select((arm1 + arm2).alias("gtja_044").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -183,12 +176,8 @@ def gtja_046(panel: pl.DataFrame) -> pl.Series:
     Category: ``mean_reversion``
     """
     c = pl.col("close")
-    expr = (
-        mean(c, 3) + mean(c, 6) + mean(c, 12) + mean(c, 24)
-    ) / (4.0 * c)
-    return panel.select(
-        expr.alias("gtja_046").cast(pl.Float64)
-    ).to_series()
+    expr = (mean(c, 3) + mean(c, 6) + mean(c, 12) + mean(c, 24)) / (4.0 * c)
+    return panel.select(expr.alias("gtja_046").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +197,7 @@ def gtja_047(panel: pl.DataFrame) -> pl.Series:
     hmax = ts_max(pl.col("high"), 6)
     lmin = ts_min(pl.col("low"), 6)
     raw = (hmax - pl.col("close")) / (hmax - lmin) * 100.0
-    return panel.select(
-        sma(raw, 9, 1).alias("gtja_047").cast(pl.Float64)
-    ).to_series()
+    return panel.select(sma(raw, 9, 1).alias("gtja_047").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -240,9 +227,7 @@ def gtja_048(panel: pl.DataFrame) -> pl.Series:
     staged = panel.with_columns(sgn_sum.alias("__g048_s"))
     staged = staged.with_columns(rank(pl.col("__g048_s")).alias("__g048_r"))
     expr = pl.col("__g048_r") * sum_(pl.col("volume"), 5) / sum_(pl.col("volume"), 20)
-    return staged.select(
-        expr.alias("gtja_048").cast(pl.Float64)
-    ).to_series()
+    return staged.select(expr.alias("gtja_048").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +257,7 @@ def gtja_049(panel: pl.DataFrame) -> pl.Series:
     part = pl.max_horizontal(abs_(h - delay(h, 1)), abs_(lw - delay(lw, 1)))
     s_dn = sumif(part, 12, ~cond)
     s_up = sumif(part, 12, cond)
-    return panel.select(
-        (s_dn / (s_dn + s_up)).alias("gtja_049").cast(pl.Float64)
-    ).to_series()
+    return panel.select((s_dn / (s_dn + s_up)).alias("gtja_049").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +290,7 @@ def gtja_050(panel: pl.DataFrame) -> pl.Series:
     s_a = sumif(part, 12, ~cond1)
     s_b = sumif(part, 12, ~cond2)
     expr = (s_a - s_b) / (s_a + s_b + 1e-7)
-    return panel.select(
-        expr.alias("gtja_050").cast(pl.Float64)
-    ).to_series()
+    return panel.select(expr.alias("gtja_050").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +322,7 @@ def gtja_051(panel: pl.DataFrame) -> pl.Series:
     s_a = sumif(part, 12, ~cond1)
     s_b = sumif(part, 12, ~cond2)
     expr = s_a / (s_a + s_b + 1e-7)
-    return panel.select(
-        expr.alias("gtja_051").cast(pl.Float64)
-    ).to_series()
+    return panel.select(expr.alias("gtja_051").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -370,9 +349,7 @@ def gtja_052(panel: pl.DataFrame) -> pl.Series:
     up = pl.max_horizontal(pl.col("high") - typ_lag, pl.lit(0.0))
     dn = pl.max_horizontal(typ_lag - pl.col("low"), pl.lit(0.0))
     expr = sum_(up, 26) / sum_(dn, 26) * 100.0
-    return panel.select(
-        expr.alias("gtja_052").cast(pl.Float64)
-    ).to_series()
+    return panel.select(expr.alias("gtja_052").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +398,7 @@ def gtja_054(panel: pl.DataFrame) -> pl.Series:
     inner = std_(abs_(diff) + diff, 10) + corr(pl.col("close"), pl.col("open"), 10)
     staged = panel.with_columns(inner.alias("__g054_x"))
     return staged.select(
-        (-1.0 * rank(pl.col("__g054_x")))
-        .alias("gtja_054")
-        .cast(pl.Float64)
+        (-1.0 * rank(pl.col("__g054_x"))).alias("gtja_054").cast(pl.Float64)
     ).to_series()
 
 
@@ -460,14 +435,10 @@ def gtja_055(panel: pl.DataFrame) -> pl.Series:
     var3 = p3 + p4 / 4.0
     cond_a = (p1 > p2) & (p1 > p3)
     cond_b = (p2 > p3) & (p2 > p1)
-    denom = pl.when(cond_a).then(var1).otherwise(
-        pl.when(cond_b).then(var2).otherwise(var3)
-    )
+    denom = pl.when(cond_a).then(var1).otherwise(pl.when(cond_b).then(var2).otherwise(var3))
     accel = c - delay(c, 1) + (c - o) / 2.0 + delay(c, 1) - delay(o, 1)
     inner = 16.0 * accel / denom * pl.max_horizontal(p1, p2)
-    return panel.select(
-        sum_(inner, 20).alias("gtja_055").cast(pl.Float64)
-    ).to_series()
+    return panel.select(sum_(inner, 20).alias("gtja_055").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -504,13 +475,9 @@ def gtja_056(panel: pl.DataFrame) -> pl.Series:
         rank(pl.col("__g056_a1")).alias("__g056_r1"),
         rank(pl.col("__g056_c")).alias("__g056_rc"),
     )
-    staged = staged.with_columns(
-        rank(pl.col("__g056_rc") ** 5.0).alias("__g056_r2")
-    )
+    staged = staged.with_columns(rank(pl.col("__g056_rc") ** 5.0).alias("__g056_r2"))
     return staged.select(
-        (pl.col("__g056_r1") < pl.col("__g056_r2"))
-        .cast(pl.Float64)
-        .alias("gtja_056")
+        (pl.col("__g056_r1") < pl.col("__g056_r2")).cast(pl.Float64).alias("gtja_056")
     ).to_series()
 
 
@@ -532,12 +499,12 @@ def gtja_057(panel: pl.DataFrame) -> pl.Series:
     Direction: ``normal``
     Category: ``momentum``
     """
-    raw = (pl.col("close") - ts_min(pl.col("low"), 9)) / (
-        ts_max(pl.col("high"), 9) - ts_min(pl.col("low"), 9)
-    ) * 100.0
-    return panel.select(
-        sma(raw, 3, 1).alias("gtja_057").cast(pl.Float64)
-    ).to_series()
+    raw = (
+        (pl.col("close") - ts_min(pl.col("low"), 9))
+        / (ts_max(pl.col("high"), 9) - ts_min(pl.col("low"), 9))
+        * 100.0
+    )
+    return panel.select(sma(raw, 3, 1).alias("gtja_057").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -585,15 +552,13 @@ def gtja_059(panel: pl.DataFrame) -> pl.Series:
     """
     v = pl.col("vwap")
     v_lag = delay(v, 1)
-    pivot = pl.when(v > v_lag).then(
-        pl.min_horizontal(pl.col("low"), v_lag)
-    ).otherwise(
-        pl.max_horizontal(pl.col("high"), v_lag)
+    pivot = (
+        pl.when(v > v_lag)
+        .then(pl.min_horizontal(pl.col("low"), v_lag))
+        .otherwise(pl.max_horizontal(pl.col("high"), v_lag))
     )
     inner = pl.when(v != v_lag).then(v - pivot).otherwise(0.0)
-    return panel.select(
-        sum_(inner, 20).alias("gtja_059").cast(pl.Float64)
-    ).to_series()
+    return panel.select(sum_(inner, 20).alias("gtja_059").cast(pl.Float64)).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -614,9 +579,9 @@ def gtja_060(panel: pl.DataFrame) -> pl.Series:
     Direction: ``normal``
     Category: ``volume_price``
     """
-    base = (
-        (pl.col("close") - pl.col("low")) - (pl.col("high") - pl.col("close"))
-    ) / (pl.col("high") - pl.col("low"))
+    base = ((pl.col("close") - pl.col("low")) - (pl.col("high") - pl.col("close"))) / (
+        pl.col("high") - pl.col("low")
+    )
     return panel.select(
         sum_(base * pl.col("volume"), 20).alias("gtja_060").cast(pl.Float64)
     ).to_series()
@@ -719,6 +684,7 @@ _ENTRIES: list[FactorEntry] = [
         description="Down-share - Up-share asymmetric range ratio over 12d",
         references=(_REF_BASE,),
         formula_doc_path=f"{_DOC_BASE}/gtja_050.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="gtja_051",
@@ -728,6 +694,7 @@ _ENTRIES: list[FactorEntry] = [
         description="Down-share asymmetric range ratio over 12d",
         references=(_REF_BASE,),
         formula_doc_path=f"{_DOC_BASE}/gtja_051.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="gtja_052",
@@ -764,6 +731,7 @@ _ENTRIES: list[FactorEntry] = [
         description="20d sum of TR-normalised acceleration × max(|H-C-1|,|L-C-1|)",
         references=(_REF_BASE,),
         formula_doc_path=f"{_DOC_BASE}/gtja_055.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="gtja_056",

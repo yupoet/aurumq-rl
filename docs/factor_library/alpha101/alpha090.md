@@ -1,6 +1,6 @@
 # alpha090 — (rank(close-ts_max(close,5)) ^ ts_rank(corr(IndNeutralize(adv40,sub_industry), low, 5), 3)) * -1
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

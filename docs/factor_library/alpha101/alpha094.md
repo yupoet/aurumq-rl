@@ -1,6 +1,6 @@
 # alpha094 — Negative power of VWAP-trough rank with correlation exponent
 
-> **Category**: volume_price | **Direction**: reverse | **Quality**: ok
+> **Category**: volume_price | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

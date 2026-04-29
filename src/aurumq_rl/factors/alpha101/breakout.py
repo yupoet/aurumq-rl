@@ -9,6 +9,7 @@ Each factor takes a sorted (``stock_code``, ``trade_date``) panel and
 returns a :class:`pl.Series`. Helpers come from
 :mod:`aurumq_rl.factors.alpha101._ops`.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -177,6 +178,7 @@ _ENTRIES = [
         legacy_aqml_expr="If(Ts_Sum(high, 20) / 20 < high, -1 * Delta(high, 2), 0)",
         references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 23",),
         formula_doc_path="docs/factor_library/alpha101/alpha_023.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="alpha054",

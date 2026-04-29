@@ -1,6 +1,6 @@
 # alpha079 — rank(delta(IndNeutralize(close-open blend,industry),1)) < rank(corr(ts_rank(vwap,4), ts_rank(adv150,9), 15))
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

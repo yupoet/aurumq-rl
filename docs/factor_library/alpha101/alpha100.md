@@ -1,6 +1,6 @@
 # alpha100 — Sub-industry-neutralised body*volume signal minus scale(IndNeutralize(corr(close,rank(adv20),5)-rank(ts_argmin(close,30)), sub_industry)), weighted by volume/adv20
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

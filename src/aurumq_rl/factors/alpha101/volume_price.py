@@ -1,4 +1,4 @@
-"""Alpha101 — volume_price category factors (29 factors).
+"""Alpha101 — volume_price category factors (31 factors).
 
 Translated from AQML expressions in
 ``aurumq.rules.alpha101_library.ALPHA101_FACTORS`` into polars-native
@@ -88,15 +88,10 @@ def alpha002(panel: pl.DataFrame) -> pl.Series:
     )
     staged = staged_ts.with_columns(
         cs_rank(pl.col("__a002_dlogv")).alias("__a002_rv"),
-        cs_rank((pl.col("close") - pl.col("open")) / pl.col("open")).alias(
-            "__a002_rret"
-        ),
+        cs_rank((pl.col("close") - pl.col("open")) / pl.col("open")).alias("__a002_rret"),
     )
     return staged.select(
-        (
-            -1.0
-            * ts_corr(pl.col("__a002_rv"), pl.col("__a002_rret"), 6)
-        ).alias("alpha002")
+        (-1.0 * ts_corr(pl.col("__a002_rv"), pl.col("__a002_rret"), 6)).alias("alpha002")
     ).to_series()
 
 
@@ -125,10 +120,7 @@ def alpha003(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("volume")).alias("__a003_rv"),
     )
     return staged.select(
-        (
-            -1.0
-            * ts_corr(pl.col("__a003_ro"), pl.col("__a003_rv"), 10)
-        ).alias("alpha003")
+        (-1.0 * ts_corr(pl.col("__a003_ro"), pl.col("__a003_rv"), 10)).alias("alpha003")
     ).to_series()
 
 
@@ -157,14 +149,11 @@ def alpha005(panel: pl.DataFrame) -> pl.Series:
     """
     inner1 = pl.col("open") - ts_sum(pl.col("vwap"), 10) / 10.0
     inner2 = pl.col("close") - pl.col("vwap")
-    staged = panel.with_columns(
-        inner1.alias("__a005_inner1"), inner2.alias("__a005_inner2")
-    )
+    staged = panel.with_columns(inner1.alias("__a005_inner1"), inner2.alias("__a005_inner2"))
     return staged.select(
-        (
-            cs_rank(pl.col("__a005_inner1"))
-            * (-1.0 * cs_rank(pl.col("__a005_inner2")).abs())
-        ).alias("alpha005")
+        (cs_rank(pl.col("__a005_inner1")) * (-1.0 * cs_rank(pl.col("__a005_inner2")).abs())).alias(
+            "alpha005"
+        )
     ).to_series()
 
 
@@ -189,9 +178,7 @@ def alpha006(panel: pl.DataFrame) -> pl.Series:
     Category: ``volume_price``
     """
     return panel.select(
-        (
-            -1.0 * ts_corr(pl.col("open"), pl.col("volume"), 10)
-        ).alias("alpha006")
+        (-1.0 * ts_corr(pl.col("open"), pl.col("volume"), 10)).alias("alpha006")
     ).to_series()
 
 
@@ -217,10 +204,7 @@ def alpha012(panel: pl.DataFrame) -> pl.Series:
     Category: ``volume_price``
     """
     return panel.select(
-        (
-            sign_(delta(pl.col("volume"), 1))
-            * (-1.0 * delta(pl.col("close"), 1))
-        ).alias("alpha012")
+        (sign_(delta(pl.col("volume"), 1)) * (-1.0 * delta(pl.col("close"), 1))).alias("alpha012")
     ).to_series()
 
 
@@ -250,13 +234,9 @@ def alpha013(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("volume")).alias("__a013_rv"),
     )
     staged2 = staged1.with_columns(
-        ts_cov(pl.col("__a013_rc"), pl.col("__a013_rv"), 5).alias(
-            "__a013_cov"
-        )
+        ts_cov(pl.col("__a013_rc"), pl.col("__a013_rv"), 5).alias("__a013_cov")
     )
-    return staged2.select(
-        (-1.0 * cs_rank(pl.col("__a013_cov"))).alias("alpha013")
-    ).to_series()
+    return staged2.select((-1.0 * cs_rank(pl.col("__a013_cov"))).alias("alpha013")).to_series()
 
 
 def alpha014(panel: pl.DataFrame) -> pl.Series:
@@ -286,9 +266,48 @@ def alpha014(panel: pl.DataFrame) -> pl.Series:
     )
     return staged.select(
         (
-            (-1.0 * cs_rank(pl.col("__a014_dret")))
-            * ts_corr(pl.col("open"), pl.col("volume"), 10)
+            (-1.0 * cs_rank(pl.col("__a014_dret"))) * ts_corr(pl.col("open"), pl.col("volume"), 10)
         ).alias("alpha014")
+    ).to_series()
+
+
+def alpha015(panel: pl.DataFrame) -> pl.Series:
+    """Alpha #015 — Negative 3d sum of ranked high-volume rank correlation.
+
+    WorldQuant Formula
+    ------------------
+        -1 * sum(rank(correlation(rank(high), rank(volume), 3)), 3)
+
+    Legacy AQML Expression
+    ----------------------
+        -1 * Ts_Sum(Rank(Ts_Corr(Rank(high), Rank(volume), 3)), 3)
+
+    Polars Implementation Notes
+    ---------------------------
+    Two CS ranks are materialised before the 3-day TS correlation. STHSF
+    fills NaN/inf correlation rows with zero before the outer rank; we do
+    the same so the early-window rank/sum semantics match the reference.
+
+    Required panel columns: ``high``, ``volume``, ``stock_code``, ``trade_date``
+
+    Direction: ``reverse``
+    Category: ``volume_price``
+    """
+    staged1 = panel.with_columns(
+        cs_rank(pl.col("high")).alias("__a015_rh"),
+        cs_rank(pl.col("volume")).alias("__a015_rv"),
+    )
+    staged2 = staged1.with_columns(
+        ts_corr(pl.col("__a015_rh"), pl.col("__a015_rv"), 3)
+        .fill_nan(0.0)
+        .fill_null(0.0)
+        .alias("__a015_corr")
+    )
+    staged3 = staged2.with_columns(
+        cs_rank(pl.col("__a015_corr")).alias("__a015_rcorr"),
+    )
+    return staged3.select(
+        (-1.0 * ts_sum(pl.col("__a015_rcorr"), 3)).alias("alpha015").cast(pl.Float64)
     ).to_series()
 
 
@@ -321,9 +340,7 @@ def alpha022(panel: pl.DataFrame) -> pl.Series:
         ts_std(pl.col("close"), 20).alias("__a022_std"),
     )
     return staged.select(
-        (
-            -1.0 * pl.col("__a022_dcorr") * cs_rank(pl.col("__a022_std"))
-        ).alias("alpha022")
+        (-1.0 * pl.col("__a022_dcorr") * cs_rank(pl.col("__a022_std"))).alias("alpha022")
     ).to_series()
 
 
@@ -383,9 +400,7 @@ def alpha026(panel: pl.DataFrame) -> pl.Series:
         ts_rank(pl.col("high"), 5).alias("__a026_rh"),
     )
     corr = ts_corr(pl.col("__a026_rv"), pl.col("__a026_rh"), 5)
-    return staged.select(
-        (-1.0 * ts_max(corr, 3)).alias("alpha026")
-    ).to_series()
+    return staged.select((-1.0 * ts_max(corr, 3)).alias("alpha026")).to_series()
 
 
 def alpha028(panel: pl.DataFrame) -> pl.Series:
@@ -415,9 +430,7 @@ def alpha028(panel: pl.DataFrame) -> pl.Series:
         - pl.col("close")
     )
     staged = panel.with_columns(inner.alias("__a028_inner"))
-    return staged.select(
-        cs_scale(pl.col("__a028_inner")).alias("alpha028")
-    ).to_series()
+    return staged.select(cs_scale(pl.col("__a028_inner")).alias("alpha028")).to_series()
 
 
 def alpha035(panel: pl.DataFrame) -> pl.Series:
@@ -505,9 +518,7 @@ def alpha044(panel: pl.DataFrame) -> pl.Series:
     """
     staged = panel.with_columns(cs_rank(pl.col("volume")).alias("__a044_rv"))
     return staged.select(
-        (
-            -1.0 * ts_corr(pl.col("high"), pl.col("__a044_rv"), 5)
-        ).alias("alpha044")
+        (-1.0 * ts_corr(pl.col("high"), pl.col("__a044_rv"), 5)).alias("alpha044")
     ).to_series()
 
 
@@ -551,9 +562,7 @@ def alpha055(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("volume")).alias("__a055_rv"),
     )
     return staged2.select(
-        (
-            -1.0 * ts_corr(pl.col("__a055_rk"), pl.col("__a055_rv"), 6)
-        ).alias("alpha055")
+        (-1.0 * ts_corr(pl.col("__a055_rk"), pl.col("__a055_rv"), 6)).alias("alpha055")
     ).to_series()
 
 
@@ -599,13 +608,9 @@ def alpha060(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("__a060_arg")).alias("__a060_rarg"),
     )
     return staged2.select(
-        (
-            -1.0
-            * (
-                2.0 * cs_scale(pl.col("__a060_rwill"))
-                - cs_scale(pl.col("__a060_rarg"))
-            )
-        ).alias("alpha060")
+        (-1.0 * (2.0 * cs_scale(pl.col("__a060_rwill")) - cs_scale(pl.col("__a060_rarg")))).alias(
+            "alpha060"
+        )
     ).to_series()
 
 
@@ -647,9 +652,7 @@ def alpha065(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("__a065_omin")).alias("__a065_romin"),
     )
     return staged2.select(
-        if_then_else(
-            pl.col("__a065_rcorr") < pl.col("__a065_romin"), -1.0, 1.0
-        )
+        if_then_else(pl.col("__a065_rcorr") < pl.col("__a065_romin"), -1.0, 1.0)
         .cast(pl.Float64)
         .alias("alpha065")
     ).to_series()
@@ -685,12 +688,8 @@ def alpha068(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("adv15")).alias("__a068_ra"),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a068_rh"), pl.col("__a068_ra"), 9).alias(
-            "__a068_corr"
-        ),
-        delta(
-            pl.col("close") * 0.518 + pl.col("low") * 0.482, 1
-        ).alias("__a068_dpx"),
+        ts_corr(pl.col("__a068_rh"), pl.col("__a068_ra"), 9).alias("__a068_corr"),
+        delta(pl.col("close") * 0.518 + pl.col("low") * 0.482, 1).alias("__a068_dpx"),
     )
     staged3 = staged2.with_columns(
         ts_rank(pl.col("__a068_corr"), 14).alias("__a068_trc"),
@@ -733,14 +732,12 @@ def alpha071(panel: pl.DataFrame) -> pl.Series:
     staged = panel.with_columns(
         ts_rank(pl.col("close"), 3).alias("__a071_trc"),
         ts_rank(pl.col("adv180"), 12).alias("__a071_tra"),
-        cs_rank(
-            pl.col("low") + pl.col("open") - pl.col("vwap") - pl.col("vwap")
-        ).alias("__a071_rlovw"),
+        cs_rank(pl.col("low") + pl.col("open") - pl.col("vwap") - pl.col("vwap")).alias(
+            "__a071_rlovw"
+        ),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a071_trc"), pl.col("__a071_tra"), 18).alias(
-            "__a071_corr"
-        ),
+        ts_corr(pl.col("__a071_trc"), pl.col("__a071_tra"), 18).alias("__a071_corr"),
         pl.col("__a071_rlovw").pow(2).alias("__a071_rsq"),
     )
     staged3 = staged2.with_columns(
@@ -782,18 +779,59 @@ def alpha072(panel: pl.DataFrame) -> pl.Series:
     )
     staged2 = staged.with_columns(
         ts_corr(mid, pl.col("adv40"), 9).alias("__a072_corr1"),
-        ts_corr(pl.col("__a072_trv"), pl.col("__a072_trvol"), 7).alias(
-            "__a072_corr2"
-        ),
+        ts_corr(pl.col("__a072_trv"), pl.col("__a072_trvol"), 7).alias("__a072_corr2"),
     )
     staged3 = staged2.with_columns(
         ts_decay_linear(pl.col("__a072_corr1"), 10).alias("__a072_dl1"),
         ts_decay_linear(pl.col("__a072_corr2"), 3).alias("__a072_dl2"),
     )
     return staged3.select(
-        (
-            cs_rank(pl.col("__a072_dl1")) / cs_rank(pl.col("__a072_dl2"))
-        ).alias("alpha072")
+        (cs_rank(pl.col("__a072_dl1")) / cs_rank(pl.col("__a072_dl2"))).alias("alpha072")
+    ).to_series()
+
+
+def alpha073(panel: pl.DataFrame) -> pl.Series:
+    """Alpha #073 — Negative max of decayed VWAP delta rank and blend reversal rank.
+
+    WorldQuant Formula
+    ------------------
+        -1 * max(
+            rank(decay_linear(delta(vwap, 5), 3)),
+            ts_rank(decay_linear(-delta(open*0.147155 + low*0.852845, 2)
+                    / (open*0.147155 + low*0.852845), 3), 17)
+        )
+
+    Legacy AQML Expression
+    ----------------------
+        -1 * Max(
+            Rank(Ts_DecayLinear(Delta(vwap, 5), 3)),
+            Ts_Rank(Ts_DecayLinear(
+                -1 * Delta(open * 0.147155 + low * 0.852845, 2)
+                / (open * 0.147155 + low * 0.852845), 3), 17)
+        )
+
+    Polars Implementation Notes
+    ---------------------------
+    The paper's fractional windows round to the standard STHSF integer
+    windows: 5, 3, 2, 3 and 17.
+
+    Required panel columns: ``vwap``, ``open``, ``low``, ``stock_code``,
+    ``trade_date``
+
+    Direction: ``reverse``
+    Category: ``volume_price``
+    """
+    blend = pl.col("open") * 0.147155 + pl.col("low") * 0.852845
+    staged1 = panel.with_columns(
+        ts_decay_linear(delta(pl.col("vwap"), 5), 3).alias("__a073_p1_raw"),
+        ts_decay_linear(-1.0 * delta(blend, 2) / blend, 3).alias("__a073_p2_raw"),
+    )
+    staged2 = staged1.with_columns(
+        cs_rank(pl.col("__a073_p1_raw")).alias("__a073_p1"),
+        ts_rank(pl.col("__a073_p2_raw"), 17).alias("__a073_p2"),
+    )
+    return staged2.select(
+        (-1.0 * pmax(pl.col("__a073_p1"), pl.col("__a073_p2"))).alias("alpha073").cast(pl.Float64)
     ).to_series()
 
 
@@ -830,18 +868,14 @@ def alpha074(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("close"), sum_adv30, 15).alias("__a074_corr1"),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a074_rw"), pl.col("__a074_rv"), 11).alias(
-            "__a074_corr2"
-        ),
+        ts_corr(pl.col("__a074_rw"), pl.col("__a074_rv"), 11).alias("__a074_corr2"),
     )
     staged3 = staged2.with_columns(
         cs_rank(pl.col("__a074_corr1")).alias("__a074_rcorr1"),
         cs_rank(pl.col("__a074_corr2")).alias("__a074_rcorr2"),
     )
     return staged3.select(
-        if_then_else(
-            pl.col("__a074_rcorr1") < pl.col("__a074_rcorr2"), -1.0, 0.0
-        )
+        if_then_else(pl.col("__a074_rcorr1") < pl.col("__a074_rcorr2"), -1.0, 0.0)
         .cast(pl.Float64)
         .alias("alpha074")
     ).to_series()
@@ -878,18 +912,14 @@ def alpha077(panel: pl.DataFrame) -> pl.Series:
     payload = mid + pl.col("high") - pl.col("vwap") - pl.col("high")
     staged = panel.with_columns(
         ts_decay_linear(payload, 20).alias("__a077_dl1"),
-        ts_decay_linear(ts_corr(mid, pl.col("adv40"), 3), 6).alias(
-            "__a077_dl2"
-        ),
+        ts_decay_linear(ts_corr(mid, pl.col("adv40"), 3), 6).alias("__a077_dl2"),
     )
     staged2 = staged.with_columns(
         cs_rank(pl.col("__a077_dl1")).alias("__a077_r1"),
         cs_rank(pl.col("__a077_dl2")).alias("__a077_r2"),
     )
     return staged2.select(
-        pmin(pl.col("__a077_r1"), pl.col("__a077_r2")).alias(
-            "alpha077"
-        )
+        pmin(pl.col("__a077_r1"), pl.col("__a077_r2")).alias("alpha077")
     ).to_series()
 
 
@@ -927,9 +957,7 @@ def alpha078(panel: pl.DataFrame) -> pl.Series:
         ts_corr(sum_w, sum_adv40, 7).alias("__a078_corr1"),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a078_rv"), pl.col("__a078_rvol"), 6).alias(
-            "__a078_corr2"
-        ),
+        ts_corr(pl.col("__a078_rv"), pl.col("__a078_rvol"), 6).alias("__a078_corr2"),
     )
     staged3 = staged2.with_columns(
         cs_rank(pl.col("__a078_corr1")).alias("__a078_base"),
@@ -972,9 +1000,7 @@ def alpha081(panel: pl.DataFrame) -> pl.Series:
     )
     staged2 = staged.with_columns(
         pl.col("__a081_corr1").pow(4).alias("__a081_corr1_p4"),
-        ts_corr(pl.col("__a081_rv"), pl.col("__a081_rvol"), 5).alias(
-            "__a081_corr2"
-        ),
+        ts_corr(pl.col("__a081_rv"), pl.col("__a081_rvol"), 5).alias("__a081_corr2"),
     )
     staged3 = staged2.with_columns(
         cs_rank(cs_rank(pl.col("__a081_corr1_p4"))).alias("__a081_rr"),
@@ -1017,9 +1043,7 @@ def alpha083(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``volume_price``
     """
-    range_ma = (pl.col("high") - pl.col("low")) / (
-        ts_sum(pl.col("close"), 5) / 5.0
-    )
+    range_ma = (pl.col("high") - pl.col("low")) / (ts_sum(pl.col("close"), 5) / 5.0)
     staged = panel.with_columns(
         range_ma.alias("__a083_rm"),
     )
@@ -1071,9 +1095,7 @@ def alpha085(panel: pl.DataFrame) -> pl.Series:
         ts_rank(pl.col("volume"), 10).alias("__a085_trv"),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a085_trmid"), pl.col("__a085_trv"), 7).alias(
-            "__a085_corr2"
-        ),
+        ts_corr(pl.col("__a085_trmid"), pl.col("__a085_trv"), 7).alias("__a085_corr2"),
     )
     staged3 = staged2.with_columns(
         cs_rank(pl.col("__a085_corr1")).alias("__a085_base"),
@@ -1124,9 +1146,7 @@ def alpha088(panel: pl.DataFrame) -> pl.Series:
     )
     staged2 = staged.with_columns(
         ts_decay_linear(pl.col("__a088_spread"), 8).alias("__a088_dl1"),
-        ts_corr(pl.col("__a088_trc"), pl.col("__a088_tra"), 8).alias(
-            "__a088_corr"
-        ),
+        ts_corr(pl.col("__a088_trc"), pl.col("__a088_tra"), 8).alias("__a088_corr"),
     )
     staged3 = staged2.with_columns(
         ts_decay_linear(pl.col("__a088_corr"), 7).alias("__a088_dl2"),
@@ -1134,9 +1154,7 @@ def alpha088(panel: pl.DataFrame) -> pl.Series:
     )
     p1 = pl.col("__a088_r1")
     p2 = ts_rank(pl.col("__a088_dl2"), 3)
-    return staged3.select(
-        pmin(p1, p2).alias("alpha088")
-    ).to_series()
+    return staged3.select(pmin(p1, p2).alias("alpha088")).to_series()
 
 
 def alpha094(panel: pl.DataFrame) -> pl.Series:
@@ -1170,19 +1188,14 @@ def alpha094(panel: pl.DataFrame) -> pl.Series:
         base_inner.alias("__a094_base_inner"),
     )
     staged2 = staged.with_columns(
-        ts_corr(pl.col("__a094_trv"), pl.col("__a094_tra"), 18).alias(
-            "__a094_corr"
-        ),
+        ts_corr(pl.col("__a094_trv"), pl.col("__a094_tra"), 18).alias("__a094_corr"),
     )
     staged3 = staged2.with_columns(
         cs_rank(pl.col("__a094_base_inner")).alias("__a094_base"),
         ts_rank(pl.col("__a094_corr"), 3).alias("__a094_exp"),
     )
     return staged3.select(
-        (
-            -1.0
-            * power(pl.col("__a094_base"), pl.col("__a094_exp"))
-        ).alias("alpha094")
+        (-1.0 * power(pl.col("__a094_base"), pl.col("__a094_exp"))).alias("alpha094")
     ).to_series()
 
 
@@ -1242,8 +1255,7 @@ _ENTRIES = [
         category="volume_price",
         description="Volume change rank vs intraday return rank correlation",
         legacy_aqml_expr=(
-            "-1 * Ts_Corr(Rank(Delta(Log(volume), 2)), "
-            "Rank((close - open) / open), 6)"
+            "-1 * Ts_Corr(Rank(Delta(Log(volume), 2)), Rank((close - open) / open), 6)"
         ),
         references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 2",),
         formula_doc_path="docs/factor_library/alpha101/alpha_002.md",
@@ -1264,9 +1276,7 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Open vs 10d VWAP mean rank, scaled by close-VWAP rank deviation",
-        legacy_aqml_expr=(
-            "Rank(open - Ts_Sum(vwap, 10) / 10) * (-1 * Abs(Rank(close - vwap)))"
-        ),
+        legacy_aqml_expr=("Rank(open - Ts_Sum(vwap, 10) / 10) * (-1 * Abs(Rank(close - vwap)))"),
         references=("Kakushadze 2015, eq. 5",),
         formula_doc_path="docs/factor_library/alpha101/alpha_005.md",
     ),
@@ -1306,11 +1316,19 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Returns-acceleration rank scaled by open-volume correlation",
-        legacy_aqml_expr=(
-            "(-1 * Rank(Delta(returns, 3))) * Ts_Corr(open, volume, 10)"
-        ),
+        legacy_aqml_expr=("(-1 * Rank(Delta(returns, 3))) * Ts_Corr(open, volume, 10)"),
         references=("Kakushadze 2015, eq. 14",),
         formula_doc_path="docs/factor_library/alpha101/alpha_014.md",
+    ),
+    FactorEntry(
+        id="alpha015",
+        impl=alpha015,
+        direction="reverse",
+        category="volume_price",
+        description="Negative 3d sum of ranked high-volume rank correlation",
+        legacy_aqml_expr=("-1 * Ts_Sum(Rank(Ts_Corr(Rank(high), Rank(volume), 3)), 3)"),
+        references=("Kakushadze 2015, eq. 15",),
+        formula_doc_path="docs/factor_library/alpha101/alpha_015.md",
     ),
     FactorEntry(
         id="alpha022",
@@ -1318,9 +1336,7 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Change in high-vol correlation scaled by 20d stdev rank",
-        legacy_aqml_expr=(
-            "-1 * Delta(Ts_Corr(high, volume, 5), 5) * Rank(Ts_Std(close, 20))"
-        ),
+        legacy_aqml_expr=("-1 * Delta(Ts_Corr(high, volume, 5), 5) * Rank(Ts_Std(close, 20))"),
         references=("Kakushadze 2015, eq. 22",),
         formula_doc_path="docs/factor_library/alpha101/alpha_022.md",
     ),
@@ -1340,9 +1356,7 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Max recent volume-rank vs high-rank correlation",
-        legacy_aqml_expr=(
-            "-1 * Ts_Max(Ts_Corr(Ts_Rank(volume, 5), Ts_Rank(high, 5), 5), 3)"
-        ),
+        legacy_aqml_expr=("-1 * Ts_Max(Ts_Corr(Ts_Rank(volume, 5), Ts_Rank(high, 5), 5), 3)"),
         references=("Kakushadze 2015, eq. 26",),
         formula_doc_path="docs/factor_library/alpha101/alpha_026.md",
     ),
@@ -1352,9 +1366,7 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Standardised mid-price vs close gap with volume modifier",
-        legacy_aqml_expr=(
-            "Scale((Ts_Corr(adv20, low, 5) + (high + low) / 2) - close)"
-        ),
+        legacy_aqml_expr=("Scale((Ts_Corr(adv20, low, 5) + (high + low) / 2) - close)"),
         references=("Kakushadze 2015, eq. 28",),
         formula_doc_path="docs/factor_library/alpha101/alpha_028.md",
     ),
@@ -1377,9 +1389,7 @@ _ENTRIES = [
         direction="reverse",
         category="volume_price",
         description="Volume-surge rank × 7d-decline rank",
-        legacy_aqml_expr=(
-            "Ts_Rank(volume / adv20, 20) * Ts_Rank(-1 * Delta(close, 7), 8)"
-        ),
+        legacy_aqml_expr=("Ts_Rank(volume / adv20, 20) * Ts_Rank(-1 * Delta(close, 7), 8)"),
         references=("Kakushadze 2015, eq. 43",),
         formula_doc_path="docs/factor_library/alpha101/alpha_043.md",
     ),
@@ -1444,6 +1454,7 @@ _ENTRIES = [
         ),
         references=("Kakushadze 2015, eq. 68",),
         formula_doc_path="docs/factor_library/alpha101/alpha_068.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="alpha071",
@@ -1471,6 +1482,20 @@ _ENTRIES = [
         ),
         references=("Kakushadze 2015, eq. 72",),
         formula_doc_path="docs/factor_library/alpha101/alpha_072.md",
+    ),
+    FactorEntry(
+        id="alpha073",
+        impl=alpha073,
+        direction="reverse",
+        category="volume_price",
+        description="Negative max of decayed VWAP delta rank and blend reversal rank",
+        legacy_aqml_expr=(
+            "-1 * Max(Rank(Ts_DecayLinear(Delta(vwap, 5), 3)), "
+            "Ts_Rank(Ts_DecayLinear(-1 * Delta(open * 0.147155 + low * 0.852845, 2) "
+            "/ (open * 0.147155 + low * 0.852845), 3), 17))"
+        ),
+        references=("Kakushadze 2015, eq. 73",),
+        formula_doc_path="docs/factor_library/alpha101/alpha_073.md",
     ),
     FactorEntry(
         id="alpha074",
@@ -1579,6 +1604,7 @@ _ENTRIES = [
         ),
         references=("Kakushadze 2015, eq. 94",),
         formula_doc_path="docs/factor_library/alpha101/alpha_094.md",
+        quality_flag=1,
     ),
     FactorEntry(
         id="alpha099",

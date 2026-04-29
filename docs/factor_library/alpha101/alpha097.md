@@ -1,6 +1,6 @@
 # alpha097 — (rank(decay_linear(delta(IndNeutralize(low-vwap blend,industry),3),20)) - ts_rank(decay_linear(ts_rank(corr(ts_rank(low,8),ts_rank(adv60,17),5),19),16),7)) * -1
 
-> **Category**: industry_neutral | **Direction**: reverse | **Quality**: ok
+> **Category**: industry_neutral | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

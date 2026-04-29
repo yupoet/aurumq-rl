@@ -1,6 +1,6 @@
 # gtja_069 — DTM/DBM 20-day asymmetric momentum ratio
 
-> **Category**: momentum | **Direction**: normal | **Quality**: ok
+> **Category**: momentum | **Direction**: normal | **Quality**: warn
 
 ## Original WorldQuant Formula
 

@@ -1,6 +1,6 @@
 # alpha068 — Composite price/adv15 rank vs weighted-price delta
 
-> **Category**: volume_price | **Direction**: reverse | **Quality**: ok
+> **Category**: volume_price | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 

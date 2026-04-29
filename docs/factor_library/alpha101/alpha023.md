@@ -1,6 +1,6 @@
 # alpha023 — High-breakout-conditional negative 2d high change
 
-> **Category**: breakout | **Direction**: reverse | **Quality**: ok
+> **Category**: breakout | **Direction**: reverse | **Quality**: warn
 
 ## Original WorldQuant Formula
 
