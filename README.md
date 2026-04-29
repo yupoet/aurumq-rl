@@ -4,10 +4,11 @@
 
 <p align="left">
   <a href="https://github.com/yupoet/aurumq-rl/actions/workflows/ci.yml"><img src="https://github.com/yupoet/aurumq-rl/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/yupoet/aqml"><img src="https://img.shields.io/badge/AQML-strategy%20DSL-D4A853.svg" alt="AQML strategy DSL"></a>
   <a href="https://github.com/yupoet/aurumq-rl/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg" alt="Python 3.10+"></a>
   <a href="https://github.com/yupoet/aurumq-rl/releases"><img src="https://img.shields.io/github/v/release/yupoet/aurumq-rl?include_prereleases&label=release" alt="Latest release"></a>
-  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/tests-1364%20passed-brightgreen.svg" alt="Tests: 1364 passed"></a>
+  <a href="https://github.com/yupoet/aurumq-rl"><img src="https://img.shields.io/badge/tests-1386%20passed-brightgreen.svg" alt="Tests: 1386 passed"></a>
   <a href="https://github.com/yupoet/aurumq-rl/tree/main/docs/factor_library"><img src="https://img.shields.io/badge/factors-105%20alpha101%20%2B%20191%20gtja191-purple.svg" alt="Factor library"></a>
   <a href="https://stable-baselines3.readthedocs.io/"><img src="https://img.shields.io/badge/RL-Stable--Baselines3-blueviolet.svg" alt="Stable-Baselines3"></a>
   <a href="https://onnxruntime.ai/"><img src="https://img.shields.io/badge/inference-ONNX%20Runtime-yellow.svg" alt="ONNX Runtime"></a>
@@ -49,6 +50,13 @@
   - 合成数据：`scripts/generate_synthetic.py` 一键 10 MB 合规 Parquet
   - 真实数据 PG 抽取：`scripts/export_factor_panel.py` + 自定义 SQL（含 HS300/ZZ500 成员标志支持）
   - 自带因子库 + 任意行情源：用 `aurumq_rl.factors` 计算 296 个 alpha 列拼成 Parquet
+
+### AurumQ 生态
+
+[AQML](https://github.com/yupoet/aqml) 是 AurumQ 生态里的声明式策略语言层，用 `.aqml`
+文件描述可读、可验证、可由 AI 生成的筛选规则、打分和风控配置。`AurumQ-RL` 则负责因子面板、
+强化学习训练、A 股交易约束和 ONNX 推理。一个常见流程是先用 AQML 表达策略意图，再把稳定信号
+或约束转成 `AurumQ-RL` 的因子列和训练配置。
 
 ### 快速上手（30 秒）
 
@@ -227,7 +235,7 @@ aurumq-rl/
 │   ├── SCHEMA.md
 │   ├── TRAINING.md
 │   └── INFERENCE.md
-├── tests/                      # 1364+ 测试，含因子 parity 与 docs 验证
+├── tests/                      # 1386+ 测试，含因子 parity 与 docs 验证
 └── examples/
     └── quickstart.py           # 端到端示例
 ```
@@ -290,6 +298,14 @@ python scripts/train.py --smoke-test --out-dir /tmp/smoke
 ```
 
 For real training, install `[train]` extra and follow `docs/TRAINING.md`.
+
+### Ecosystem
+
+[AQML](https://github.com/yupoet/aqml) is the declarative strategy-language
+layer for the AurumQ ecosystem. AQML captures human-readable, AI-generatable
+screening rules, scoring, exits, and risk controls; AurumQ-RL turns factor
+panels and A-share constraints into reinforcement-learning training and ONNX
+inference workflows.
 
 ### License
 
