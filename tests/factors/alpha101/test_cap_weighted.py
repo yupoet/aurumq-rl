@@ -129,6 +129,5 @@ class TestAlpha056:
         # All rows for the null-cap stock should be null/NaN.
         finite_rows = affected["a"].drop_nulls().drop_nans().shape[0]
         assert finite_rows == 0, (
-            f"alpha056: expected all-null for null-cap stock, got "
-            f"{finite_rows} finite rows"
+            f"alpha056: expected all-null for null-cap stock, got {finite_rows} finite rows"
         )

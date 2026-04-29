@@ -1,4 +1,5 @@
 """Tests for alpha101.volatility."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -100,7 +101,7 @@ def test_aqml_resolves_alpha001(synthetic_panel):
 # ---------------------------------------------------------------------------
 
 _REF_STATUS_VOL = {
-    "alpha018": "drift",   # cascade pollution
+    "alpha018": "drift",  # cascade pollution
     "alpha034": "drift",
     "alpha040": "match",
     "alpha_custom_skew_reversal": "missing",

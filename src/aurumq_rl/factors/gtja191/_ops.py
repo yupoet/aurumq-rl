@@ -60,6 +60,7 @@ weighted-shift composition), the ``ts_*`` rollers, ``lowday`` /
 ``highday`` (via shifted-window argmin/argmax), and ``regbeta`` (via
 rolling cov / var). ``regresi`` remains the only slow-path rolling map.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -200,9 +201,7 @@ def wma(col: pl.Expr, window: int) -> pl.Expr:
     # weight at lag i (0 = today) is (window - i)
     weights = [float(window - i) for i in range(window)]
     total = float(sum(weights))
-    shifted = [
-        col.shift(i).over(TS_PART) * (w / total) for i, w in enumerate(weights)
-    ]
+    shifted = [col.shift(i).over(TS_PART) * (w / total) for i, w in enumerate(weights)]
     out = shifted[0]
     for term in shifted[1:]:
         out = out + term
@@ -316,12 +315,8 @@ def regbeta(y: pl.Expr, x: pl.Expr, window: int) -> pl.Expr:
     with the X/Y names swapped at the call site. Numerical agreement
     holds.
     """
-    cov_xy = pl.rolling_cov(x, y, window_size=window, min_samples=window).over(
-        TS_PART
-    )
-    var_x = (
-        x.rolling_var(window_size=window, min_samples=window).over(TS_PART)
-    )
+    cov_xy = pl.rolling_cov(x, y, window_size=window, min_samples=window).over(TS_PART)
+    var_x = x.rolling_var(window_size=window, min_samples=window).over(TS_PART)
     # Avoid div-by-zero when x is constant within the window.
     safe_var = pl.when(var_x == 0).then(None).otherwise(var_x)
     return (cov_xy / safe_var).cast(pl.Float64)
@@ -346,12 +341,8 @@ def regresi(y: pl.Expr, x: pl.Expr, window: int) -> pl.Expr:
     so the residual is ``y_dev_today - beta * x_dev_today`` where the
     deviations are from the rolling mean.
     """
-    cov_xy = pl.rolling_cov(x, y, window_size=window, min_samples=window).over(
-        TS_PART
-    )
-    var_x = (
-        x.rolling_var(window_size=window, min_samples=window).over(TS_PART)
-    )
+    cov_xy = pl.rolling_cov(x, y, window_size=window, min_samples=window).over(TS_PART)
+    var_x = x.rolling_var(window_size=window, min_samples=window).over(TS_PART)
     safe_var = pl.when(var_x == 0).then(None).otherwise(var_x)
     beta = cov_xy / safe_var
 

@@ -32,12 +32,8 @@ from tests.factors._synthetic import build_synthetic_panel
 # ---------------------------------------------------------------------------
 
 _HERE = pathlib.Path(__file__).resolve().parent
-ALPHA101_REFERENCE_PATH: pathlib.Path = (
-    _HERE / "alpha101" / "data" / "alpha101_reference.parquet"
-)
-GTJA191_REFERENCE_PATH: pathlib.Path = (
-    _HERE / "gtja191" / "data" / "gtja191_reference.parquet"
-)
+ALPHA101_REFERENCE_PATH: pathlib.Path = _HERE / "alpha101" / "data" / "alpha101_reference.parquet"
+GTJA191_REFERENCE_PATH: pathlib.Path = _HERE / "gtja191" / "data" / "gtja191_reference.parquet"
 
 
 # ---------------------------------------------------------------------------

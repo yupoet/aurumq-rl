@@ -12,6 +12,7 @@ Tests are grouped by operator class (rolling / element-wise / cs / cond).
 The synthetic_panel fixture (10 stocks × 60 days, seed=42) lives in
 ``tests/factors/conftest.py``.
 """
+
 from __future__ import annotations
 
 import math
@@ -88,16 +89,14 @@ def _apply(df: pl.DataFrame, expr: pl.Expr, name: str = "out") -> list:
 
 class TestTsMean:
     def test_dtype_and_length(self, synthetic_panel):
-        out = synthetic_panel.with_columns(
-            ts_mean(pl.col("close"), 5).alias("o")
-        )
+        out = synthetic_panel.with_columns(ts_mean(pl.col("close"), 5).alias("o"))
         assert out["o"].dtype == pl.Float64
         assert out.height == synthetic_panel.height
 
     def test_first_window_minus_one_is_null(self, synthetic_panel):
-        df = synthetic_panel.with_columns(
-            ts_mean(pl.col("close"), 5).alias("o")
-        ).sort([TS_PART, "trade_date"])
+        df = synthetic_panel.with_columns(ts_mean(pl.col("close"), 5).alias("o")).sort(
+            [TS_PART, "trade_date"]
+        )
         first_per_stock = df.group_by(TS_PART, maintain_order=True).head(4)
         assert first_per_stock["o"].null_count() == first_per_stock.height
 
@@ -236,9 +235,9 @@ class TestTsDecayLinear:
         assert out[3] == pytest.approx(20 / 6)
 
     def test_first_window_minus_one_null(self, synthetic_panel):
-        df = synthetic_panel.with_columns(
-            ts_decay_linear(pl.col("close"), 5).alias("o")
-        ).sort([TS_PART, "trade_date"])
+        df = synthetic_panel.with_columns(ts_decay_linear(pl.col("close"), 5).alias("o")).sort(
+            [TS_PART, "trade_date"]
+        )
         first = df.group_by(TS_PART, maintain_order=True).head(4)
         assert first["o"].null_count() == first.height
 
@@ -420,9 +419,7 @@ class TestCsRank:
 
 class TestCsScale:
     def test_unit_gross_per_day(self, synthetic_panel):
-        df = synthetic_panel.with_columns(
-            cs_scale(pl.col("close"), scale=1.0).alias("s")
-        )
+        df = synthetic_panel.with_columns(cs_scale(pl.col("close"), scale=1.0).alias("s"))
         # Per trade_date, sum(|s|) should equal 1.0
         per_day = df.group_by(CS_PART).agg(pl.col("s").abs().sum().alias("gross"))
         assert (per_day["gross"] - 1.0).abs().max() < 1e-9
@@ -509,8 +506,7 @@ def test_ops_compose_on_synthetic_panel(synthetic_panel):
                 pl.col("close"),
             ),
             2.0,
-        )
-        .alias("composite")
+        ).alias("composite")
     )
     assert out["composite"].dtype == pl.Float64
     assert out.height == synthetic_panel.height

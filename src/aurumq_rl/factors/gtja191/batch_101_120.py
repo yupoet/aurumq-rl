@@ -17,6 +17,7 @@ Special factor in this batch
   :func:`sequence` (the GTJA paper formula is
   ``REGBETA(CLOSE, SEQUENCE, 20)``). Quality flag = 0.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -227,7 +228,9 @@ def gtja_105(panel: pl.DataFrame) -> pl.Series:
     df = panel.with_columns(
         [rank(pl.col("open")).alias("__ro"), rank(pl.col("volume")).alias("__rv")]
     )
-    return df.select((-1.0 * corr(pl.col("__ro"), pl.col("__rv"), 10)).alias("gtja_105")).to_series()
+    return df.select(
+        (-1.0 * corr(pl.col("__ro"), pl.col("__rv"), 10)).alias("gtja_105")
+    ).to_series()
 
 
 register_gtja191(
@@ -285,12 +288,7 @@ def gtja_107(panel: pl.DataFrame) -> pl.Series:
         ]
     )
     return df.select(
-        (
-            -1.0
-            * rank(pl.col("__a"))
-            * rank(pl.col("__b"))
-            * rank(pl.col("__c"))
-        ).alias("gtja_107")
+        (-1.0 * rank(pl.col("__a")) * rank(pl.col("__b")) * rank(pl.col("__c"))).alias("gtja_107")
     ).to_series()
 
 
@@ -535,7 +533,9 @@ def gtja_115(panel: pl.DataFrame) -> pl.Series:
     """GTJA #115 — Pow of two corrs: (HIGH*0.9+CLOSE*0.1)~MA(V,30) ^ HL2 mid-rank ~ vol-rank."""
     df = panel.with_columns(
         [
-            corr(pl.col("high") * 0.9 + pl.col("close") * 0.1, mean(pl.col("volume"), 30), 10).alias("__c1"),
+            corr(
+                pl.col("high") * 0.9 + pl.col("close") * 0.1, mean(pl.col("volume"), 30), 10
+            ).alias("__c1"),
         ]
     )
     df = df.with_columns(
@@ -616,9 +616,7 @@ def gtja_117(panel: pl.DataFrame) -> pl.Series:
     ret = pl.col("close") / delay(pl.col("close"), 1) - 1.0
     chl = pl.col("close") + pl.col("high") - pl.col("low")
     expr = (
-        ts_rank(pl.col("volume"), 32)
-        * (1.0 - ts_rank(chl, 16))
-        * (1.0 - ts_rank(ret, 32))
+        ts_rank(pl.col("volume"), 32) * (1.0 - ts_rank(chl, 16)) * (1.0 - ts_rank(ret, 32))
     ).alias("gtja_117")
     return panel.select(expr).to_series()
 
@@ -645,9 +643,7 @@ def gtja_118(panel: pl.DataFrame) -> pl.Series:
     Open-relative range-skew over 20 days.
     """
     expr = (
-        sum_(pl.col("high") - pl.col("open"), 20)
-        / sum_(pl.col("open") - pl.col("low"), 20)
-        * 100.0
+        sum_(pl.col("high") - pl.col("open"), 20) / sum_(pl.col("open") - pl.col("low"), 20) * 100.0
     ).alias("gtja_118")
     return panel.select(expr).to_series()
 

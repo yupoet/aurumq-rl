@@ -14,6 +14,7 @@ For each of the fourteen momentum alphas we cover four checks:
   ``@pytest.mark.xfail(strict=False)`` per the migration plan — they
   will be reconciled in Phase D.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -65,9 +66,7 @@ def _parity_bad_fraction(
         on=["stock_code", "trade_date"],
         how="inner",
     )
-    joined = joined.filter(
-        pl.col("ours").is_not_null() & pl.col(name).is_not_null()
-    )
+    joined = joined.filter(pl.col("ours").is_not_null() & pl.col(name).is_not_null())
     joined = joined.with_columns(
         pl.col("ours").is_nan().alias("__ours_nan"),
         pl.col(name).is_nan().alias("__ref_nan"),

@@ -5,6 +5,7 @@ parity with Daic115 reference parquet (rtol=1e-3, atol=1e-3, max 5%
 bad rows). Reference parity is skipped for gtja_021 (qlib-dependent in
 Daic115), gtja_030 (Daic115-unfinished), gtja_033 (turn-rate dependency).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -46,9 +47,7 @@ def _parity_bad_fraction(panel, impl, name, reference):
         on=["stock_code", "trade_date"],
         how="inner",
     )
-    joined = joined.filter(
-        pl.col("ours").is_not_null() & pl.col(name).is_not_null()
-    )
+    joined = joined.filter(pl.col("ours").is_not_null() & pl.col(name).is_not_null())
     joined = joined.with_columns(
         pl.col("ours").is_nan().alias("__ours_nan"),
         pl.col(name).is_nan().alias("__ref_nan"),
@@ -98,7 +97,9 @@ _XFAIL_PARITY: set[str] = {
     # Cascade pollution was already ruled out (rebuilt parquet still mismatches).
     # Likely root causes: (a) formula-translation drift, (b) Daic115's `turn`
     # column proxy when synthetic panel lacks it, (c) ts_argmax/argmin tie rule.
-    "gtja_023", "gtja_032", "gtja_036",
+    "gtja_023",
+    "gtja_032",
+    "gtja_036",
 }
 
 
@@ -119,9 +120,7 @@ def test_steady_state_has_values(synthetic_panel, name, impl):
 
 
 @pytest.mark.parametrize("name,impl", _FACTORS)
-def test_matches_daic115_reference(
-    request, synthetic_panel, gtja191_reference, name, impl
-):
+def test_matches_daic115_reference(request, synthetic_panel, gtja191_reference, name, impl):
     if name in _XFAIL_PARITY:
         request.node.add_marker(
             pytest.mark.xfail(

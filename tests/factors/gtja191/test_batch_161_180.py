@@ -2,6 +2,7 @@
 
 Special factors: gtja_165 (errata), gtja_166 (errata).
 """
+
 from __future__ import annotations
 
 import polars as pl

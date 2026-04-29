@@ -6,6 +6,7 @@ numpy/pandas computation. The reference behaviour deliberately mirrors
 the Daic115/alpha191 oracle so that downstream factor implementations
 have a stable foundation to test against.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -310,12 +311,10 @@ class TestDecayLinear:
 
     def test_equivalent_to_wma(self, synthetic_panel):
         """decay_linear and wma must agree because the weights normalise the same way."""
-        a = synthetic_panel.with_columns(
-            _ops.decay_linear(pl.col("close"), 7).alias("a")
-        )["a"].to_numpy()
-        b = synthetic_panel.with_columns(_ops.wma(pl.col("close"), 7).alias("b"))[
-            "b"
+        a = synthetic_panel.with_columns(_ops.decay_linear(pl.col("close"), 7).alias("a"))[
+            "a"
         ].to_numpy()
+        b = synthetic_panel.with_columns(_ops.wma(pl.col("close"), 7).alias("b"))["b"].to_numpy()
         mask = ~np.isnan(a) & ~np.isnan(b)
         np.testing.assert_allclose(a[mask], b[mask], rtol=1e-12)
 
@@ -362,9 +361,7 @@ class TestSumif:
                 "g": [True, False, True, True, False],
             }
         )
-        out = df.with_columns(_ops.sumif(pl.col("x"), 3, pl.col("g")).alias("s"))[
-            "s"
-        ].to_list()
+        out = df.with_columns(_ops.sumif(pl.col("x"), 3, pl.col("g")).alias("s"))["s"].to_list()
         # row 2: x[0]+x[2] where g→ true: 1+3 = 4
         # row 3: x[2]+x[3] (g=True for both) = 3+4 = 7
         # row 4: x[2]+x[3] = 3+4 = 7
@@ -462,9 +459,7 @@ class TestRegbeta:
                 "y": [5.0, 7.0, 9.0, 11.0, 13.0, 15.0],
             }
         )
-        out = df.with_columns(
-            _ops.regbeta(pl.col("y"), pl.col("x"), 5).alias("b")
-        )
+        out = df.with_columns(_ops.regbeta(pl.col("y"), pl.col("x"), 5).alias("b"))
         non_null = out["b"].drop_nulls().to_numpy()
         np.testing.assert_allclose(non_null, [2.0, 2.0], rtol=1e-10)
 

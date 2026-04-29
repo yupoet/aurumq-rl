@@ -3,6 +3,7 @@
 Special factors: gtja_181 / gtja_182 (benchmark — CS-mean proxy),
 gtja_183 (errata SUMAC), gtja_191 (errata).
 """
+
 from __future__ import annotations
 
 import polars as pl

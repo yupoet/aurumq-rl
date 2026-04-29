@@ -15,6 +15,7 @@ from aurumq_rl.data_loader import (
     FactorPanel,
     FactorPanelLoader,
     UniverseFilter,
+    _cross_section_zscore,
     discover_factor_columns,
     filter_universe,
 )
@@ -217,6 +218,22 @@ def test_build_synthetic_factors_zscored() -> None:
     assert np.allclose(means, 0.0, atol=1e-3)
     # Std could be slightly less than 1 due to denominator stabilization
     assert np.all(stds < 1.5)
+
+
+def test_cross_section_zscore_replaces_nan_with_zero() -> None:
+    arr = np.array(
+        [
+            [[np.nan, 1.0], [np.nan, 2.0], [np.nan, 3.0]],
+            [[1.0, np.nan], [1.0, np.inf], [1.0, -np.inf]],
+        ],
+        dtype=np.float32,
+    )
+
+    out = _cross_section_zscore(arr)
+
+    assert np.isfinite(out).all()
+    assert np.all(out[0, :, 0] == 0.0)
+    assert np.all(out[1, :, 0] == 0.0)
 
 
 def test_build_synthetic_dates_are_weekdays() -> None:

@@ -1,4 +1,5 @@
 """Alpha101 — volatility category factors."""
+
 from __future__ import annotations
 
 import polars as pl
@@ -58,9 +59,7 @@ def alpha001(panel: pl.DataFrame) -> pl.Series:
     sq = signed_power(cond_input, 2.0)
     arg = ts_argmax(sq, 5)
     staged = panel.with_columns(arg.alias("__a001_arg"))
-    return staged.select(
-        (cs_rank(pl.col("__a001_arg")) - 0.5).alias("alpha001")
-    ).to_series()
+    return staged.select((cs_rank(pl.col("__a001_arg")) - 0.5).alias("alpha001")).to_series()
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +74,7 @@ register_alpha101(
         category="volatility",
         description="Rank of squared-clip ts_argmax within past 5 days",
         legacy_aqml_expr=(
-            "Rank(Ts_ArgMax(SignedPower(If(returns < 0, "
-            "Ts_Std(returns, 20), close), 2), 5)) - 0.5"
+            "Rank(Ts_ArgMax(SignedPower(If(returns < 0, Ts_Std(returns, 20), close), 2), 5)) - 0.5"
         ),
         references=(
             "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 1",
@@ -130,9 +128,7 @@ def alpha018(panel: pl.DataFrame) -> pl.Series:
     corr = ts_corr_safe(pl.col("close"), pl.col("open"), 10)
     inner = body_std + body + corr
     staged = panel.with_columns(inner.alias("__a018_inner"))
-    return staged.select(
-        (-1.0 * cs_rank(pl.col("__a018_inner"))).alias("alpha018")
-    ).to_series()
+    return staged.select((-1.0 * cs_rank(pl.col("__a018_inner"))).alias("alpha018")).to_series()
 
 
 def alpha034(panel: pl.DataFrame) -> pl.Series:
@@ -174,9 +170,7 @@ def alpha034(panel: pl.DataFrame) -> pl.Series:
         .otherwise(1.0)
         .alias("__a034_ratio")
     )
-    inner = (
-        2.0 - cs_rank(pl.col("__a034_ratio")) - cs_rank(pl.col("__a034_d"))
-    )
+    inner = 2.0 - cs_rank(pl.col("__a034_ratio")) - cs_rank(pl.col("__a034_d"))
     staged = staged.with_columns(inner.alias("__a034_inner"))
     return staged.select(cs_rank(pl.col("__a034_inner")).alias("alpha034")).to_series()
 
@@ -213,9 +207,7 @@ def alpha040(panel: pl.DataFrame) -> pl.Series:
         corr_hv.alias("__a040_corr"),
     )
     return staged.select(
-        (-1.0 * cs_rank(pl.col("__a040_std")) * pl.col("__a040_corr")).alias(
-            "alpha040"
-        )
+        (-1.0 * cs_rank(pl.col("__a040_std")) * pl.col("__a040_corr")).alias("alpha040")
     ).to_series()
 
 
@@ -280,12 +272,9 @@ _ENTRIES_EXTRA: tuple[FactorEntry, ...] = (
             "10-day correlation(close, open)"
         ),
         legacy_aqml_expr=(
-            "-1 * Rank(Ts_Std(Abs(close - open), 5) + (close - open) "
-            "+ Ts_Corr(close, open, 10))"
+            "-1 * Rank(Ts_Std(Abs(close - open), 5) + (close - open) + Ts_Corr(close, open, 10))"
         ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 18",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 18",),
     ),
     FactorEntry(
         id="alpha034",
@@ -293,31 +282,22 @@ _ENTRIES_EXTRA: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="volatility",
         description=(
-            "Rank((1 - rank(stddev(returns,2)/stddev(returns,5))) + "
-            "(1 - rank(delta(close,1))))"
+            "Rank((1 - rank(stddev(returns,2)/stddev(returns,5))) + (1 - rank(delta(close,1))))"
         ),
         legacy_aqml_expr=(
             "Rank((1 - Rank(Ts_Std(returns, 2) / Ts_Std(returns, 5))) "
             "+ (1 - Rank(Delta(close, 1))))"
         ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 34",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 34",),
     ),
     FactorEntry(
         id="alpha040",
         impl=alpha040,
         direction="reverse",
         category="volatility",
-        description=(
-            "Negative rank(stddev(high,10)) * correlation(high, volume, 10)"
-        ),
-        legacy_aqml_expr=(
-            "-1 * Rank(Ts_Std(high, 10)) * Ts_Corr(high, volume, 10)"
-        ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 40",
-        ),
+        description=("Negative rank(stddev(high,10)) * correlation(high, volume, 10)"),
+        legacy_aqml_expr=("-1 * Rank(Ts_Std(high, 10)) * Ts_Corr(high, volume, 10)"),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 40",),
     ),
     FactorEntry(
         id="alpha_custom_skew_reversal",

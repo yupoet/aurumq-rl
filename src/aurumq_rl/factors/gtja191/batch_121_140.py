@@ -13,6 +13,7 @@ Special factors in this batch
 The XOR / power ambiguity (``^``) in the GTJA paper is resolved as
 exponentiation (``**``) following Daic115's pandas reference.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -351,7 +352,9 @@ def gtja_130(panel: pl.DataFrame) -> pl.Series:
     """GTJA #130 — Decay-linear corr ratio: HL2~MA(V,40) over rank(VWAP)~rank(VOL)."""
     df = panel.with_columns(
         [
-            corr((pl.col("high") + pl.col("low")) / 2.0, mean(pl.col("volume"), 40), 9).alias("__c1"),
+            corr((pl.col("high") + pl.col("low")) / 2.0, mean(pl.col("volume"), 40), 9).alias(
+                "__c1"
+            ),
             rank(pl.col("vwap")).alias("__rv"),
             rank(pl.col("volume")).alias("__rvo"),
         ]
@@ -579,9 +582,7 @@ def gtja_137(panel: pl.DataFrame) -> pl.Series:
     absco = (pc - po).abs()
     abshl = (pl.col("high") - pl_).abs()
 
-    num = 16.0 * (
-        pl.col("close") - pc + (pl.col("close") - pl.col("open")) / 2.0 + pc - po
-    )
+    num = 16.0 * (pl.col("close") - pc + (pl.col("close") - pl.col("open")) / 2.0 + pc - po)
     case1 = abshc + abslc / 2.0 + absco / 4.0
     case2 = abslc + abshc / 2.0 + absco / 4.0
     case3 = abshl + absco / 4.0
@@ -683,7 +684,12 @@ def gtja_140(panel: pl.DataFrame) -> pl.Series:
     """GTJA #140 — MIN of two decay-linear ranks."""
     df = panel.with_columns(
         [
-            (rank(pl.col("open")) + rank(pl.col("low")) - rank(pl.col("high")) - rank(pl.col("close"))).alias("__a"),
+            (
+                rank(pl.col("open"))
+                + rank(pl.col("low"))
+                - rank(pl.col("high"))
+                - rank(pl.col("close"))
+            ).alias("__a"),
             ts_rank(pl.col("close"), 8).alias("__tc"),
             ts_rank(mean(pl.col("volume"), 60), 20).alias("__tv"),
         ]

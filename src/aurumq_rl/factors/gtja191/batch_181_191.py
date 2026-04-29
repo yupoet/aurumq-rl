@@ -17,6 +17,7 @@ Special factors in this batch
 * ``gtja_191`` — Errata factor per ``wpwp/Alpha-101-GTJA-191`` README.
   Implement best-effort. Quality flag = 1.
 """
+
 from __future__ import annotations
 
 import polars as pl

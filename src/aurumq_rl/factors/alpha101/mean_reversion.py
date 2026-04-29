@@ -15,6 +15,7 @@ the shared operator module.
 Direction is ``reverse`` for every factor in this module — large positive
 values indicate over-extension and predict mean-reverting moves.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -65,9 +66,7 @@ def alpha004(panel: pl.DataFrame) -> pl.Series:
     Category: ``mean_reversion``
     """
     staged = panel.with_columns(cs_rank(pl.col("low")).alias("__a004_lr"))
-    return staged.select(
-        (-1.0 * ts_rank_int(pl.col("__a004_lr"), 9)).alias("alpha004")
-    ).to_series()
+    return staged.select((-1.0 * ts_rank_int(pl.col("__a004_lr"), 9)).alias("alpha004")).to_series()
 
 
 def alpha032(panel: pl.DataFrame) -> pl.Series:
@@ -104,10 +103,7 @@ def alpha032(panel: pl.DataFrame) -> pl.Series:
         corr.alias("__a032_corr"),
     )
     return staged.select(
-        (
-            cs_scale(pl.col("__a032_ma"))
-            + 20.0 * cs_scale(pl.col("__a032_corr"))
-        ).alias("alpha032")
+        (cs_scale(pl.col("__a032_ma")) + 20.0 * cs_scale(pl.col("__a032_corr"))).alias("alpha032")
     ).to_series()
 
 
@@ -163,9 +159,7 @@ def alpha037(panel: pl.DataFrame) -> pl.Series:
     corr = ts_corr_safe(delay(oc, 1), pl.col("close"), 200)
     staged = panel.with_columns(corr.alias("__a037_corr"), oc.alias("__a037_oc"))
     return staged.select(
-        (cs_rank(pl.col("__a037_corr")) + cs_rank(pl.col("__a037_oc"))).alias(
-            "alpha037"
-        )
+        (cs_rank(pl.col("__a037_corr")) + cs_rank(pl.col("__a037_oc"))).alias("alpha037")
     ).to_series()
 
 
@@ -219,9 +213,7 @@ def alpha042(panel: pl.DataFrame) -> pl.Series:
     """
     vmc = pl.col("vwap") - pl.col("close")
     vpc = pl.col("vwap") + pl.col("close")
-    return panel.select(
-        (cs_rank(vmc) / cs_rank(vpc)).alias("alpha042")
-    ).to_series()
+    return panel.select((cs_rank(vmc) / cs_rank(vpc)).alias("alpha042")).to_series()
 
 
 def alpha053(panel: pl.DataFrame) -> pl.Series:
@@ -253,9 +245,7 @@ def alpha053(panel: pl.DataFrame) -> pl.Series:
     cl = close - low
     safe_cl = pl.when(cl == 0.0).then(1e-4).otherwise(cl)
     inner = (cl - (high - close)) / safe_cl
-    return panel.select(
-        (-1.0 * delta(inner, 9)).alias("alpha053")
-    ).to_series()
+    return panel.select((-1.0 * delta(inner, 9)).alias("alpha053")).to_series()
 
 
 def alpha057(panel: pl.DataFrame) -> pl.Series:
@@ -289,12 +279,8 @@ def alpha057(panel: pl.DataFrame) -> pl.Series:
     vwap = pl.col("vwap")
     arg = ts_argmax_last(close, 30)
     staged = panel.with_columns(arg.alias("__a057_arg"))
-    staged = staged.with_columns(
-        cs_rank(pl.col("__a057_arg")).alias("__a057_rk")
-    )
-    staged = staged.with_columns(
-        ts_decay_linear(pl.col("__a057_rk"), 2).alias("__a057_dl")
-    )
+    staged = staged.with_columns(cs_rank(pl.col("__a057_arg")).alias("__a057_rk"))
+    staged = staged.with_columns(ts_decay_linear(pl.col("__a057_rk"), 2).alias("__a057_dl"))
     return staged.select(
         (-1.0 * (close - vwap) / pl.col("__a057_dl")).alias("alpha057")
     ).to_series()
@@ -324,10 +310,9 @@ def alpha101(panel: pl.DataFrame) -> pl.Series:
     Category: ``mean_reversion``
     """
     return panel.select(
-        (
-            (pl.col("close") - pl.col("open"))
-            / ((pl.col("high") - pl.col("low")) + 0.001)
-        ).alias("alpha101")
+        ((pl.col("close") - pl.col("open")) / ((pl.col("high") - pl.col("low")) + 0.001)).alias(
+            "alpha101"
+        )
     ).to_series()
 
 
@@ -404,12 +389,9 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "vwap and delayed close"
         ),
         legacy_aqml_expr=(
-            "Scale(Ts_Sum(close, 7) / 7 - close) + "
-            "20 * Scale(Ts_Corr(vwap, Delay(close, 5), 230))"
+            "Scale(Ts_Sum(close, 7) / 7 - close) + 20 * Scale(Ts_Corr(vwap, Delay(close, 5), 230))"
         ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 32",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 32",),
     ),
     FactorEntry(
         id="alpha033",
@@ -418,9 +400,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         category="mean_reversion",
         description="Cross-section rank of (open/close - 1)",
         legacy_aqml_expr="Rank(-1 * Power(1 - (open / close), 1))",
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 33",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 33",),
     ),
     FactorEntry(
         id="alpha037",
@@ -431,13 +411,8 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "Rank of 200-day correlation between delayed (open-close) and close, "
             "plus rank of (open-close)"
         ),
-        legacy_aqml_expr=(
-            "Rank(Ts_Corr(Delay(open - close, 1), close, 200)) + "
-            "Rank(open - close)"
-        ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 37",
-        ),
+        legacy_aqml_expr=("Rank(Ts_Corr(Delay(open - close, 1), close, 200)) + Rank(open - close)"),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 37",),
     ),
     FactorEntry(
         id="alpha041",
@@ -446,9 +421,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         category="mean_reversion",
         description="Geometric mean of high and low minus vwap",
         legacy_aqml_expr="Power(high * low, 0.5) - vwap",
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 41",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 41",),
     ),
     FactorEntry(
         id="alpha042",
@@ -457,9 +430,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         category="mean_reversion",
         description="Rank(vwap - close) / Rank(vwap + close)",
         legacy_aqml_expr="Rank(vwap - close) / Rank(vwap + close)",
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 42",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 42",),
     ),
     FactorEntry(
         id="alpha053",
@@ -467,12 +438,8 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         direction="reverse",
         category="mean_reversion",
         description="Negative 9-day delta of (close-low minus high-close)/(close-low)",
-        legacy_aqml_expr=(
-            "-1 * Delta(((close - low) - (high - close)) / (close - low), 9)"
-        ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 53",
-        ),
+        legacy_aqml_expr=("-1 * Delta(((close - low) - (high - close)) / (close - low), 9)"),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 53",),
     ),
     FactorEntry(
         id="alpha057",
@@ -483,12 +450,8 @@ _ENTRIES: tuple[FactorEntry, ...] = (
             "Negative (close - vwap) divided by 2-day decay-linear of CS rank of "
             "30-day argmax of close"
         ),
-        legacy_aqml_expr=(
-            "-1 * ((close - vwap) / Ts_DecayLinear(Rank(Ts_ArgMax(close, 30)), 2))"
-        ),
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 57",
-        ),
+        legacy_aqml_expr=("-1 * ((close - vwap) / Ts_DecayLinear(Rank(Ts_ArgMax(close, 30)), 2))"),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 57",),
     ),
     FactorEntry(
         id="alpha101",
@@ -497,9 +460,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         category="mean_reversion",
         description="Intraday body over range — (close - open) / (high - low + 0.001)",
         legacy_aqml_expr="(close - open) / ((high - low) + 0.001)",
-        references=(
-            "Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 101",
-        ),
+        references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 101",),
     ),
     FactorEntry(
         id="alpha_custom_zscore_5d",

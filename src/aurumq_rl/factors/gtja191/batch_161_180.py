@@ -12,6 +12,7 @@ Special factors in this batch
   ``5 * SUM(part-1-mean(part-1,20),20) / (SUM(mean(part,20)^2,20))^1.5``.
   We follow that. Quality flag = 1.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -105,7 +106,13 @@ register_gtja191(
 def gtja_163(panel: pl.DataFrame) -> pl.Series:
     """GTJA #163 — RANK(-RET * MEAN(V,20) * VWAP * (HIGH - CLOSE))."""
     ret = pl.col("close") / delay(pl.col("close"), 1) - 1.0
-    inner = -1.0 * ret * mean(pl.col("volume"), 20) * pl.col("vwap") * (pl.col("high") - pl.col("close"))
+    inner = (
+        -1.0
+        * ret
+        * mean(pl.col("volume"), 20)
+        * pl.col("vwap")
+        * (pl.col("high") - pl.col("close"))
+    )
     df = panel.with_columns(inner.alias("__i"))
     return df.select(rank(pl.col("__i")).alias("gtja_163")).to_series()
 
@@ -136,7 +143,7 @@ def gtja_164(panel: pl.DataFrame) -> pl.Series:
     diff = pl.col("close") - pc
     cond = pl.col("close") > pc
     rec = pl.when(cond).then(1.0 / diff).otherwise(1.0)
-    inner = (rec - ts_min(rec, 12) / (pl.col("high") - pl.col("low")) * 100.0)
+    inner = rec - ts_min(rec, 12) / (pl.col("high") - pl.col("low")) * 100.0
     expr = sma(inner, 13, 2).alias("gtja_164")
     return panel.select(expr).to_series()
 
@@ -219,9 +226,9 @@ def gtja_166(panel: pl.DataFrame) -> pl.Series:
             mean(part, 20).alias("__mp"),
         ]
     )
-    expr = (
-        5.0 * sum_(pl.col("__centered"), 20) / sum_(pl.col("__mp").pow(2), 20).pow(1.5)
-    ).alias("gtja_166")
+    expr = (5.0 * sum_(pl.col("__centered"), 20) / sum_(pl.col("__mp").pow(2), 20).pow(1.5)).alias(
+        "gtja_166"
+    )
     return df.select(expr).to_series()
 
 
@@ -403,11 +410,9 @@ register_gtja191(
 def gtja_173(panel: pl.DataFrame) -> pl.Series:
     """GTJA #173 — 3*SMA(C,13,2) - 2*SMA^2(C,13,2) + SMA^3(LOG(C),13,2)."""
     ma = sma(pl.col("close"), 13, 2)
-    expr = (
-        3.0 * ma
-        - 2.0 * sma(ma, 13, 2)
-        + sma(sma(log_(pl.col("close")), 13, 2), 13, 2)
-    ).alias("gtja_173")
+    expr = (3.0 * ma - 2.0 * sma(ma, 13, 2) + sma(sma(log_(pl.col("close")), 13, 2), 13, 2)).alias(
+        "gtja_173"
+    )
     return panel.select(expr).to_series()
 
 

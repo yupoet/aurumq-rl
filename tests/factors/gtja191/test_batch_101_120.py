@@ -1,4 +1,5 @@
 """Tests for gtja191.batch_101_120 (factors 101..120, 20 total)."""
+
 from __future__ import annotations
 
 import polars as pl

@@ -84,9 +84,9 @@ def alpha061(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("vwap"), pl.col("adv180"), 18).alias("__a061_corr"),
     )
     return staged.select(
-        (
-            cs_rank(pl.col("__a061_diff")) < cs_rank(pl.col("__a061_corr"))
-        ).cast(pl.Float64).alias("alpha061")
+        (cs_rank(pl.col("__a061_diff")) < cs_rank(pl.col("__a061_corr")))
+        .cast(pl.Float64)
+        .alias("alpha061")
     ).to_series()
 
 
@@ -118,10 +118,7 @@ def alpha064(panel: pl.DataFrame) -> pl.Series:
     )
     return staged2.select(
         (
-            (cs_rank(pl.col("__a064_corr")) < cs_rank(pl.col("__a064_db"))).cast(
-                pl.Float64
-            )
-            * -1.0
+            (cs_rank(pl.col("__a064_corr")) < cs_rank(pl.col("__a064_db"))).cast(pl.Float64) * -1.0
         ).alias("alpha064")
     ).to_series()
 
@@ -149,9 +146,9 @@ def alpha075(panel: pl.DataFrame) -> pl.Series:
         ts_corr(pl.col("__a075_rl"), pl.col("__a075_ra"), 12).alias("__a075_c2")
     )
     return staged2.select(
-        (
-            cs_rank(pl.col("__a075_c1")) < cs_rank(pl.col("__a075_c2"))
-        ).cast(pl.Float64).alias("alpha075")
+        (cs_rank(pl.col("__a075_c1")) < cs_rank(pl.col("__a075_c2")))
+        .cast(pl.Float64)
+        .alias("alpha075")
     ).to_series()
 
 
@@ -177,9 +174,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha061,
         direction="reverse",
         category="adv_extended",
-        description=(
-            "rank(vwap-ts_min(vwap,16)) < rank(corr(vwap, adv180, 18))"
-        ),
+        description=("rank(vwap-ts_min(vwap,16)) < rank(corr(vwap, adv180, 18))"),
         references=("Kakushadze 2015, eq. 61",),
     ),
     FactorEntry(
@@ -198,9 +193,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha075,
         direction="reverse",
         category="adv_extended",
-        description=(
-            "rank(corr(vwap,volume,4)) < rank(corr(rank(low), rank(adv50), 12))"
-        ),
+        description=("rank(corr(vwap,volume,4)) < rank(corr(rank(low), rank(adv50), 12))"),
         references=("Kakushadze 2015, eq. 75",),
     ),
 )

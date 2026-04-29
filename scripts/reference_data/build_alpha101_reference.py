@@ -107,8 +107,7 @@ def _load_sthsf() -> object:
     alpha101_path = STHSF_SRC / "alpha101_single.py"
     if not factor_util_path.exists() or not alpha101_path.exists():
         raise FileNotFoundError(
-            f"STHSF reference files missing under {STHSF_SRC}. "
-            "Did you fetch the refs/ submodule?"
+            f"STHSF reference files missing under {STHSF_SRC}. Did you fetch the refs/ submodule?"
         )
 
     # Synthesise alpha_101 package
@@ -317,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     # reference build only.
     import contextlib
     import io as _io
+
     _stdout_sink = _io.StringIO()
 
     # Late import: we monkeyed sys.path to make this work in scripts mode.

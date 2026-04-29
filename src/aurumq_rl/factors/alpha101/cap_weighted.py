@@ -58,10 +58,7 @@ def alpha024(panel: pl.DataFrame) -> pl.Series:
     branch_true = -1.0 * (pl.col("close") - ts_min(pl.col("close"), 100))
     branch_false = -1.0 * delta(pl.col("close"), 3)
     return panel.select(
-        pl.when(cond)
-        .then(branch_true)
-        .otherwise(branch_false)
-        .alias("alpha024")
+        pl.when(cond).then(branch_true).otherwise(branch_false).alias("alpha024")
     ).to_series()
 
 
@@ -89,19 +86,15 @@ def alpha056(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``cap_weighted``
     """
-    inner_ratio = ts_sum(pl.col("returns"), 10) / ts_sum(
-        ts_sum(pl.col("returns"), 2), 3
-    )
+    inner_ratio = ts_sum(pl.col("returns"), 10) / ts_sum(ts_sum(pl.col("returns"), 2), 3)
     staged = panel.with_columns(
         inner_ratio.alias("__a056_ratio"),
         (pl.col("returns") * pl.col("cap")).alias("__a056_dollar"),
     )
     return staged.select(
-        (
-            -1.0
-            * cs_rank(pl.col("__a056_ratio"))
-            * cs_rank(pl.col("__a056_dollar"))
-        ).alias("alpha056")
+        (-1.0 * cs_rank(pl.col("__a056_ratio")) * cs_rank(pl.col("__a056_dollar"))).alias(
+            "alpha056"
+        )
     ).to_series()
 
 
@@ -127,9 +120,7 @@ _ENTRIES: tuple[FactorEntry, ...] = (
         impl=alpha056,
         direction="reverse",
         category="cap_weighted",
-        description=(
-            "-rank(sum(returns,10)/sum(sum(returns,2),3)) * rank(returns * cap)"
-        ),
+        description=("-rank(sum(returns,10)/sum(sum(returns,2),3)) * rank(returns * cap)"),
         references=("Kakushadze 2015, eq. 56",),
     ),
 )

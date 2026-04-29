@@ -84,9 +84,7 @@ def test_panel_no_lookahead_in_returns(synthetic_panel: pl.DataFrame) -> None:
     )
     # 10 stocks → 10 first-day rows, all returns must be null
     assert first_day.shape[0] == 10
-    null_count = first_day["returns"].null_count() + int(
-        first_day["returns"].is_nan().sum() or 0
-    )
+    null_count = first_day["returns"].null_count() + int(first_day["returns"].is_nan().sum() or 0)
     assert null_count == 10, (
         f"first-day returns should all be NaN/null, got {first_day['returns'].to_list()}"
     )
@@ -166,6 +164,4 @@ def test_alpha101_reference_alignment(
     # At least 50 alphas survived — guard against silent regressions in
     # the build pipeline.
     alpha_cols = [c for c in alpha101_reference.columns if c.startswith("alpha")]
-    assert len(alpha_cols) >= 50, (
-        f"only {len(alpha_cols)} alphas in reference; expected >= 50"
-    )
+    assert len(alpha_cols) >= 50, f"only {len(alpha_cols)} alphas in reference; expected >= 50"

@@ -1,4 +1,5 @@
 """Tests for gtja191 batch 081-100."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -40,9 +41,7 @@ def _parity_bad_fraction(panel, impl, name, reference):
         on=["stock_code", "trade_date"],
         how="inner",
     )
-    joined = joined.filter(
-        pl.col("ours").is_not_null() & pl.col(name).is_not_null()
-    )
+    joined = joined.filter(pl.col("ours").is_not_null() & pl.col(name).is_not_null())
     joined = joined.with_columns(
         pl.col("ours").is_nan().alias("__ours_nan"),
         pl.col(name).is_nan().alias("__ref_nan"),
@@ -82,7 +81,9 @@ _FACTORS = [
 _XFAIL_PARITY: set[str] = {
     # 14-factor parity gap from Phase B Wave 2 (2026-04-29) — see
     # `docs/2026-04-29-phase-b-handoff-to-codex.md` P0-1 for codex follow-up.
-    "gtja_085", "gtja_086", "gtja_090",
+    "gtja_085",
+    "gtja_086",
+    "gtja_090",
 }
 
 
@@ -103,9 +104,7 @@ def test_steady_state_has_values(synthetic_panel, name, impl):
 
 
 @pytest.mark.parametrize("name,impl", _FACTORS)
-def test_matches_daic115_reference(
-    request, synthetic_panel, gtja191_reference, name, impl
-):
+def test_matches_daic115_reference(request, synthetic_panel, gtja191_reference, name, impl):
     if name in _XFAIL_PARITY:
         request.node.add_marker(
             pytest.mark.xfail(

@@ -17,6 +17,7 @@ All factors here are flagged ``direction='reverse'`` in
 :data:`aurumq.rules.alpha101_library.ALPHA101_FACTORS`; that flag is
 preserved on registration.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -275,7 +276,9 @@ def alpha019(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``momentum``
     """
-    sign_part = -1.0 * sign_((pl.col("close") - delay(pl.col("close"), 7)) + delta(pl.col("close"), 7))
+    sign_part = -1.0 * sign_(
+        (pl.col("close") - delay(pl.col("close"), 7)) + delta(pl.col("close"), 7)
+    )
     annual = ts_sum(pl.col("returns"), 250)
     staged = panel.with_columns(
         sign_part.alias("__a019_sign"),
@@ -355,9 +358,9 @@ def alpha045(panel: pl.DataFrame) -> pl.Series:
         short_corr.alias("__a045_sc"),
         long_short_corr.alias("__a045_lsc"),
     )
-    expr = -1.0 * (
-        cs_rank(pl.col("__a045_ma")) * pl.col("__a045_sc")
-    ) * cs_rank(pl.col("__a045_lsc"))
+    expr = (
+        -1.0 * (cs_rank(pl.col("__a045_ma")) * pl.col("__a045_sc")) * cs_rank(pl.col("__a045_lsc"))
+    )
     return staged.select(expr.alias("alpha045").cast(pl.Float64)).to_series()
 
 
@@ -616,8 +619,7 @@ _ENTRIES = [
         category="momentum",
         description="Volume-conditional 7-day signed momentum rank",
         legacy_aqml_expr=(
-            "If(adv20 < volume, -1 * Ts_Rank(Abs(Delta(close, 7)), 60) * "
-            "Sign(Delta(close, 7)), -1)"
+            "If(adv20 < volume, -1 * Ts_Rank(Abs(Delta(close, 7)), 60) * Sign(Delta(close, 7)), -1)"
         ),
         references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 7",),
         formula_doc_path="docs/factor_library/alpha101/alpha_007.md",

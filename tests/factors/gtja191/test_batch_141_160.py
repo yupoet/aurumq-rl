@@ -3,6 +3,7 @@
 Special factors: gtja_143 (stub, all-null), gtja_147 (qlib-dep variant),
 gtja_149 (benchmark — CS-mean proxy), gtja_151 (errata).
 """
+
 from __future__ import annotations
 
 import polars as pl

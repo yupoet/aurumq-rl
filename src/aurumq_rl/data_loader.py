@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -218,14 +219,16 @@ def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
 
     NaN cells in the input (suspended days, pre-IPO, factor warm-up) and
     rows where the entire cross-section is NaN (so mean/std are NaN) are
-    replaced with 0.0 — the neutral signal per the project convention
-    documented in CLAUDE.md ("训练时填 0"). Without this, env reset()
-    returns observations containing NaN, which Box.contains() rejects
-    and SB3's check_env asserts on.
+    replaced with 0.0, the neutral signal per the project convention.
+    Without this, env reset() returns observations containing NaN, which
+    Box.contains() rejects and SB3's check_env asserts on.
     """
-    with np.errstate(invalid="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
         mean = np.nanmean(arr, axis=1, keepdims=True)
         std = np.nanstd(arr, axis=1, keepdims=True)
+
+    with np.errstate(invalid="ignore"):
         z = (arr - mean) / (std + 1e-8)
     return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
 

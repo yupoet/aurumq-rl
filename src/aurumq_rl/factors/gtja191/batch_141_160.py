@@ -24,6 +24,7 @@ Special factors in this batch
   Implement best-effort (``SMA(CLOSE-DELAY(CLOSE,20),20,1)``).
   Quality flag = 1.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -289,9 +290,7 @@ def gtja_148(panel: pl.DataFrame) -> pl.Series:
             (pl.col("open") - ts_min(pl.col("open"), 14)).alias("__d"),
         ]
     )
-    df = df.with_columns(
-        [rank(pl.col("__c")).alias("__r1"), rank(pl.col("__d")).alias("__r2")]
-    )
+    df = df.with_columns([rank(pl.col("__c")).alias("__r1"), rank(pl.col("__d")).alias("__r2")])
     expr = (
         pl.when(pl.col("__r1").is_null() | pl.col("__r2").is_null())
         .then(None)
@@ -344,7 +343,7 @@ def gtja_149(panel: pl.DataFrame) -> pl.Series:
     Direction: ``normal``. Quality flag: ``0``.
     """
     # cross-section-mean proxy: per-day mean of close-return across stocks
-    ret = (pl.col("close") / delay(pl.col("close"), 1) - 1.0)
+    ret = pl.col("close") / delay(pl.col("close"), 1) - 1.0
     df = panel.with_columns(ret.alias("__ret"))
     bench = pl.col("__ret").mean().over("trade_date")
     df = df.with_columns(bench.alias("__bench"))
@@ -492,11 +491,7 @@ def gtja_154(panel: pl.DataFrame) -> pl.Series:
     expr = (
         pl.when(pl.col("__a").is_null() | pl.col("__c").is_null())
         .then(None)
-        .otherwise(
-            pl.when(pl.col("__a") < pl.col("__c"))
-            .then(1.0)
-            .otherwise(-1.0)
-        )
+        .otherwise(pl.when(pl.col("__a") < pl.col("__c")).then(1.0).otherwise(-1.0))
         .alias("gtja_154")
     )
     return df.select(expr).to_series()

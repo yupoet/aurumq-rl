@@ -9,6 +9,7 @@ Importing this package triggers all category modules to be imported, which
 populates ``aurumq_rl.factors.registry.ALPHA101_REGISTRY`` for downstream
 consumers (panel compute pipelines, AQML hook, docs extractor).
 """
+
 from aurumq_rl.factors.registry import ALPHA101_REGISTRY as REGISTRY
 
 # Importing each category module triggers its self-registration.

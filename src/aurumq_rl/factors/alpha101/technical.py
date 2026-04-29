@@ -9,6 +9,7 @@ The factor mixes time-series rank, decay-linear weighted moving average,
 rolling correlation, and cross-section rank, so several intermediates
 must be materialised between TS- and CS-partitioned operators.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -67,8 +68,7 @@ def alpha092(panel: pl.DataFrame) -> pl.Series:
     """
     # --- left branch: ts_rank(decay(flag, 15), 19) ------------------------
     flag = if_then_else(
-        (pl.col("high") + pl.col("low")) / 2.0 + pl.col("close")
-        < pl.col("low") + pl.col("open"),
+        (pl.col("high") + pl.col("low")) / 2.0 + pl.col("close") < pl.col("low") + pl.col("open"),
         pl.lit(1.0),
         pl.lit(0.0),
     )

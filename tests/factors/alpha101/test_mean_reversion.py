@@ -1,4 +1,5 @@
 """Tests for alpha101.mean_reversion."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,13 +36,13 @@ from aurumq_rl.factors.alpha101.mean_reversion import (
 #                              by the build script).
 _REF_STATUS = {
     "alpha004": "match",
-    "alpha032": "all_nan",       # 230d corr window > 60d panel
+    "alpha032": "all_nan",  # 230d corr window > 60d panel
     "alpha033": "drift",
-    "alpha037": "all_nan",       # 200d corr window > 60d panel
+    "alpha037": "all_nan",  # 200d corr window > 60d panel
     "alpha041": "match",
     "alpha042": "drift",
     "alpha053": "drift",
-    "alpha057": "missing",       # STHSF skips alpha057 (decay_linear bug)
+    "alpha057": "missing",  # STHSF skips alpha057 (decay_linear bug)
     "alpha101": "drift",
     "alpha_custom_zscore_5d": "missing",
     "alpha_custom_argmin_recent": "missing",

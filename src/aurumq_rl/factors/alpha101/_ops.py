@@ -26,6 +26,7 @@ from the reference. In synthetic GBM data ties are rare (<0.1% of
 windows), so the suite-wide ``rtol=1e-3, atol=1e-3`` tolerance absorbs
 the divergence.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -178,9 +179,7 @@ def ts_rank(col: pl.Expr, window: int) -> pl.Expr:
         # Degenerate: a 1-element window has no meaningful rank.
         return pl.lit(0.0, dtype=pl.Float64)
 
-    raw_rank = col.rolling_rank(
-        window_size=window, method="average", min_samples=window
-    )
+    raw_rank = col.rolling_rank(window_size=window, method="average", min_samples=window)
     return ((raw_rank - 1.0) / float(window - 1)).over(TS_PART).cast(pl.Float64)
 
 
@@ -219,9 +218,7 @@ def ts_decay_linear(col: pl.Expr, window: int) -> pl.Expr:
 
     weights = [(window - i) for i in range(window)]
     total = float(sum(weights))
-    shifted = [
-        col.shift(i).over(TS_PART) * (w / total) for i, w in enumerate(weights)
-    ]
+    shifted = [col.shift(i).over(TS_PART) * (w / total) for i, w in enumerate(weights)]
     out = shifted[0]
     for term in shifted[1:]:
         out = out + term
@@ -420,9 +417,7 @@ def ind_neutralize(col: pl.Expr, group: str | pl.Expr) -> pl.Expr:
 # ---------------------------------------------------------------------------
 
 
-def if_then_else(
-    cond: pl.Expr, then: pl.Expr | float, otherwise: pl.Expr | float
-) -> pl.Expr:
+def if_then_else(cond: pl.Expr, then: pl.Expr | float, otherwise: pl.Expr | float) -> pl.Expr:
     """Convenience wrapper over ``pl.when(cond).then(then).otherwise(otherwise)``.
 
     Accepts either expressions or scalar literals for the two branches.

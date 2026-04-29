@@ -5,6 +5,7 @@ factor id + impl callable. The reference parquet is loaded via the
 session-scoped ``gtja191_reference`` fixture (see
 ``tests/factors/conftest.py``).
 """
+
 from __future__ import annotations
 
 import numpy as np

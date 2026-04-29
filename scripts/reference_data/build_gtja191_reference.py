@@ -50,6 +50,7 @@ The parquet has one row per ``(stock_code, trade_date)`` and one column
 named ``gtja_NNN`` per alpha that built successfully. NaN values reflect
 natural rolling-window warm-up.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -158,9 +159,7 @@ def _load_daic_alpha191() -> types.ModuleType:
         sys.modules["factors.ops.rolling"] = rolling_mod
 
         # Now load alpha191.py
-        spec = importlib.util.spec_from_file_location(
-            "daic_alpha191", DAIC_ROOT / "alpha191.py"
-        )
+        spec = importlib.util.spec_from_file_location("daic_alpha191", DAIC_ROOT / "alpha191.py")
         if spec is None or spec.loader is None:
             raise ImportError(f"failed to build spec for {DAIC_ROOT / 'alpha191.py'}")
         mod = importlib.util.module_from_spec(spec)
@@ -209,7 +208,7 @@ def _alpha_function_names(mod: types.ModuleType) -> list[str]:
         for name in dir(mod)
         if name.startswith("alpha191_")
         and len(name) == len("alpha191_") + 3
-        and name[len("alpha191_"):].isdigit()
+        and name[len("alpha191_") :].isdigit()
         and callable(getattr(mod, name))
     ]
     return sorted(names)
@@ -277,10 +276,7 @@ def _compute_reference(
     expected_stocks = sample_wide.shape[1]
     columns_order = list(sample_wide.columns)
 
-    base = (
-        panel.select(["stock_code", "trade_date"])
-        .sort(["stock_code", "trade_date"])
-    )
+    base = panel.select(["stock_code", "trade_date"]).sort(["stock_code", "trade_date"])
 
     succeeded: list[str] = []
     failures: dict[str, str] = {}
@@ -310,9 +306,7 @@ def _compute_reference(
             failures[out_name] = f"{type(exc).__name__}: {msg[:120]}"
             continue
 
-        flat = _flatten_alpha_result(
-            result, expected_dates, expected_stocks, columns_order
-        )
+        flat = _flatten_alpha_result(result, expected_dates, expected_stocks, columns_order)
         if flat is None:
             failures[out_name] = (
                 f"unexpected shape/type: {type(result).__name__} "

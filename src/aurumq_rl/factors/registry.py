@@ -72,9 +72,7 @@ GTJA191_REGISTRY: dict[str, FactorEntry] = {}
 def register_alpha101(entry: FactorEntry) -> FactorEntry:
     """Register a factor in the alpha101 registry (idempotent on identical entry)."""
     if entry.id in ALPHA101_REGISTRY and ALPHA101_REGISTRY[entry.id] is not entry:
-        raise ValueError(
-            f"alpha101 factor {entry.id!r} already registered with a different entry"
-        )
+        raise ValueError(f"alpha101 factor {entry.id!r} already registered with a different entry")
     ALPHA101_REGISTRY[entry.id] = entry
     return entry
 
@@ -82,9 +80,7 @@ def register_alpha101(entry: FactorEntry) -> FactorEntry:
 def register_gtja191(entry: FactorEntry) -> FactorEntry:
     """Register a factor in the gtja191 registry (idempotent on identical entry)."""
     if entry.id in GTJA191_REGISTRY and GTJA191_REGISTRY[entry.id] is not entry:
-        raise ValueError(
-            f"gtja191 factor {entry.id!r} already registered with a different entry"
-        )
+        raise ValueError(f"gtja191 factor {entry.id!r} already registered with a different entry")
     GTJA191_REGISTRY[entry.id] = entry
     return entry
 

@@ -19,6 +19,7 @@ Benchmark factors (gtja_149 / gtja_181 / gtja_182) currently use
 cross-section mean of close as a CSI300 proxy, matching Daic115.
 Production wiring to the real CSI300 OHLC is a Phase D task.
 """
+
 from aurumq_rl.factors.registry import GTJA191_REGISTRY as REGISTRY
 
 # G191A batches (gtja_001 .. gtja_100)

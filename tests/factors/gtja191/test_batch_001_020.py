@@ -13,6 +13,7 @@ Per factor we run four checks:
   batch — Daic115 used pandas ``rolling.rank`` whose semantics
   differ across versions, so the builder skipped it).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -55,9 +56,7 @@ def _parity_bad_fraction(panel, impl, name, reference):
         on=["stock_code", "trade_date"],
         how="inner",
     )
-    joined = joined.filter(
-        pl.col("ours").is_not_null() & pl.col(name).is_not_null()
-    )
+    joined = joined.filter(pl.col("ours").is_not_null() & pl.col(name).is_not_null())
     joined = joined.with_columns(
         pl.col("ours").is_nan().alias("__ours_nan"),
         pl.col(name).is_nan().alias("__ref_nan"),
@@ -120,9 +119,7 @@ _XFAIL_PARITY = {"gtja_010", "gtja_016"}
 
 
 @pytest.mark.parametrize("name,impl", _FACTORS)
-def test_matches_daic115_reference(
-    request, synthetic_panel, gtja191_reference, name, impl
-):
+def test_matches_daic115_reference(request, synthetic_panel, gtja191_reference, name, impl):
     if name in _XFAIL_PARITY:
         request.node.add_marker(
             pytest.mark.xfail(
