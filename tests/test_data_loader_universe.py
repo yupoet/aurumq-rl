@@ -1,4 +1,5 @@
 """Universe-filter tests covering both column-based and heuristic paths."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -17,20 +18,24 @@ def _make_df(rows: list[tuple]) -> pl.DataFrame:
 
 
 def test_hs300_uses_column_when_present():
-    df = _make_df([
-        ("600519.SH", dt.date(2024, 1, 2), True,  False, False, "Mao"),
-        ("000001.SZ", dt.date(2024, 1, 2), False, True,  False, "Bank"),
-        ("002594.SZ", dt.date(2024, 1, 2), False, False, False, "BYD"),
-    ])
+    df = _make_df(
+        [
+            ("600519.SH", dt.date(2024, 1, 2), True, False, False, "Mao"),
+            ("000001.SZ", dt.date(2024, 1, 2), False, True, False, "Bank"),
+            ("002594.SZ", dt.date(2024, 1, 2), False, False, False, "BYD"),
+        ]
+    )
     out = filter_universe(df, mode=UniverseFilter.HS300)
     assert out["ts_code"].to_list() == ["600519.SH"]
 
 
 def test_zz500_uses_column_when_present():
-    df = _make_df([
-        ("600519.SH", dt.date(2024, 1, 2), True,  False, False, "Mao"),
-        ("000001.SZ", dt.date(2024, 1, 2), False, True,  False, "Bank"),
-    ])
+    df = _make_df(
+        [
+            ("600519.SH", dt.date(2024, 1, 2), True, False, False, "Mao"),
+            ("000001.SZ", dt.date(2024, 1, 2), False, True, False, "Bank"),
+        ]
+    )
     out = filter_universe(df, mode=UniverseFilter.ZZ500)
     assert out["ts_code"].to_list() == ["000001.SZ"]
 

@@ -4,6 +4,7 @@ Pure-numpy module with no torch / SB3 dependency, so it can be used both
 inside the training loop (validation callback) and from a CLI that loads
 an ONNX policy via onnxruntime.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,7 @@ class BacktestResult:
         )
 
     @classmethod
-    def from_json(cls, path: Path | str) -> "BacktestResult":
+    def from_json(cls, path: Path | str) -> BacktestResult:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(**data)
 
@@ -103,9 +104,7 @@ def compute_ic_ir(predictions: np.ndarray, returns: np.ndarray) -> float:
     return float(arr.mean() / std)
 
 
-def compute_top_k_sharpe(
-    predictions: np.ndarray, returns: np.ndarray, top_k: int
-) -> float:
+def compute_top_k_sharpe(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
     """Annualized Sharpe of an equal-weight top-K portfolio.
 
     Each date: pick the top_k stocks by prediction, equal-weight, take the
@@ -133,9 +132,7 @@ def compute_top_k_sharpe(
     return float(arr.mean() / std * np.sqrt(252))
 
 
-def compute_top_k_cumret(
-    predictions: np.ndarray, returns: np.ndarray, top_k: int
-) -> float:
+def compute_top_k_cumret(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
     """Total cumulative return of the top-K portfolio."""
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
@@ -213,7 +210,7 @@ class BacktestSeries:
         )
 
     @classmethod
-    def from_json(cls, path: Path | str) -> "BacktestSeries":
+    def from_json(cls, path: Path | str) -> BacktestSeries:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(**data)
 
@@ -233,9 +230,7 @@ def _per_date_top_k_returns(
     return out
 
 
-def _random_sharpes(
-    returns: np.ndarray, top_k: int, n_simulations: int, seed: int
-) -> list[float]:
+def _random_sharpes(returns: np.ndarray, top_k: int, n_simulations: int, seed: int) -> list[float]:
     rng = np.random.default_rng(seed)
     out: list[float] = []
     for _ in range(n_simulations):
@@ -251,7 +246,7 @@ def run_backtest_with_series(
     top_k: int = 30,
     n_random_simulations: int = 100,
     random_seed: int = 0,
-) -> tuple["BacktestResult", "BacktestSeries"]:
+) -> tuple[BacktestResult, BacktestSeries]:
     """One-shot evaluation that also returns per-date / per-simulation series.
 
     The scalar BacktestResult uses identical semantics to ``run_backtest`` —
@@ -263,9 +258,7 @@ def run_backtest_with_series(
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
     if len(dates) != predictions.shape[0]:
-        raise ValueError(
-            f"dates length {len(dates)} != n_dates {predictions.shape[0]}"
-        )
+        raise ValueError(f"dates length {len(dates)} != n_dates {predictions.shape[0]}")
 
     # Canonical scalars — same semantics as run_backtest() so backtest.json is stable.
     result = run_backtest(

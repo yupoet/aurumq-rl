@@ -194,21 +194,15 @@ def filter_universe(
     if mode == UniverseFilter.HS300:
         if "is_hs300" in df.columns:
             return df.filter(pl.col("is_hs300") == True)  # noqa: E712
-        return df.filter(
-            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-        )
+        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
     if mode == UniverseFilter.ZZ500:
         if "is_zz500" in df.columns:
             return df.filter(pl.col("is_zz500") == True)  # noqa: E712
-        return df.filter(
-            pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-        )
+        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
     # ZZ1000 (and any future enum value) — fall back to main-board heuristic.
-    return df.filter(
-        pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean)
-    )
+    return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 """Argparse-level tests for new training flags."""
+
 from __future__ import annotations
 
 import pytest
@@ -31,8 +32,12 @@ def test_parse_lr_schedule_rejects_unknown():
 
 
 def test_parse_policy_kwargs_json():
-    args = parse_args([
-        "--out-dir", "/tmp/x",
-        "--policy-kwargs-json", '{"net_arch": [256, 256]}',
-    ])
+    args = parse_args(
+        [
+            "--out-dir",
+            "/tmp/x",
+            "--policy-kwargs-json",
+            '{"net_arch": [256, 256]}',
+        ]
+    )
     assert args.policy_kwargs_json == '{"net_arch": [256, 256]}'

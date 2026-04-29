@@ -12,6 +12,7 @@ Usage
 
 Writes <run-dir>/backtest.json.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,11 +22,6 @@ from pathlib import Path
 
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root / "src"))
-
-import numpy as np
-
-from aurumq_rl.backtest import run_backtest_with_series
-from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -46,7 +42,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     import json
 
+    import numpy as np
     import onnxruntime as ort
+
+    from aurumq_rl.backtest import run_backtest_with_series
+    from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
 
     args = parse_args(argv)
     onnx_path = args.run_dir / "policy.onnx"

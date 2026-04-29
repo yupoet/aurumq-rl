@@ -14,6 +14,7 @@ Usage
         --val-start 2023-07-01 --val-end 2023-12-01 \\
         --top-level-out runs/compare_rewards
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,19 +46,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _run_one(reward_type: str, args: argparse.Namespace, run_dir: Path) -> int:
     train_cmd = [
-        PYTHON, "scripts/train.py",
-        "--algorithm", "PPO",
-        "--env-type", "portfolio_weight",
-        "--reward-type", reward_type,
-        "--total-timesteps", str(args.total_timesteps),
-        "--data-path", str(args.data_path),
-        "--start-date", args.start_date,
-        "--end-date", args.train_end,
-        "--universe-filter", args.universe_filter,
-        "--n-envs", str(args.n_envs),
+        PYTHON,
+        "scripts/train.py",
+        "--algorithm",
+        "PPO",
+        "--env-type",
+        "portfolio_weight",
+        "--reward-type",
+        reward_type,
+        "--total-timesteps",
+        str(args.total_timesteps),
+        "--data-path",
+        str(args.data_path),
+        "--start-date",
+        args.start_date,
+        "--end-date",
+        args.train_end,
+        "--universe-filter",
+        args.universe_filter,
+        "--n-envs",
+        str(args.n_envs),
         "--vec-normalize",
-        "--learning-rate-schedule", "linear",
-        "--out-dir", str(run_dir),
+        "--learning-rate-schedule",
+        "linear",
+        "--out-dir",
+        str(run_dir),
     ]
     print(f"\n=== [{reward_type}] training ===")
     print(" ".join(train_cmd))
@@ -66,13 +79,20 @@ def _run_one(reward_type: str, args: argparse.Namespace, run_dir: Path) -> int:
         return rc
 
     eval_cmd = [
-        PYTHON, "scripts/eval_backtest.py",
-        "--run-dir", str(run_dir),
-        "--data-path", str(args.data_path),
-        "--val-start", args.val_start,
-        "--val-end", args.val_end,
-        "--top-k", str(args.top_k),
-        "--universe-filter", args.universe_filter,
+        PYTHON,
+        "scripts/eval_backtest.py",
+        "--run-dir",
+        str(run_dir),
+        "--data-path",
+        str(args.data_path),
+        "--val-start",
+        args.val_start,
+        "--val-end",
+        args.val_end,
+        "--top-k",
+        str(args.top_k),
+        "--universe-filter",
+        args.universe_filter,
     ]
     print(f"\n=== [{reward_type}] backtest ===")
     print(" ".join(eval_cmd))

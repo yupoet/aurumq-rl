@@ -1,4 +1,5 @@
 """Tests for src/aurumq_rl/backtest.py."""
+
 from __future__ import annotations
 
 import numpy as np

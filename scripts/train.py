@@ -62,8 +62,8 @@ def _make_lr_schedule(initial_lr: float, mode: str):
     if mode == "linear":
         return lambda progress_remaining: initial_lr * progress_remaining
     if mode == "cosine":
-        return lambda progress_remaining: 0.5 * initial_lr * (
-            1.0 + math.cos(math.pi * (1.0 - progress_remaining))
+        return lambda progress_remaining: (
+            0.5 * initial_lr * (1.0 + math.cos(math.pi * (1.0 - progress_remaining)))
         )
     raise ValueError(f"Unknown learning-rate-schedule mode: {mode!r}")
 

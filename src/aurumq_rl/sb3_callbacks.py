@@ -16,6 +16,7 @@ def _json_default(o: Any) -> Any:
         return o.tolist()
     raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 
+
 # Optional dependency — SB3 only needed for training
 try:
     from stable_baselines3.common.callbacks import BaseCallback

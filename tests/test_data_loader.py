@@ -88,18 +88,18 @@ def test_factor_col_prefixes_constant_unchanged() -> None:
     assert set(FACTOR_COL_PREFIXES) == expected
 
 
-def test_discover_factor_columns_includes_gtja():
+def test_discover_factor_columns_includes_gtja() -> None:
     """Alpha191 (Guotai Junan) factors are recognized by the gtja_ prefix."""
-    import polars as pl
-    from aurumq_rl.data_loader import discover_factor_columns
-    df = pl.DataFrame({
-        "ts_code": ["600519.SH"],
-        "trade_date": ["2024-01-02"],
-        "alpha_001": [0.0],
-        "gtja_001": [0.0],
-        "gtja_191": [0.0],
-        "vol": [1000.0],
-    })
+    df = pl.DataFrame(
+        {
+            "ts_code": ["600519.SH"],
+            "trade_date": ["2024-01-02"],
+            "alpha_001": [0.0],
+            "gtja_001": [0.0],
+            "gtja_191": [0.0],
+            "vol": [1000.0],
+        }
+    )
     cols = discover_factor_columns(df)
     assert "gtja_001" in cols
     assert "gtja_191" in cols

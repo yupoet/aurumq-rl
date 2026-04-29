@@ -1,4 +1,5 @@
 """Tests for BacktestSeries dataclass + run_backtest_with_series."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -55,9 +56,7 @@ def test_run_backtest_with_series_equity_curve_starts_at_one_or_close():
     rets = rng.normal(0.0, 0.02, size=(10, 50))
     preds = rng.normal(0.0, 0.02, size=(10, 50))
     dates = [dt.date(2025, 1, 1) + dt.timedelta(days=i) for i in range(10)]
-    _, series = run_backtest_with_series(
-        predictions=preds, returns=rets, dates=dates, top_k=10
-    )
+    _, series = run_backtest_with_series(predictions=preds, returns=rets, dates=dates, top_k=10)
     # First entry is 1 + first day's top-k return
     assert abs(series.equity_curve[0] - (1.0 + series.top_k_returns[0])) < 1e-9
     # Equity series is monotonic with cumulative product semantics
@@ -78,11 +77,15 @@ def test_run_backtest_with_series_matches_run_backtest_scalars_on_degenerate():
     preds[5, :] = np.nan
 
     from aurumq_rl.backtest import run_backtest, run_backtest_with_series
+
     canonical = run_backtest(preds, rets, top_k=10, n_random_simulations=20, random_seed=7)
     result, _ = run_backtest_with_series(
-        preds, rets,
+        preds,
+        rets,
         dates=[dt.date(2025, 1, 1) + dt.timedelta(days=i) for i in range(20)],
-        top_k=10, n_random_simulations=20, random_seed=7,
+        top_k=10,
+        n_random_simulations=20,
+        random_seed=7,
     )
     assert result.ic == pytest.approx(canonical.ic)
     assert result.ic_ir == pytest.approx(canonical.ic_ir)
