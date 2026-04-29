@@ -60,6 +60,7 @@ tb_logs/
 wandb/
 /runs/
 logs/
+phase_e_panels/
 
 # Real data — never commit any Parquet by default; route via your own object storage / rsync.
 data/*.parquet
@@ -83,3 +84,6 @@ Desktop.ini
 # Profiling
 *.prof
 *.pstats
+
+# External GitHub references (formula reference only, NOT vendored)
+refs/
