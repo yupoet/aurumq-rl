@@ -75,6 +75,7 @@ def test_aqml_resolves_alpha001(synthetic_panel):
         sys.path.insert(0, "/data/AurumQ/src")
     # Trigger registry population
     importlib.import_module("aurumq_rl.factors.alpha101")
+    pytest.importorskip("aurumq.rules.aqml_polars_compiler")
     from aurumq.rules.aqml_polars_compiler import evaluate
 
     # AQML expression that references alpha001 as a symbol
