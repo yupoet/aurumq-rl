@@ -215,10 +215,19 @@ def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
 
     For each (date, factor), normalize across stocks:
         z = (x - mean) / (std + 1e-8)
+
+    NaN cells in the input (suspended days, pre-IPO, factor warm-up) and
+    rows where the entire cross-section is NaN (so mean/std are NaN) are
+    replaced with 0.0 — the neutral signal per the project convention
+    documented in CLAUDE.md ("训练时填 0"). Without this, env reset()
+    returns observations containing NaN, which Box.contains() rejects
+    and SB3's check_env asserts on.
     """
-    mean = np.nanmean(arr, axis=1, keepdims=True)
-    std = np.nanstd(arr, axis=1, keepdims=True)
-    return (arr - mean) / (std + 1e-8)
+    with np.errstate(invalid="ignore"):
+        mean = np.nanmean(arr, axis=1, keepdims=True)
+        std = np.nanstd(arr, axis=1, keepdims=True)
+        z = (arr - mean) / (std + 1e-8)
+    return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray:
