@@ -375,3 +375,103 @@ def test_align_panel_drops_new_stocks_in_val_universe() -> None:
     assert aligned.factor_array.shape == (3, 2, 2)
     np.testing.assert_array_equal(aligned.factor_array[:, 0, :], panel.factor_array[:, 0, :])
     np.testing.assert_array_equal(aligned.factor_array[:, 1, :], panel.factor_array[:, 1, :])
+
+
+# ---------------------------------------------------------------------------
+# feature_group_weights — per-prefix scalar weighting after z-score
+# ---------------------------------------------------------------------------
+
+
+def _load_tiny(
+    tiny_panel_parquet: Path,
+    *,
+    feature_group_weights: dict[str, float] | None = None,
+) -> FactorPanel:
+    """Load the shared tiny panel with optional per-prefix weights.
+
+    Uses ALL_A so the synthetic SYN_ codes are not filtered out, and asks
+    for all factors so each prefix group has at least one column.
+    """
+    loader = FactorPanelLoader(parquet_path=tiny_panel_parquet)
+    start, end = loader.get_date_range()
+    assert start is not None and end is not None
+    return loader.load_panel(
+        start_date=start,
+        end_date=end,
+        n_factors=None,
+        forward_period=5,
+        universe_filter=UniverseFilter.ALL_A,
+        feature_group_weights=feature_group_weights,
+    )
+
+
+def test_load_panel_no_weights_unchanged(tiny_panel_parquet: Path) -> None:
+    """Calling load_panel without feature_group_weights matches None and {}."""
+    base = _load_tiny(tiny_panel_parquet)
+    none_panel = _load_tiny(tiny_panel_parquet, feature_group_weights=None)
+    empty_panel = _load_tiny(tiny_panel_parquet, feature_group_weights={})
+
+    np.testing.assert_array_equal(base.factor_array, none_panel.factor_array)
+    np.testing.assert_array_equal(base.factor_array, empty_panel.factor_array)
+    assert base.factor_names == none_panel.factor_names == empty_panel.factor_names
+
+
+def test_feature_group_weights_scales_alpha(tiny_panel_parquet: Path) -> None:
+    """Alpha columns are scaled by 2x; non-alpha columns are untouched."""
+    base = _load_tiny(tiny_panel_parquet)
+    weighted = _load_tiny(tiny_panel_parquet, feature_group_weights={"alpha_": 2.0})
+
+    assert base.factor_names == weighted.factor_names
+    alpha_idx = [i for i, n in enumerate(base.factor_names) if n.startswith("alpha_")]
+    other_idx = [i for i, n in enumerate(base.factor_names) if not n.startswith("alpha_")]
+    assert alpha_idx, "tiny panel must have at least one alpha_ factor"
+    assert other_idx, "tiny panel must have non-alpha factors too"
+
+    np.testing.assert_allclose(
+        weighted.factor_array[:, :, alpha_idx],
+        base.factor_array[:, :, alpha_idx] * 2.0,
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_array_equal(
+        weighted.factor_array[:, :, other_idx],
+        base.factor_array[:, :, other_idx],
+    )
+
+
+def test_feature_group_weights_zero_zeroes_columns(tiny_panel_parquet: Path) -> None:
+    """Weight 0.0 zeroes the matching prefix; other prefixes are unchanged."""
+    base = _load_tiny(tiny_panel_parquet)
+    weighted = _load_tiny(tiny_panel_parquet, feature_group_weights={"alpha_": 0.0})
+
+    alpha_idx = [i for i, n in enumerate(base.factor_names) if n.startswith("alpha_")]
+    other_idx = [i for i, n in enumerate(base.factor_names) if not n.startswith("alpha_")]
+
+    assert np.all(weighted.factor_array[:, :, alpha_idx] == 0.0)
+    np.testing.assert_array_equal(
+        weighted.factor_array[:, :, other_idx],
+        base.factor_array[:, :, other_idx],
+    )
+
+
+def test_feature_group_weights_unknown_prefix_no_op(tiny_panel_parquet: Path) -> None:
+    """A prefix that matches no columns is silently ignored."""
+    base = _load_tiny(tiny_panel_parquet)
+    weighted = _load_tiny(tiny_panel_parquet, feature_group_weights={"xyz_": 9.0})
+    np.testing.assert_array_equal(weighted.factor_array, base.factor_array)
+
+
+def test_feature_group_weights_validates_dict(tiny_panel_parquet: Path) -> None:
+    """Non-dict input raises a clear TypeError."""
+    loader = FactorPanelLoader(parquet_path=tiny_panel_parquet)
+    start, end = loader.get_date_range()
+    assert start is not None and end is not None
+    with pytest.raises(TypeError, match="feature_group_weights"):
+        loader.load_panel(
+            start_date=start,
+            end_date=end,
+            n_factors=None,
+            forward_period=5,
+            universe_filter=UniverseFilter.ALL_A,
+            feature_group_weights=[("alpha_", 2.0)],  # type: ignore[arg-type]
+        )
