@@ -1,6 +1,26 @@
+// Server-only file: reads files from the runs/ directory at request time.
+// Client components MUST NOT import from here directly; import pure
+// types/helpers from "@/lib/runs-shared" instead. This separation keeps
+// the Turbopack browser bundle from chasing node:fs/promises.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+
+import type {
+  GpuSample,
+  RunListEntry,
+  RunSummary,
+} from "./runs-shared";
+
+// Re-export shared types so existing server-side imports keep working.
+export type {
+  GpuSample,
+  RunGroup,
+  RunListEntry,
+  RunSummary,
+} from "./runs-shared";
+export { groupRuns, type RunDisplay } from "./runs-shared";
 
 const RUNS_DIR = path.join(process.cwd(), "..", "runs");
 
@@ -18,19 +38,7 @@ export const RunSummarySchema = z.object({
   top_k: z.number().optional(),
   out_dir: z.string().optional(),
   onnx_path: z.string().optional(),
-});
-export type RunSummary = z.infer<typeof RunSummarySchema>;
-
-export interface RunListEntry {
-  id: string;
-  hasModel: boolean;
-  hasOnnx: boolean;
-  hasBacktest: boolean;
-  hasMetrics: boolean;
-  isLive: boolean;
-  summary: RunSummary | null;
-  modifiedAt: number;
-}
+}) satisfies z.ZodType<RunSummary>;
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -230,50 +238,39 @@ export async function readBacktestSeries(id: string): Promise<unknown | null> {
   }
 }
 
-export interface RunGroup {
-  parent: string;
-  children: RunListEntry[];
-  modifiedAt: number;
-}
-
-export type RunDisplay =
-  | { kind: "single"; run: RunListEntry }
-  | { kind: "group"; group: RunGroup };
-
-export function groupRuns(runs: RunListEntry[]): RunDisplay[] {
-  const buckets = new Map<string, RunListEntry[]>();
-  const standalone: RunListEntry[] = [];
-
-  for (const r of runs) {
-    const slash = r.id.indexOf("/");
-    if (slash < 0) {
-      standalone.push(r);
-      continue;
-    }
-    const parent = r.id.slice(0, slash);
-    const arr = buckets.get(parent);
-    if (arr) arr.push(r);
-    else buckets.set(parent, [r]);
+export async function readGpuJsonl(id: string): Promise<GpuSample[]> {
+  const p = path.join(RUNS_DIR, ...id.split("/"), "gpu.jsonl");
+  let raw: string;
+  try {
+    raw = await fs.readFile(p, "utf-8");
+  } catch {
+    return [];
   }
-
-  const out: RunDisplay[] = [];
-  for (const [parent, children] of buckets) {
-    if (children.length === 1) {
-      // Singleton: render as standalone instead of group of 1
-      out.push({ kind: "single", run: children[0] });
-    } else {
-      const modifiedAt = Math.max(...children.map((c) => c.modifiedAt));
-      children.sort((a, b) => b.modifiedAt - a.modifiedAt);
-      out.push({ kind: "group", group: { parent, children, modifiedAt } });
+  const out: GpuSample[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed) as Partial<GpuSample>;
+      if (
+        typeof obj.timestamp === "string" &&
+        typeof obj.timestep === "number" &&
+        typeof obj.util_pct === "number" &&
+        typeof obj.mem_used_mb === "number" &&
+        typeof obj.mem_total_mb === "number" &&
+        typeof obj.temp_c === "number" &&
+        typeof obj.power_w === "number"
+      ) {
+        out.push(obj as GpuSample);
+      }
+    } catch {
+      // skip malformed lines
     }
   }
-  for (const r of standalone) {
-    out.push({ kind: "single", run: r });
-  }
-  out.sort((a, b) => {
-    const ta = a.kind === "single" ? a.run.modifiedAt : a.group.modifiedAt;
-    const tb = b.kind === "single" ? b.run.modifiedAt : b.group.modifiedAt;
-    return tb - ta;
-  });
   return out;
 }
+
+// RunGroup / RunDisplay / groupRuns now live in ./runs-shared and are
+// re-exported at the top of this file so existing server-side imports
+// from "@/lib/runs" keep resolving while client components import the
+// pure helpers directly from "@/lib/runs-shared".

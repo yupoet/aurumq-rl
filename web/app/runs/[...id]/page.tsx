@@ -5,6 +5,7 @@ import {
   metricsJsonlSize,
   readBacktest,
   readBacktestSeries,
+  readGpuJsonl,
   readMetricsJsonl,
   readSummary,
 } from "@/lib/runs";
@@ -17,6 +18,7 @@ import {
   BacktestSeriesPanel,
   type BacktestSeriesData,
 } from "@/components/BacktestSeriesPanel";
+import { GpuMetricsPanel } from "@/components/GpuMetricsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +35,13 @@ export default async function RunDetailPage({
   const { id } = await params;
   const decoded = id.map((s) => decodeURIComponent(s)).join("/");
 
-  const [summary, metrics, backtest, series, live, initialOffset] =
+  const [summary, metrics, backtest, series, gpu, live, initialOffset] =
     await Promise.all([
       readSummary(decoded),
       readMetricsJsonl(decoded),
       readBacktest(decoded) as Promise<BacktestData | null>,
       readBacktestSeries(decoded) as Promise<BacktestSeriesData | null>,
+      readGpuJsonl(decoded),
       isRunLive(decoded),
       metricsJsonlSize(decoded),
     ]);
@@ -82,6 +85,7 @@ export default async function RunDetailPage({
       {series != null && backtest != null && (
         <BacktestSeriesPanel data={series} realizedSharpe={backtest.top_k_sharpe} />
       )}
+      {gpu.length > 0 && <GpuMetricsPanel data={gpu} />}
     </main>
   );
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   readBacktest,
   readBacktestSeries,
+  readGpuJsonl,
   readMetricsJsonl,
   readSummary,
   tailMetricsJsonl,
@@ -35,13 +36,22 @@ export async function GET(
   if (part === "summary") {
     return NextResponse.json(await readSummary(decoded));
   }
+  if (part === "gpu") {
+    return NextResponse.json(await readGpuJsonl(decoded));
+  }
 
-  const [summary, metrics, backtest] = await Promise.all([
+  const [summary, metrics, backtest, gpu] = await Promise.all([
     readSummary(decoded),
     readMetricsJsonl(decoded),
     readBacktest(decoded),
+    readGpuJsonl(decoded),
   ]);
-  return NextResponse.json({ summary, metrics, backtest });
+  return NextResponse.json({
+    summary,
+    metrics,
+    backtest,
+    gpu: gpu.length > 0 ? gpu : null,
+  });
 }
 
 function streamMetrics(
