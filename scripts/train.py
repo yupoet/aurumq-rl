@@ -88,6 +88,35 @@ def _parse_policy_kwargs(json_str: str) -> dict:
     return raw
 
 
+def _parse_feature_group_weights(json_str: str) -> dict[str, float]:
+    """Parse --feature-group-weights-json into a validated dict[str, float].
+
+    Accepts an empty string or "{}" as no-op (returns ``{}``). Raises
+    ``ValueError`` if the JSON does not decode to an object, or if any
+    key is not a string or any value is not numeric.
+    """
+    raw = json.loads(json_str or "{}")
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "--feature-group-weights-json must decode to a JSON object "
+            f"(e.g. '{{\"mf_\": 1.5}}'), got {type(raw).__name__}"
+        )
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str):
+            raise ValueError(
+                f"--feature-group-weights-json keys must be strings (factor "
+                f"prefix like 'mf_'), got {type(k).__name__}: {k!r}"
+            )
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(
+                f"--feature-group-weights-json[{k!r}] must be a number, "
+                f"got {type(v).__name__}: {v!r}"
+            )
+        out[k] = float(v)
+    return out
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -231,6 +260,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             'Example: \'{"net_arch": [512, 256], "activation_fn": "relu"}\'. '
             "activation_fn strings ('relu', 'tanh', 'elu', 'gelu') are mapped "
             "to torch.nn classes."
+        ),
+    )
+    parser.add_argument(
+        "--feature-group-weights-json",
+        default="{}",
+        help=(
+            "JSON {prefix: weight} map applied AFTER the cross-section "
+            "z-score in data_loader. Lets you give a feature group a "
+            "stronger or weaker prior without VecNormalize neutralising it. "
+            'Example: \'{"mf_": 1.5, "alpha_": 1.0, "gtja_": 1.0}\'. '
+            "Columns without an explicit weight default to 1.0. Persisted "
+            "into metadata.json so eval_backtest applies the same scaling."
         ),
     )
     parser.add_argument(
@@ -523,6 +564,9 @@ def run_training(args: argparse.Namespace) -> int:
     start_date = datetime.date.fromisoformat(args.start_date)
     end_date = datetime.date.fromisoformat(args.end_date)
     universe = UniverseFilter(args.universe_filter)
+    feature_group_weights = _parse_feature_group_weights(args.feature_group_weights_json)
+    if feature_group_weights:
+        print(f"[train] feature_group_weights: {feature_group_weights}")
 
     # 1) Load panel
     print(f"[train] loading panel from {args.data_path} ({start_date}..{end_date})...")
@@ -533,6 +577,7 @@ def run_training(args: argparse.Namespace) -> int:
         n_factors=args.n_factors,
         forward_period=args.forward_period,
         universe_filter=universe,
+        feature_group_weights=feature_group_weights or None,
     )
     print(
         f"[train] panel: factors={panel.factor_array.shape}, "
@@ -677,6 +722,9 @@ def run_training(args: argparse.Namespace) -> int:
             "factor_names": list(panel.factor_names),
             "train_start_date": args.start_date,
             "train_end_date": args.end_date,
+            # Per-prefix scalar weights applied AFTER z-score during training.
+            # eval_backtest reads this back so OOS uses the same scaling.
+            "feature_group_weights": feature_group_weights,
         },
     )
     print(f"[train] ONNX exported: {onnx_path}")
@@ -703,6 +751,7 @@ def run_training(args: argparse.Namespace) -> int:
                 "n_factors": n_factors,
                 "n_stocks": n_stocks,
                 "top_k": args.top_k,
+                "feature_group_weights": feature_group_weights,
                 "out_dir": str(out_dir),
                 "onnx_path": str(onnx_path),
                 "metrics_summary": summary,
