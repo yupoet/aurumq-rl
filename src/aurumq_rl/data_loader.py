@@ -296,6 +296,79 @@ def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
     return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def _apply_feature_group_weights(
+    factor_array: np.ndarray,
+    factor_names: list[str],
+    feature_group_weights: dict[str, float] | None,
+) -> np.ndarray:
+    """Multiply factor columns by per-prefix scalar weights, in-place.
+
+    Applied AFTER cross-section z-score so the boost survives
+    ``VecNormalize`` (which would otherwise re-standardise it away).
+
+    For each ``(prefix, weight)`` entry in ``feature_group_weights``,
+    every factor column whose name starts with ``prefix`` is multiplied
+    by ``weight`` along axis 2. Columns whose prefix is not in the dict
+    keep an implicit weight of 1.0.
+
+    Parameters
+    ----------
+    factor_array:
+        Shape ``(n_dates, n_stocks, n_factors)``, modified in place.
+    factor_names:
+        Length ``n_factors``, column names ordered to match axis 2.
+    feature_group_weights:
+        Mapping prefix → scalar weight. ``None`` or empty is a no-op.
+        Empty-string prefix ``""`` matches all columns. Prefixes not
+        present in ``factor_names`` are silently ignored. Weight ``0.0``
+        zeroes the column. Negative weights are allowed (flip signal).
+
+    Returns
+    -------
+    The same ``factor_array`` reference (mutated in place for clarity).
+
+    Raises
+    ------
+    TypeError
+        If ``feature_group_weights`` is not a dict or maps to non-numeric
+        values.
+    """
+    if not feature_group_weights:
+        return factor_array
+
+    if not isinstance(feature_group_weights, dict):
+        raise TypeError(
+            "feature_group_weights must be a dict[str, float], got "
+            f"{type(feature_group_weights).__name__}"
+        )
+
+    for prefix, weight in feature_group_weights.items():
+        if not isinstance(prefix, str):
+            raise TypeError(
+                "feature_group_weights keys must be str (factor prefix), got "
+                f"{type(prefix).__name__}"
+            )
+        try:
+            w = float(weight)
+        except (TypeError, ValueError) as e:
+            raise TypeError(
+                f"feature_group_weights[{prefix!r}] must be a float, got "
+                f"{weight!r} ({type(weight).__name__})"
+            ) from e
+
+        # Empty prefix matches everything; otherwise prefix-match column names.
+        if prefix == "":
+            col_idx = list(range(len(factor_names)))
+        else:
+            col_idx = [i for i, name in enumerate(factor_names) if name.startswith(prefix)]
+        if not col_idx:
+            # Silently ignore prefixes not present in the panel.
+            continue
+        factor_array[:, :, col_idx] *= w
+
+    return factor_array
+
+
 def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray:
     """Compute log return with NaN/zero-price safety."""
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -363,6 +436,7 @@ class FactorPanelLoader:
         n_factors: int | None = None,
         forward_period: int = 10,
         universe_filter: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
+        feature_group_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Load a factor panel from Parquet.
 
@@ -376,6 +450,12 @@ class FactorPanelLoader:
             Forward-return window in trading days.
         universe_filter:
             Stock universe filtering mode.
+        feature_group_weights:
+            Optional ``{prefix: weight}`` map applied AFTER the cross-section
+            z-score (so the boost survives ``VecNormalize``). Factor columns
+            whose name starts with ``prefix`` are multiplied by ``weight``.
+            Columns without an explicit weight default to 1.0. ``None`` /
+            ``{}`` are no-ops. See :func:`_apply_feature_group_weights`.
 
         Returns
         -------
@@ -385,6 +465,7 @@ class FactorPanelLoader:
         ------
         FileNotFoundError if the Parquet file is missing.
         ValueError if no factor columns are found.
+        TypeError if ``feature_group_weights`` is not a dict-of-str-to-float.
         """
         if not self.parquet_path.exists():
             raise FileNotFoundError(
@@ -399,6 +480,7 @@ class FactorPanelLoader:
             n_factors=n_factors,
             forward_period=forward_period,
             universe_filter=universe_filter,
+            feature_group_weights=feature_group_weights,
         )
 
     def _load_from_parquet(
@@ -408,6 +490,7 @@ class FactorPanelLoader:
         n_factors: int | None,
         forward_period: int,
         universe_filter: UniverseFilter,
+        feature_group_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Internal Parquet → FactorPanel conversion."""
         # Use polars scan for memory efficiency
@@ -440,13 +523,19 @@ class FactorPanelLoader:
                 "Check ts_code format or universe selection."
             )
 
-        return self._df_to_panel(df, n_factors=n_factors, forward_period=forward_period)
+        return self._df_to_panel(
+            df,
+            n_factors=n_factors,
+            forward_period=forward_period,
+            feature_group_weights=feature_group_weights,
+        )
 
     def _df_to_panel(
         self,
         df: pl.DataFrame,
         n_factors: int | None,
         forward_period: int,
+        feature_group_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Convert polars DataFrame to numpy 3D panel."""
         dates = df["trade_date"].unique().sort().to_list()
@@ -515,6 +604,13 @@ class FactorPanelLoader:
         # Cross-section z-score
         factor_array = _cross_section_zscore(factor_array)
 
+        # Optional per-prefix scalar weighting AFTER z-score so that a
+        # subsequent VecNormalize wrapper cannot re-standardise the boost
+        # away. See `_apply_feature_group_weights` for semantics.
+        factor_array = _apply_feature_group_weights(
+            factor_array, factor_cols, feature_group_weights
+        )
+
         return FactorPanel(
             factor_array=factor_array,
             return_array=return_array,
@@ -554,11 +650,15 @@ class FactorPanelLoader:
         forward_period: int = 10,
         seed: int = 42,
         prefix: str = "alpha_",
+        feature_group_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Build a synthetic panel for smoke testing — no real data needed.
 
         Useful for CI, demos, and smoke tests of the training pipeline.
         Stock codes are synthetic (``SYN_001`` etc.) — not real codes.
+
+        ``feature_group_weights`` mirrors :meth:`load_panel` so unit tests
+        can exercise the weighting path without writing a Parquet.
         """
         rng = np.random.default_rng(seed)
 
@@ -587,6 +687,14 @@ class FactorPanelLoader:
         # Cross-section z-score
         factor_array = _cross_section_zscore(factor_array)
 
+        # Synthetic codes (NOT real stock codes)
+        factor_names = [f"{prefix}{i:03d}" for i in range(n_factors)]
+
+        # Optional per-prefix weighting (parity with load_panel).
+        factor_array = _apply_feature_group_weights(
+            factor_array, factor_names, feature_group_weights
+        )
+
         # Synthetic dates: weekdays starting 2020-01-01
         dates: list[datetime.date] = []
         current = datetime.date(2020, 1, 1)
@@ -597,7 +705,6 @@ class FactorPanelLoader:
 
         # Synthetic codes (NOT real stock codes)
         stock_codes = [f"SYN_{i:05d}" for i in range(n_stocks)]
-        factor_names = [f"{prefix}{i:03d}" for i in range(n_factors)]
 
         return FactorPanel(
             factor_array=factor_array,
