@@ -233,6 +233,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "to torch.nn classes."
         ),
     )
+    parser.add_argument(
+        "--target-kl",
+        type=float,
+        default=None,
+        help=(
+            "Stop a PPO optimization epoch early when approximate KL "
+            "divergence between old and new policies exceeds this. "
+            "Default None = no early stop. Recommended 0.05 for high-dim "
+            "obs (e.g. 50k+ stocks*factors) where the first few rollouts "
+            "before VecNormalize stats stabilise can blow up KL. "
+            "Ignored by A2C / SAC."
+        ),
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=0.5,
+        help=(
+            "Gradient clipping max norm (default 0.5). Lower values "
+            "(0.1-0.3) help with high-dim policy networks where the first "
+            "layer has 100M+ params and gradients can explode."
+        ),
+    )
 
     # Parallelism
     parser.add_argument(
@@ -555,15 +578,23 @@ def run_training(args: argparse.Namespace) -> int:
     algo_cls = {"PPO": PPO, "A2C": A2C, "SAC": SAC}[args.algorithm]
     lr = _make_lr_schedule(args.learning_rate, args.learning_rate_schedule)
     policy_kwargs = _parse_policy_kwargs(args.policy_kwargs_json)
-    model = algo_cls(
-        "MlpPolicy",
-        vec_env,
-        learning_rate=lr,
-        policy_kwargs=policy_kwargs or None,
-        verbose=1,
-        seed=args.seed,
-        tensorboard_log=str(out_dir / "tb_logs"),
-    )
+    algo_kwargs: dict[str, Any] = {
+        "policy": "MlpPolicy",
+        "env": vec_env,
+        "learning_rate": lr,
+        "policy_kwargs": policy_kwargs or None,
+        "verbose": 1,
+        "seed": args.seed,
+        "tensorboard_log": str(out_dir / "tb_logs"),
+    }
+    # PPO-specific stability knobs (target_kl + max_grad_norm). A2C exposes
+    # max_grad_norm too; SAC ignores both. Pass conditionally so we don't
+    # break A2C/SAC API expectations.
+    if args.algorithm in {"PPO", "A2C"}:
+        algo_kwargs["max_grad_norm"] = args.max_grad_norm
+    if args.algorithm == "PPO" and args.target_kl is not None:
+        algo_kwargs["target_kl"] = args.target_kl
+    model = algo_cls(**algo_kwargs)
 
     # 6) Callbacks
     metrics_path = out_dir / "training_metrics.jsonl"

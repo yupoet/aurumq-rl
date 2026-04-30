@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -55,6 +56,8 @@ if SB3_AVAILABLE:
             self._wandb = wandb_logger
             self._jsonl = Path(jsonl_path)
             self._log_freq = log_freq
+            self._t_start: float | None = None
+            self._steps_at_start: int = 0
 
         def _on_step(self) -> bool:
             if self.num_timesteps % self._log_freq != 0:
@@ -91,6 +94,21 @@ if SB3_AVAILABLE:
             if algo_name not in {"PPO", "A2C", "SAC"}:
                 algo_name = "PPO"
 
+            # Compute fps from elapsed wall time. SB3 only emits time/fps in
+            # the rollout-summary frame, so most callback flushes wouldn't
+            # see it and would default to 0 → mean_fps = 0 in summary.
+            if self._t_start is None:
+                self._t_start = time.monotonic()
+                self._steps_at_start = self.num_timesteps
+                fps_now = 0
+            else:
+                elapsed = time.monotonic() - self._t_start
+                steps_since_start = self.num_timesteps - self._steps_at_start
+                fps_now = int(steps_since_start / elapsed) if elapsed > 0 else 0
+
+            sb3_fps = _f("time/fps")
+            record_fps = int(sb3_fps) if sb3_fps > 0 else fps_now
+
             record = {
                 "timestep": self.num_timesteps,
                 "episode_reward_mean": _f("rollout/ep_rew_mean"),
@@ -99,7 +117,7 @@ if SB3_AVAILABLE:
                 "entropy": -_f("train/entropy_loss"),  # SB3 reports entropy_loss = -E
                 "explained_variance": _f("train/explained_variance"),
                 "learning_rate": _f("train/learning_rate", default=1e-9),
-                "fps": int(_f("time/fps")),
+                "fps": record_fps,
                 "algorithm": algo_name,
                 "extra": metrics,
             }
