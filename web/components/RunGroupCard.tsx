@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { RunGroup } from "@/lib/runs";
+import type { RunGroup } from "@/lib/runs-shared";
 
 const fmt = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",

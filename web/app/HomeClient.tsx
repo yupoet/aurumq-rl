@@ -2,8 +2,8 @@
 
 import { useSearchParams } from "next/navigation";
 import { useMemo, Suspense } from "react";
-import type { RunListEntry } from "@/lib/runs";
-import { groupRuns } from "@/lib/runs";
+import type { RunListEntry } from "@/lib/runs-shared";
+import { groupRuns } from "@/lib/runs-shared";
 import { RunCard } from "@/components/RunCard";
 import { RunGroupCard } from "@/components/RunGroupCard";
 import { FilterBar, applyFilters } from "@/components/FilterBar";
