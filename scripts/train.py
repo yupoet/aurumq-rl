@@ -640,6 +640,12 @@ def run_training(args: argparse.Namespace) -> int:
             "reward_type": args.reward_type,
             "top_k": args.top_k,
             "factor_count": n_factors,
+            # Persist the EXACT training universe + factor order so eval_backtest
+            # can align an arbitrary val panel to the same shape.
+            "stock_codes": list(panel.stock_codes),
+            "factor_names": list(panel.factor_names),
+            "train_start_date": args.start_date,
+            "train_end_date": args.end_date,
         },
     )
     print(f"[train] ONNX exported: {onnx_path}")

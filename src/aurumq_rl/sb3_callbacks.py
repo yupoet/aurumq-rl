@@ -69,9 +69,41 @@ if SB3_AVAILABLE:
             return True
 
         def _append_jsonl(self, metrics: dict[str, Any]) -> None:
-            """Append metrics to JSONL file."""
+            """Append metrics to JSONL file.
+
+            Writes a record that conforms to the canonical
+            :class:`aurumq_rl.metrics.TrainingMetrics` schema (so
+            ``summarize_metrics`` can read it back), with the raw SB3 keys
+            preserved under ``extra`` for debugging.
+            """
             self._jsonl.parent.mkdir(parents=True, exist_ok=True)
-            record = {"timestep": self.num_timesteps, **metrics}
+
+            def _f(key: str, default: float = 0.0) -> float:
+                v = metrics.get(key)
+                if v is None:
+                    return default
+                try:
+                    return float(v.item() if hasattr(v, "item") else v)
+                except (TypeError, ValueError):
+                    return default
+
+            algo_name = type(self.model).__name__ if self.model is not None else "PPO"
+            if algo_name not in {"PPO", "A2C", "SAC"}:
+                algo_name = "PPO"
+
+            record = {
+                "timestep": self.num_timesteps,
+                "episode_reward_mean": _f("rollout/ep_rew_mean"),
+                "policy_loss": _f("train/policy_gradient_loss") or _f("train/loss"),
+                "value_loss": _f("train/value_loss"),
+                "entropy": -_f("train/entropy_loss"),  # SB3 reports entropy_loss = -E
+                "explained_variance": _f("train/explained_variance"),
+                "learning_rate": _f("train/learning_rate", default=1e-9),
+                "fps": int(_f("time/fps")),
+                "algorithm": algo_name,
+                "extra": metrics,
+            }
+
             try:
                 with self._jsonl.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")

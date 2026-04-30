@@ -143,6 +143,69 @@ class FactorPanel(NamedTuple):
     factor_names: list[str]
 
 
+def align_panel_to_stock_list(
+    panel: "FactorPanel", target_stock_codes: list[str]
+) -> "FactorPanel":
+    """Realign a FactorPanel to a fixed stock universe (order + count).
+
+    For OOS backtest where the panel's stock universe differs from the one
+    used at training time. Returns a new panel with:
+
+      * ``stock_codes`` == ``target_stock_codes`` (same order, same length)
+      * factor / return / pct_change arrays sliced + reordered + zero-padded
+        for stocks present in target but missing from the panel
+      * is_st / is_suspended for missing stocks set to ``True`` (treated
+        as un-tradeable so the env doesn't pretend to pick them)
+      * days_since_ipo for missing stocks set to 0
+
+    This is the canonical fix for the OOS universe-misalignment issue: the
+    env's observation space has a fixed (n_stocks * n_factors,) shape that
+    is locked at training time; without alignment, an OOS panel with even a
+    single different stock breaks ONNX inference.
+    """
+    if list(panel.stock_codes) == list(target_stock_codes):
+        return panel
+
+    n_dates = panel.factor_array.shape[0]
+    n_factors = panel.factor_array.shape[2]
+    n_target = len(target_stock_codes)
+
+    # Build idx map: target_idx -> source_idx (or -1 for missing)
+    src_idx_by_code = {c: i for i, c in enumerate(panel.stock_codes)}
+    idx_map = np.array(
+        [src_idx_by_code.get(c, -1) for c in target_stock_codes], dtype=np.int64
+    )
+    present = idx_map >= 0
+    missing_count = int((~present).sum())
+
+    # Helper: gather along axis=1 with -1 → zero/default
+    def _gather(arr: np.ndarray, default) -> np.ndarray:
+        out_shape = (arr.shape[0], n_target) + arr.shape[2:]
+        out = np.full(out_shape, default, dtype=arr.dtype)
+        if present.any():
+            out[:, present] = arr[:, idx_map[present]]
+        return out
+
+    factor_array = _gather(panel.factor_array, 0.0)
+    return_array = _gather(panel.return_array, 0.0)
+    pct_change_array = _gather(panel.pct_change_array, 0.0)
+    is_st_array = _gather(panel.is_st_array, True)         # missing → ST (un-tradeable)
+    is_suspended_array = _gather(panel.is_suspended_array, True)  # missing → suspended
+    days_since_ipo_array = _gather(panel.days_since_ipo_array, 0)
+
+    return FactorPanel(
+        factor_array=factor_array,
+        return_array=return_array,
+        pct_change_array=pct_change_array,
+        is_st_array=is_st_array,
+        is_suspended_array=is_suspended_array,
+        days_since_ipo_array=days_since_ipo_array,
+        dates=list(panel.dates),
+        stock_codes=list(target_stock_codes),
+        factor_names=list(panel.factor_names),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Universe filtering
 # ---------------------------------------------------------------------------

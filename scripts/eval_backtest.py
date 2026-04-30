@@ -46,13 +46,32 @@ def main(argv: list[str] | None = None) -> int:
     import onnxruntime as ort
 
     from aurumq_rl.backtest import run_backtest_with_series
-    from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+    from aurumq_rl.data_loader import (
+        FactorPanelLoader,
+        UniverseFilter,
+        align_panel_to_stock_list,
+    )
 
     args = parse_args(argv)
     onnx_path = args.run_dir / "policy.onnx"
     if not onnx_path.exists():
         print(f"[error] {onnx_path} not found", file=sys.stderr)
         return 2
+
+    # Read training metadata first so we know the locked stock universe.
+    meta_path = args.run_dir / "metadata.json"
+    train_stock_codes: list[str] | None = None
+    expected_obs_dim: int | None = None
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        recorded = meta.get("obs_shape")
+        if isinstance(recorded, list) and len(recorded) == 1:
+            expected_obs_dim = int(recorded[0])
+            print(f"[backtest] obs_shape from metadata: {recorded}")
+        sc = meta.get("stock_codes")
+        if isinstance(sc, list) and sc:
+            train_stock_codes = list(sc)
+            print(f"[backtest] training universe: {len(train_stock_codes)} stocks (will align)")
 
     loader = FactorPanelLoader(parquet_path=args.data_path)
     panel = loader.load_panel(
@@ -63,17 +82,29 @@ def main(argv: list[str] | None = None) -> int:
         universe_filter=UniverseFilter(args.universe_filter),
     )
 
-    n_dates, n_stocks, n_factors = panel.factor_array.shape
-    print(f"[backtest] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
+    raw_n_dates, raw_n_stocks, _ = panel.factor_array.shape
+    print(f"[backtest] panel raw: dates={raw_n_dates} stocks={raw_n_stocks}")
 
-    expected_obs_dim = n_stocks * n_factors
-    meta_path = args.run_dir / "metadata.json"
-    if meta_path.exists():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        recorded = meta.get("obs_shape")
-        if isinstance(recorded, list) and len(recorded) == 1:
-            expected_obs_dim = int(recorded[0])
-            print(f"[backtest] obs_shape from metadata: {recorded}")
+    # Align to the training universe (order + count) so the model's fixed
+    # observation space matches. Missing stocks become zero-padded rows
+    # marked is_st/is_suspended=True; new stocks (in val but not train)
+    # are dropped. This is the OOS contract.
+    if train_stock_codes is not None:
+        raw_codes = set(panel.stock_codes)
+        kept = sum(1 for c in train_stock_codes if c in raw_codes)
+        missing = len(train_stock_codes) - kept
+        dropped = raw_n_stocks - kept
+        panel = align_panel_to_stock_list(panel, train_stock_codes)
+        print(
+            f"[backtest] aligned to training universe: kept {kept}/{len(train_stock_codes)}, "
+            f"zero-padded {missing} missing, dropped {dropped} new"
+        )
+
+    n_dates, n_stocks, n_factors = panel.factor_array.shape
+    print(f"[backtest] panel aligned: dates={n_dates} stocks={n_stocks} factors={n_factors}")
+
+    if expected_obs_dim is None:
+        expected_obs_dim = n_stocks * n_factors
 
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     input_name = sess.get_inputs()[0].name

@@ -301,3 +301,77 @@ def test_loader_required_columns_constant() -> None:
 def test_loader_get_date_range_returns_none_for_missing(tmp_path: Path) -> None:
     loader = FactorPanelLoader(parquet_path=tmp_path / "no_such.parquet")
     assert loader.get_date_range() == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# align_panel_to_stock_list (OOS universe alignment)
+# ---------------------------------------------------------------------------
+
+
+def _toy_panel(stock_codes: list[str], n_dates: int = 3, n_factors: int = 2) -> FactorPanel:
+    """Synthesise a tiny FactorPanel with deterministic values per (date, stock, factor)."""
+    n_stocks = len(stock_codes)
+    factor_array = np.zeros((n_dates, n_stocks, n_factors), dtype=np.float32)
+    for d in range(n_dates):
+        for s in range(n_stocks):
+            for f in range(n_factors):
+                factor_array[d, s, f] = d * 100.0 + s * 10.0 + f
+    return FactorPanel(
+        factor_array=factor_array,
+        return_array=np.full((n_dates, n_stocks), 0.05, dtype=np.float32),
+        pct_change_array=np.full((n_dates, n_stocks), 0.01, dtype=np.float32),
+        is_st_array=np.zeros((n_dates, n_stocks), dtype=bool),
+        is_suspended_array=np.zeros((n_dates, n_stocks), dtype=bool),
+        days_since_ipo_array=np.full((n_dates, n_stocks), 500, dtype=np.int32),
+        dates=[datetime.date(2024, 1, 1 + i) for i in range(n_dates)],
+        stock_codes=list(stock_codes),
+        factor_names=[f"alpha_{i:03d}" for i in range(n_factors)],
+    )
+
+
+def test_align_panel_identity_when_same_codes() -> None:
+    from aurumq_rl.data_loader import align_panel_to_stock_list
+
+    panel = _toy_panel(["A", "B", "C"])
+    aligned = align_panel_to_stock_list(panel, ["A", "B", "C"])
+    assert aligned is panel  # short-circuit identity
+
+
+def test_align_panel_reorders_and_keeps_values() -> None:
+    from aurumq_rl.data_loader import align_panel_to_stock_list
+
+    panel = _toy_panel(["A", "B", "C"])
+    aligned = align_panel_to_stock_list(panel, ["C", "A", "B"])
+    assert aligned.stock_codes == ["C", "A", "B"]
+    # original [A,B,C] day-0 factor-0 was [0, 10, 20]
+    # reordered [C,A,B] day-0 factor-0 should be [20, 0, 10]
+    np.testing.assert_array_equal(aligned.factor_array[0, :, 0], [20, 0, 10])
+
+
+def test_align_panel_zero_pads_missing_and_marks_unTradeable() -> None:
+    from aurumq_rl.data_loader import align_panel_to_stock_list
+
+    panel = _toy_panel(["A", "B"])
+    aligned = align_panel_to_stock_list(panel, ["A", "X", "B"])  # X is missing
+    assert aligned.stock_codes == ["A", "X", "B"]
+    # X column is zero
+    np.testing.assert_array_equal(aligned.factor_array[:, 1, :], 0.0)
+    np.testing.assert_array_equal(aligned.return_array[:, 1], 0.0)
+    # X is marked unavailable so the env doesn't pretend to pick it
+    assert aligned.is_st_array[:, 1].all()
+    assert aligned.is_suspended_array[:, 1].all()
+    # A and B are intact
+    np.testing.assert_array_equal(aligned.factor_array[:, 0, :], panel.factor_array[:, 0, :])
+    np.testing.assert_array_equal(aligned.factor_array[:, 2, :], panel.factor_array[:, 1, :])
+
+
+def test_align_panel_drops_new_stocks_in_val_universe() -> None:
+    from aurumq_rl.data_loader import align_panel_to_stock_list
+
+    # Source panel has C (a "newly listed in val") that we don't want
+    panel = _toy_panel(["A", "B", "C"])
+    aligned = align_panel_to_stock_list(panel, ["A", "B"])  # C dropped
+    assert aligned.stock_codes == ["A", "B"]
+    assert aligned.factor_array.shape == (3, 2, 2)
+    np.testing.assert_array_equal(aligned.factor_array[:, 0, :], panel.factor_array[:, 0, :])
+    np.testing.assert_array_equal(aligned.factor_array[:, 1, :], panel.factor_array[:, 1, :])
