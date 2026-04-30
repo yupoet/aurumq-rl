@@ -551,6 +551,7 @@ def run_training(args: argparse.Namespace) -> int:
         return 1
 
     from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+    from aurumq_rl.gpu_monitor import GpuSamplerCallback
     from aurumq_rl.metrics import load_metrics, summarize_metrics
     from aurumq_rl.onnx_export import export_sb3_policy_to_onnx
     from aurumq_rl.sb3_callbacks import (
@@ -662,12 +663,16 @@ def run_training(args: argparse.Namespace) -> int:
         save_freq=checkpoint_freq_per_env,
         artifact_type="model",
     )
+    gpu_cb = GpuSamplerCallback(
+        jsonl_path=out_dir / "gpu.jsonl",
+        sample_interval_seconds=2.0,
+    )
 
     # 7) Train
     print(f"[train] training for {args.total_timesteps:,} steps (n_envs={n_envs})...")
     model.learn(
         total_timesteps=args.total_timesteps,
-        callback=[checkpoint_cb, wandb_metrics_cb, wandb_artifact_cb],
+        callback=[checkpoint_cb, wandb_metrics_cb, wandb_artifact_cb, gpu_cb],
         progress_bar=True,
     )
 
