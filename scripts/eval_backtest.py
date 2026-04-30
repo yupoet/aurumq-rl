@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     meta_path = args.run_dir / "metadata.json"
     train_stock_codes: list[str] | None = None
     expected_obs_dim: int | None = None
+    feature_group_weights: dict[str, float] | None = None
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         recorded = meta.get("obs_shape")
@@ -72,6 +73,23 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(sc, list) and sc:
             train_stock_codes = list(sc)
             print(f"[backtest] training universe: {len(train_stock_codes)} stocks (will align)")
+        # Honour per-prefix weights used at training time so OOS sees the
+        # same scaling. Missing field -> no weighting (legacy runs).
+        fgw = meta.get("feature_group_weights")
+        if isinstance(fgw, dict) and fgw:
+            try:
+                feature_group_weights = {str(k): float(v) for k, v in fgw.items()}
+            except (TypeError, ValueError) as e:
+                print(
+                    f"[backtest] WARN: ignoring malformed feature_group_weights "
+                    f"in metadata.json ({e})"
+                )
+                feature_group_weights = None
+            else:
+                print(
+                    f"[backtest] applying feature_group_weights from metadata: "
+                    f"{feature_group_weights}"
+                )
 
     loader = FactorPanelLoader(parquet_path=args.data_path)
     panel = loader.load_panel(
@@ -80,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         n_factors=args.n_factors,
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
+        feature_group_weights=feature_group_weights,
     )
 
     raw_n_dates, raw_n_stocks, _ = panel.factor_array.shape
