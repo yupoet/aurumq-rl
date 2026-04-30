@@ -297,6 +297,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "layer has 100M+ params and gradients can explode."
         ),
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "PPO/A2C mini-batch size for SGD (default = SB3 default 64 for "
+            "PPO, n_envs*n_steps for A2C). Larger batches (256-512) raise "
+            "GPU utilisation when the policy net is wide; capped by VRAM. "
+            "Ignored by SAC."
+        ),
+    )
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=None,
+        help=(
+            "Rollout length per env before each update (default = SB3 "
+            "default 2048 for PPO, 5 for A2C). Total transitions per "
+            "update = n_envs * n_steps. Ignored by SAC."
+        ),
+    )
+    parser.add_argument(
+        "--n-epochs",
+        type=int,
+        default=None,
+        help=(
+            "PPO SGD epochs per rollout (default = SB3 default 10). With "
+            "--target-kl set, may exit early. Ignored by A2C / SAC."
+        ),
+    )
 
     # Parallelism
     parser.add_argument(
@@ -640,6 +670,15 @@ def run_training(args: argparse.Namespace) -> int:
         algo_kwargs["max_grad_norm"] = args.max_grad_norm
     if args.algorithm == "PPO" and args.target_kl is not None:
         algo_kwargs["target_kl"] = args.target_kl
+    # PPO-only batch / rollout / epoch overrides (A2C uses n_envs*n_steps;
+    # SAC has gradient_steps/buffer instead).
+    if args.algorithm == "PPO":
+        if args.batch_size is not None:
+            algo_kwargs["batch_size"] = args.batch_size
+        if args.n_epochs is not None:
+            algo_kwargs["n_epochs"] = args.n_epochs
+    if args.algorithm in {"PPO", "A2C"} and args.n_steps is not None:
+        algo_kwargs["n_steps"] = args.n_steps
     model = algo_cls(**algo_kwargs)
 
     # 6) Callbacks
