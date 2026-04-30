@@ -11,21 +11,12 @@ import {
   CartesianGrid,
 } from "recharts";
 
+import { PRIMARY_METRIC_KEYS } from "@/lib/jsonl";
+
 interface MetricRow {
   timestep: number;
   [key: string]: number | string;
 }
-
-const PRIMARY_KEYS = [
-  "rollout/ep_rew_mean",
-  "train/loss",
-  "train/policy_gradient_loss",
-  "train/value_loss",
-  "train/explained_variance",
-  "train/approx_kl",
-  "train/clip_fraction",
-  "time/fps",
-];
 
 export function LiveCurves({
   id,
@@ -68,7 +59,7 @@ export function LiveCurves({
       if (k !== "timestep" && typeof r[k] === "number") allKeys.add(k);
     }
   }
-  const charts = PRIMARY_KEYS.filter((k) => allKeys.has(k));
+  const charts = PRIMARY_METRIC_KEYS.filter((k) => allKeys.has(k));
 
   return (
     <section>
@@ -89,35 +80,33 @@ export function LiveCurves({
           {charts.map((k) => (
             <div
               key={k}
-              className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3"
+              className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 min-w-0"
             >
               <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">
                 {k}
               </h3>
-              <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={rows.filter((r) => typeof r[k] === "number")}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="currentColor"
-                      opacity={0.1}
-                    />
-                    <XAxis dataKey="timestep" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} />
-                    <Tooltip contentStyle={{ fontSize: 12 }} />
-                    <Line
-                      type="monotone"
-                      dataKey={k}
-                      stroke="#3b82f6"
-                      dot={false}
-                      strokeWidth={1.5}
-                      isAnimationActive={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              <ResponsiveContainer width="100%" height={192}>
+                <LineChart
+                  data={rows.filter((r) => typeof r[k] === "number")}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="currentColor"
+                    opacity={0.1}
+                  />
+                  <XAxis dataKey="timestep" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Line
+                    type="monotone"
+                    dataKey={k}
+                    stroke="#3b82f6"
+                    dot={false}
+                    strokeWidth={1.5}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           ))}
         </div>

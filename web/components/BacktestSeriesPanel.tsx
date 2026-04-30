@@ -59,8 +59,8 @@ export function BacktestSeriesPanel({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <h3 className="text-xs text-zinc-500 mb-1">IC over time</h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="min-w-0">
+            <ResponsiveContainer width="100%" height={192}>
               <LineChart data={points}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
                 <XAxis dataKey="date" tick={{ fontSize: 9 }} hide />
@@ -84,8 +84,8 @@ export function BacktestSeriesPanel({
           <h3 className="text-xs text-zinc-500 mb-1">
             Equity curve (top-K, equal-weight)
           </h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="min-w-0">
+            <ResponsiveContainer width="100%" height={192}>
               <AreaChart data={points}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
                 <XAxis dataKey="date" tick={{ fontSize: 9 }} hide />
@@ -113,8 +113,8 @@ export function BacktestSeriesPanel({
             Random-baseline Sharpe distribution (n=
             {data.random_baseline_sharpes.length})
           </h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="min-w-0">
+            <ResponsiveContainer width="100%" height={192}>
               <BarChart data={histogram}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
                 <XAxis

@@ -14,13 +14,9 @@ import {
   CartesianGrid,
 } from "recharts";
 
+import { COMPARE_METRIC_KEYS } from "@/lib/jsonl";
+
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
-const COMPARE_KEYS = [
-  "rollout/ep_rew_mean",
-  "train/loss",
-  "train/explained_variance",
-  "train/policy_gradient_loss",
-];
 
 interface RunListEntry {
   id: string;
@@ -103,16 +99,22 @@ function CompareInner() {
       </div>
 
       <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {COMPARE_KEYS.map((key) => (
-          <div
-            key={key}
-            className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3"
-          >
-            <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">
-              {key}
-            </h3>
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
+        {COMPARE_METRIC_KEYS.map((key) => {
+          const present = selectedIds.some((id) =>
+            (seriesByRun[id] ?? []).some(
+              (r) => typeof r[key] === "number"
+            )
+          );
+          if (selectedIds.length > 0 && !present) return null;
+          return (
+            <div
+              key={key}
+              className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 min-w-0"
+            >
+              <h3 className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">
+                {key}
+              </h3>
+              <ResponsiveContainer width="100%" height={224}>
                 <LineChart>
                   <CartesianGrid
                     strokeDasharray="3 3"
@@ -129,7 +131,8 @@ function CompareInner() {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {selectedIds.map((id, i) => {
                     const data = (seriesByRun[id] ?? []).filter(
-                      (r: Record<string, unknown>) => typeof r[key] === "number"
+                      (r: Record<string, unknown>) =>
+                        typeof r[key] === "number"
                     );
                     return (
                       <Line
@@ -148,8 +151,8 @@ function CompareInner() {
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
     </main>
   );

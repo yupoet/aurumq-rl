@@ -90,10 +90,9 @@ function SubChart({
   unit: string;
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <h3 className="text-xs text-zinc-500 mb-1">{title}</h3>
-      <div className="h-40">
-        <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height={160}>
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
             <XAxis
@@ -125,7 +124,6 @@ function SubChart({
             />
           </LineChart>
         </ResponsiveContainer>
-      </div>
     </div>
   );
 }
