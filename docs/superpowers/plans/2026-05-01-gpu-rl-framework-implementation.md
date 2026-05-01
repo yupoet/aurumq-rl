@@ -72,6 +72,8 @@ makes it importable from anywhere.
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 import numpy as np
 
 from aurumq_rl.data_loader import FactorPanel
@@ -105,6 +107,8 @@ def make_synthetic_panel(
     is_st_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
     is_suspended_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
     days_since_ipo_array = np.full((n_dates, n_stocks), 1000, dtype=np.float32)
+    base_date = _dt.date(2024, 1, 2)
+    dates = [base_date + _dt.timedelta(days=i) for i in range(n_dates)]
     stock_codes = [f"SYN{i:04d}.SH" for i in range(n_stocks)]
     factor_names = [f"alpha_{i:03d}" if i < n_factors // 2 else f"gtja_{i:03d}"
                     for i in range(n_factors)]
@@ -115,6 +119,7 @@ def make_synthetic_panel(
         is_st_array=is_st_array,
         is_suspended_array=is_suspended_array,
         days_since_ipo_array=days_since_ipo_array,
+        dates=dates,
         stock_codes=stock_codes,
         factor_names=factor_names,
     )
