@@ -63,13 +63,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
         "--rollout-buffer",
-        choices=("gpu", "cpu"),
+        choices=("gpu", "cpu", "index"),
         default="gpu",
         help=(
             "Which rollout buffer to use. 'gpu' (default) keeps every "
             "rollout tensor cuda-resident via GPURolloutBuffer; 'cpu' "
             "falls back to SB3's numpy/host-RAM RolloutBuffer for A/B "
-            "comparison. See spec §5.6 P1."
+            "comparison. 'index' uses IndexOnlyRolloutBuffer (Phase 9) "
+            "which stores t-indices instead of full obs, freeing ~6 GB "
+            "of VRAM and unlocking larger n_steps. See spec §5.6 P1/P2."
         ),
     )
     return p.parse_args(argv)
@@ -132,10 +134,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.rollout_buffer == "gpu":
         ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
         print("[train_v2] using GPURolloutBuffer (cuda-resident)")
+    elif args.rollout_buffer == "index":
+        # Pass IndexOnlyRolloutBuffer directly to PPO. Without this, SB3's
+        # _setup_model would build the parent GPURolloutBuffer at the
+        # full (n_steps, n_envs, n_stocks, n_factors) shape — which at
+        # n_steps=1024/n_envs=16/3014/343 = 63 GiB and OOMs on cuda
+        # before training starts. IndexOnlyRolloutBuffer's __init__
+        # accepts the provider closures as Optional so SB3 can build
+        # it; we attach them via .attach_providers() right after.
+        from aurumq_rl.index_rollout_buffer import IndexOnlyRolloutBuffer
+        ppo_kwargs["rollout_buffer_class"] = IndexOnlyRolloutBuffer
+        print("[train_v2] using IndexOnlyRolloutBuffer (lazy obs gather)")
     else:
         print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
 
     model = PPO(**ppo_kwargs)
+
+    if args.rollout_buffer == "index":
+        # Provider closures bound to env's panel + last_obs_t. After this
+        # the buffer is fully functional for the upcoming model.learn().
+        model.rollout_buffer.attach_providers(
+            obs_provider=lambda t: env.panel[t],
+            obs_index_provider=lambda: env.last_obs_t,
+        )
+        print("[train_v2] index buffer providers attached")
 
     callbacks = []
     if args.checkpoint_freq > 0:
@@ -145,6 +167,23 @@ def main(argv: list[str] | None = None) -> int:
             save_path=str(args.out_dir / "checkpoints"),
             name_prefix="ppo",
         ))
+
+    # Live training metrics → training_metrics.jsonl, which the dashboard
+    # tails over SSE for live training-curve panels at
+    # http://localhost:3000/runs/<id>. Without this callback the dashboard
+    # shows "No metrics yet. N rows total." even after training finishes.
+    from aurumq_rl.sb3_callbacks import WandbMetricsCallback
+    from aurumq_rl.wandb_integration import WandbLogger
+
+    metrics_path = args.out_dir / "training_metrics.jsonl"
+    wandb_logger = WandbLogger(project="aurumq-rl", run_name=args.out_dir.name,
+                               mode="disabled")
+    callbacks.append(WandbMetricsCallback(
+        wandb_logger=wandb_logger,
+        jsonl_path=metrics_path,
+        log_freq=max(args.n_envs * args.n_steps // 4, 1),
+    ))
+    print(f"[train_v2] live metrics jsonl: {metrics_path}")
 
     print(f"[train_v2] training for {args.total_timesteps:,} steps (n_envs={args.n_envs})...")
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None)

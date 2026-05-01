@@ -60,6 +60,12 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done = torch.zeros(n_envs, dtype=torch.long, device=self.device)
         self.episode_returns = torch.zeros(n_envs, dtype=torch.float32, device=self.device)
         self.prev_top_idx = torch.zeros(n_envs, top_k, dtype=torch.long, device=self.device)
+        # ``last_obs_t`` mirrors the t-index of the obs most recently emitted
+        # by ``reset()`` / ``step_wait()``. The IndexOnlyRolloutBuffer reads
+        # this snapshot inside ``add()`` to record which panel slice produced
+        # the obs, instead of materialising the obs itself. See
+        # src/aurumq_rl/index_rollout_buffer.py.
+        self.last_obs_t = torch.zeros(n_envs, dtype=torch.long, device=self.device)
         self._pending_action: torch.Tensor | None = None
 
         observation_space = gym.spaces.Box(
@@ -81,6 +87,9 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done.zero_()
         self.episode_returns.zero_()
         self.prev_top_idx.zero_()
+        # Snapshot the t-index of the obs we are about to emit so the
+        # index-only rollout buffer can reference it without copying obs.
+        self.last_obs_t = self.t.clone()
         return self._obs_for_sb3()
 
     def step_async(self, actions):
@@ -126,6 +135,9 @@ class GPUStockPickingEnv(VecEnv):
                 }
             self._reset_done_envs(dones)
 
+        # Snapshot AFTER any auto-reset so done envs reflect their fresh
+        # start indices. The IndexOnlyRolloutBuffer reads this in add().
+        self.last_obs_t = self.t.clone()
         obs = self._obs_for_sb3()
         return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
 
