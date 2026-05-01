@@ -87,7 +87,62 @@ class GPUStockPickingEnv(VecEnv):
         self._pending_action = self._coerce_action(actions)
 
     def step_wait(self):
-        raise NotImplementedError("filled in Task 1.4")
+        assert self._pending_action is not None, "step_async must be called before step_wait"
+        action = self._pending_action
+        self._pending_action = None
+
+        # 1. mask invalid stocks (they can never enter top-K)
+        action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
+        # 2. top-K
+        top_idx = torch.topk(action, k=self.top_k, dim=-1).indices  # (n_envs, K)
+        # 3. forward returns gathered for the K picked stocks
+        fwd_t = (self.t + self.forward_period).clamp(max=self.n_dates - 1)
+        fwd_rets = self.returns[fwd_t].gather(1, top_idx)            # (n_envs, K)
+        rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
+        # 4. turnover penalty (Jaccard-style)
+        if self.turnover_coef > 0.0:
+            overlap = torch.zeros_like(rewards)
+            for i in range(self.num_envs):
+                overlap[i] = float(
+                    len(set(top_idx[i].tolist()) & set(self.prev_top_idx[i].tolist()))
+                )
+            jaccard_dist = 1.0 - overlap / float(self.top_k)
+            rewards = rewards - self.turnover_coef * jaccard_dist
+        self.prev_top_idx = top_idx
+        self.episode_returns += rewards
+
+        # 5. advance time
+        self.t = self.t + 1
+        self.steps_done = self.steps_done + 1
+        dones = self.steps_done >= self.episode_length
+
+        # 6. for done envs, build SB3 episode info, then auto-reset
+        infos: list[dict] = [{} for _ in range(self.num_envs)]
+        if bool(dones.any().item()):
+            for i in dones.nonzero(as_tuple=True)[0].tolist():
+                infos[i]["episode"] = {
+                    "r": float(self.episode_returns[i].item()),
+                    "l": int(self.steps_done[i].item()),
+                }
+            self._reset_done_envs(dones)
+
+        obs = self._current_obs()
+        return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
+
+    def _reset_done_envs(self, dones: torch.Tensor) -> None:
+        self._sample_starts(dones)
+        self.steps_done = torch.where(
+            dones,
+            torch.zeros_like(self.steps_done),
+            self.steps_done,
+        )
+        self.episode_returns = torch.where(
+            dones,
+            torch.zeros_like(self.episode_returns),
+            self.episode_returns,
+        )
+        # Zero prev_top_idx for done envs only
+        self.prev_top_idx[dones] = 0
 
     def close(self) -> None:
         pass
