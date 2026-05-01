@@ -157,6 +157,33 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",
     )
     print(f"[train_v2] metadata saved: {args.out_dir / 'metadata.json'}")
+
+    # training_summary.json — what the dashboard's runs index reads
+    # (web/lib/runs.ts walkRunDirs requires either training_summary.json
+    # or training_metrics.jsonl; without one of these the run is invisible
+    # on http://localhost:3000/).
+    summary = {
+        "algorithm": "PPO",
+        "total_timesteps": args.total_timesteps,
+        "n_envs": args.n_envs,
+        "env_type": "gpu_stock_picking",
+        "reward_type": "return",
+        "universe_filter": args.universe_filter,
+        "start_date": args.start_date,
+        "end_date": args.end_date,
+        "n_factors": n_factors,
+        "n_stocks": n_stocks,
+        "top_k": args.top_k,
+        "out_dir": str(args.out_dir),
+        "onnx_path": "",
+        "framework": "gpu_v2",
+        "policy_class": "PerStockEncoderPolicy",
+        "metrics_summary": {},
+    }
+    (args.out_dir / "training_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    print(f"[train_v2] training_summary saved: {args.out_dir / 'training_summary.json'}")
     return 0
 
 

@@ -54,9 +54,16 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
     onnx_path = args.run_dir / "policy.onnx"
-    if not onnx_path.exists():
-        print(f"[error] {onnx_path} not found", file=sys.stderr)
+    zip_paths = list(args.run_dir.glob("*_final.zip"))
+    if not onnx_path.exists() and not zip_paths:
+        print(
+            f"[error] neither {onnx_path} nor a *_final.zip exist in {args.run_dir}",
+            file=sys.stderr,
+        )
         return 2
+    use_sb3_zip = (not onnx_path.exists()) and bool(zip_paths)
+    if use_sb3_zip:
+        print(f"[backtest] using SB3 zip {zip_paths[0]} (no policy.onnx; train_v2 path)")
 
     # Read training metadata first so we know the locked stock universe.
     meta_path = args.run_dir / "metadata.json"
@@ -69,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(recorded, list) and len(recorded) == 1:
             expected_obs_dim = int(recorded[0])
             print(f"[backtest] obs_shape from metadata: {recorded}")
+        elif isinstance(recorded, list) and len(recorded) == 2:
+            # train_v2 GPU framework: obs_shape is (n_stocks, n_factors)
+            expected_obs_dim = int(recorded[0]) * int(recorded[1])
+            print(f"[backtest] obs_shape from metadata: {recorded} (2D, train_v2 path)")
         sc = meta.get("stock_codes")
         if isinstance(sc, list) and sc:
             train_stock_codes = list(sc)
@@ -133,25 +144,43 @@ def main(argv: list[str] | None = None) -> int:
     if expected_obs_dim is None:
         expected_obs_dim = n_stocks * n_factors
 
-    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    input_name = sess.get_inputs()[0].name
+    if use_sb3_zip:
+        # train_v2 / GPU framework path: load SB3 PPO with PerStockEncoderPolicy
+        # and run inference on 2D obs (n_dates, n_stocks, n_factors) on cuda.
+        import torch
+        from stable_baselines3 import PPO
 
-    factor_flat = panel.factor_array.reshape(n_dates, n_stocks * n_factors).astype(np.float32)
-    if expected_obs_dim == n_stocks * n_factors:
-        obs = factor_flat
-    elif expected_obs_dim == n_stocks * (n_factors + 1):
-        weights_pad = np.zeros((n_dates, n_stocks), dtype=np.float32)
-        obs = np.concatenate([factor_flat, weights_pad], axis=1)
-        print("[backtest] padded zero current-weights for portfolio_weight env")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = PPO.load(str(zip_paths[0]), device=device)
+        model.policy.eval()
+        panel_t = torch.from_numpy(panel.factor_array).to(device)
+        scores = []
+        with torch.no_grad():
+            for t in range(n_dates):
+                feats = model.policy.features_extractor(panel_t[t : t + 1])
+                s = model.policy.action_net(feats["per_stock"]).squeeze(-1)
+                scores.append(s[0].detach().cpu().numpy())
+        raw_out = np.stack(scores, axis=0)
     else:
-        print(
-            f"[error] obs_dim mismatch: panel gives {n_stocks * n_factors}, "
-            f"model expects {expected_obs_dim}",
-            file=sys.stderr,
-        )
-        return 3
+        sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        input_name = sess.get_inputs()[0].name
 
-    raw_out = sess.run(None, {input_name: obs})[0]
+        factor_flat = panel.factor_array.reshape(n_dates, n_stocks * n_factors).astype(np.float32)
+        if expected_obs_dim == n_stocks * n_factors:
+            obs = factor_flat
+        elif expected_obs_dim == n_stocks * (n_factors + 1):
+            weights_pad = np.zeros((n_dates, n_stocks), dtype=np.float32)
+            obs = np.concatenate([factor_flat, weights_pad], axis=1)
+            print("[backtest] padded zero current-weights for portfolio_weight env")
+        else:
+            print(
+                f"[error] obs_dim mismatch: panel gives {n_stocks * n_factors}, "
+                f"model expects {expected_obs_dim}",
+                file=sys.stderr,
+            )
+            return 3
+
+        raw_out = sess.run(None, {input_name: obs})[0]
 
     if raw_out.ndim == 1:
         out = raw_out.reshape(n_dates, n_stocks)
