@@ -88,6 +88,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--unique-date-encoding",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable Phase 14B unique-date encoding inside PerStockExtractor: "
+            "detect duplicate dates within a PPO mini-batch via hashing "
+            "first-stock row, encode each unique date once, broadcast back "
+            "via inverse map. Phase 13 measured dup_factor ≈ 2.4 → "
+            "encoder fwd+bwd should drop by ~58%%. Numerical equivalence "
+            "verified by tests; gradients flow correctly through index "
+            "broadcast (PyTorch sums at duplicated indices)."
+        ),
+    )
+    p.add_argument(
         "--matmul-precision",
         choices=("highest", "high", "medium"),
         default="highest",
@@ -159,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     policy_kwargs = dict(
         encoder_hidden=encoder_hidden,
         encoder_out_dim=args.encoder_out_dim,
+        unique_date=args.unique_date_encoding,
     )
 
     ppo_kwargs: dict = dict(
