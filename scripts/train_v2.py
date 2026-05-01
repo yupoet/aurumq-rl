@@ -135,13 +135,15 @@ def main(argv: list[str] | None = None) -> int:
         ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
         print("[train_v2] using GPURolloutBuffer (cuda-resident)")
     elif args.rollout_buffer == "index":
-        # SB3 instantiates ``rollout_buffer_class(...)`` inside
-        # ``_setup_model`` without exposing extra-kwargs hooks. We let
-        # SB3 build whatever it likes, then swap in our index-only
-        # buffer with the provider closures bound to ``env``. This is
-        # safe because SB3's ``OnPolicyAlgorithm.collect_rollouts`` and
-        # ``train()`` only access the buffer through public methods.
-        ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
+        # Pass IndexOnlyRolloutBuffer directly to PPO. Without this, SB3's
+        # _setup_model would build the parent GPURolloutBuffer at the
+        # full (n_steps, n_envs, n_stocks, n_factors) shape — which at
+        # n_steps=1024/n_envs=16/3014/343 = 63 GiB and OOMs on cuda
+        # before training starts. IndexOnlyRolloutBuffer's __init__
+        # accepts the provider closures as Optional so SB3 can build
+        # it; we attach them via .attach_providers() right after.
+        from aurumq_rl.index_rollout_buffer import IndexOnlyRolloutBuffer
+        ppo_kwargs["rollout_buffer_class"] = IndexOnlyRolloutBuffer
         print("[train_v2] using IndexOnlyRolloutBuffer (lazy obs gather)")
     else:
         print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
@@ -149,25 +151,13 @@ def main(argv: list[str] | None = None) -> int:
     model = PPO(**ppo_kwargs)
 
     if args.rollout_buffer == "index":
-        from aurumq_rl.index_rollout_buffer import IndexOnlyRolloutBuffer
-
-        old = model.rollout_buffer
-        model.rollout_buffer = IndexOnlyRolloutBuffer(
-            buffer_size=old.buffer_size,
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            device=old.device,
-            gae_lambda=old.gae_lambda,
-            gamma=old.gamma,
-            n_envs=old.n_envs,
+        # Provider closures bound to env's panel + last_obs_t. After this
+        # the buffer is fully functional for the upcoming model.learn().
+        model.rollout_buffer.attach_providers(
             obs_provider=lambda t: env.panel[t],
             obs_index_provider=lambda: env.last_obs_t,
         )
-        # Free the placeholder buffer SB3 just allocated. Phase 8's
-        # GPURolloutBuffer holds a 6+ GB obs tensor at training scale;
-        # without del + empty_cache here we'd briefly hold both.
-        del old
-        torch.cuda.empty_cache()
+        print("[train_v2] index buffer providers attached")
 
     callbacks = []
     if args.checkpoint_freq > 0:
@@ -177,6 +167,23 @@ def main(argv: list[str] | None = None) -> int:
             save_path=str(args.out_dir / "checkpoints"),
             name_prefix="ppo",
         ))
+
+    # Live training metrics → training_metrics.jsonl, which the dashboard
+    # tails over SSE for live training-curve panels at
+    # http://localhost:3000/runs/<id>. Without this callback the dashboard
+    # shows "No metrics yet. N rows total." even after training finishes.
+    from aurumq_rl.sb3_callbacks import WandbMetricsCallback
+    from aurumq_rl.wandb_integration import WandbLogger
+
+    metrics_path = args.out_dir / "training_metrics.jsonl"
+    wandb_logger = WandbLogger(project="aurumq-rl", run_name=args.out_dir.name,
+                               mode="disabled")
+    callbacks.append(WandbMetricsCallback(
+        wandb_logger=wandb_logger,
+        jsonl_path=metrics_path,
+        log_freq=max(args.n_envs * args.n_steps // 4, 1),
+    ))
+    print(f"[train_v2] live metrics jsonl: {metrics_path}")
 
     print(f"[train_v2] training for {args.total_timesteps:,} steps (n_envs={args.n_envs})...")
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None)

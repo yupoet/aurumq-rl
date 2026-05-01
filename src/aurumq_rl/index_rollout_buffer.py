@@ -66,14 +66,15 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
         gamma: float = 0.99,
         n_envs: int = 1,
         *,
-        obs_provider: Callable[[th.Tensor], th.Tensor],
-        obs_index_provider: Callable[[], th.Tensor],
+        obs_provider: Callable[[th.Tensor], th.Tensor] | None = None,
+        obs_index_provider: Callable[[], th.Tensor] | None = None,
     ) -> None:
-        # Stash the closures BEFORE calling super().__init__, because
-        # the parent's __init__ ends with a self.reset() call which we
-        # override and which (via the parent BaseBuffer chain) does not
-        # need the closures itself, but we want them available if any
-        # subclass override needs them.
+        # Providers are optional at construction time so SB3's
+        # OnPolicyAlgorithm._setup_model can build us via plain
+        # rollout_buffer_class(...) (which doesn't pass extra kwargs).
+        # The caller MUST attach them via attach_providers() before
+        # the first rollout step or get() call. add() and _get_samples()
+        # will assert their presence.
         self._obs_provider = obs_provider
         self._obs_index_provider = obs_index_provider
         super().__init__(
@@ -85,6 +86,20 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
             gamma=gamma,
             n_envs=n_envs,
         )
+
+    def attach_providers(
+        self,
+        obs_provider: Callable[[th.Tensor], th.Tensor],
+        obs_index_provider: Callable[[], th.Tensor],
+    ) -> None:
+        """Attach panel-gather and last-obs-t closures after construction.
+
+        Required when the buffer is built by SB3's _setup_model (which
+        doesn't know about our extra kwargs). Call once before the first
+        ``model.learn()`` invocation.
+        """
+        self._obs_provider = obs_provider
+        self._obs_index_provider = obs_index_provider
 
     # ------------------------------------------------------------------
     # Storage allocation
@@ -162,6 +177,13 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
         # Snapshot the t-index for the obs SB3 just emitted. The env
         # guarantees ``last_obs_t`` matches the obs it returned from the
         # most recent reset()/step_wait() call.
+        if self._obs_index_provider is None:
+            raise RuntimeError(
+                "IndexOnlyRolloutBuffer.add(): obs_index_provider not "
+                "attached. Call attach_providers(obs_provider, "
+                "obs_index_provider) after constructing the buffer "
+                "(or after PPO finishes _setup_model when SB3 builds it)."
+            )
         t_now = self._obs_index_provider()
         if not isinstance(t_now, th.Tensor):
             t_now = th.as_tensor(np.asarray(t_now), dtype=th.long, device=device)
@@ -243,6 +265,11 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
         # unsqueezes to (n_steps, n_envs, 1) before transpose+reshape,
         # giving us a flattened (n_steps*n_envs, 1) we need to squeeze
         # before passing to the provider.
+        if self._obs_provider is None:
+            raise RuntimeError(
+                "IndexOnlyRolloutBuffer._get_samples(): obs_provider not "
+                "attached. Call attach_providers() before model.learn()."
+            )
         t_idx = self.t_buffer[batch_inds]
         if t_idx.dim() == 2 and t_idx.shape[-1] == 1:
             t_idx = t_idx.squeeze(-1)
