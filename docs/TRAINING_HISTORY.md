@@ -894,6 +894,139 @@ overnight, but a 1M run is a clear next step.
 
 ---
 
+### Phase 11 — bf16 autocast + batch=2048 (2026-05-01 night, eliminated)
+
+**Hypothesis.** Phase 10's bottleneck was wide first-layer fp32 matmul; bf16
+autocast on tensor cores + bigger SGD batch should reduce wall time.
+
+**Result.** **NO measurable fps gain**. Phase 11 fps 44 (iter 2) vs Phase 10's 47 — within noise. The encoder is small (60K params) — kernel launch and Python overhead dominate matmul throughput for this shape, so tensor-core speedup is masked. KL trajectory near-identical (bf16 numerical drift only in 4th decimal).
+
+**Verdict.** Eliminated. Branch retained on origin (`feat/phase11-bf16-batch`) but never merged. Useful as a confirmation that bf16 isn't the right lever here.
+
+---
+
+### Phase 12 — target_kl=0.10 adaptive early-stop (2026-05-01 night, eliminated)
+
+**Hypothesis.** Phase 10's KL trajectory of 0.16/0.09/0.05 (per-iter average) suggested most iterations should naturally early-stop after a few epochs. Setting `target_kl=0.10` (trip threshold 0.15) would let PPO save SGD work when KL is low.
+
+**Bug.** Per-batch max KL (~0.24) is much larger than per-iter average (~0.17). With trip threshold 0.15, every batch in every iter trips at step 0. Result: only **1 SGD update per iter** — exactly the Phase 9 freeze pattern. Killed early.
+
+**Verdict.** Eliminated. **Trip threshold must be > per-batch max KL**, not iter-average. Phase 10's `target_kl=0.30` (trip 0.45) was correctly calibrated.
+
+---
+
+### Phase 13 — PPO SGD perf-probe (2026-05-01 late night)
+
+**Goal.** After Phase 11 and Phase 12 both eliminated, refuse to keep
+hyperparameter-blind-tuning. Build instrumentation: torch.profiler + manual
+stage timer wrapped around every PPO SGD step's substages
+(`batch_get_or_index`, `obs_materialize_or_gather`, `cpu_to_gpu_copy`,
+`contiguous_or_clone`, `forward_eval_actions`, `loss_build`, `zero_grad`,
+`backward`, `optimizer_step`, `cuda_tail_sync`). Print tensor metadata.
+Sample `dup_factor` (per-minibatch unique date count vs batch size).
+
+**Output.**
+
+| stage | mean ms | % iter |
+|---|---|---|
+| backward | 1617 | **60.2%** |
+| forward_eval_actions | 887 | **33.0%** |
+| batch_get_or_index | 173 | 6.4% |
+| everything else | < 5 | < 0.5% |
+
+`aten::mm + aten::addmm = 67% CUDA time`. `dup_factor ≈ 2.4`. Diagnosis:
+**GEMM-bound, not data-path-bound**. Phase 9's IndexOnlyRolloutBuffer had
+optimised the data path to ~0% of iter time — the remaining cost is
+genuinely matmul + autograd.
+
+**Recommendation:** Phase 14C (TF32) and 14B (unique-date) — the latter
+flagged by the dup_factor measurement, not by stage timings.
+
+**Files committed.** `src/aurumq_rl/profiler_utils.py`, `src/aurumq_rl/ppo_profiled.py`, `tests/test_profiler_utils.py` (7 tests).
+
+---
+
+### Phase 14 — TF32 + unique-date + 1M overnight (2026-05-02 night → 2026-05-03 early)
+
+**Three winning levers + one blocker + two non-options.**
+
+#### 14A — TF32
+
+3-line PyTorch config: `torch.backends.cuda.matmul.allow_tf32 = True`,
+`cudnn.allow_tf32 = True`, `set_float32_matmul_precision('high')`. Wired
+behind `--tf32` CLI flag.
+
+50k smoke: fps **76/59/53** (Phase 10 baseline 61/47/42), **+25-26%**
+across all iters. KL trajectory 0.168/0.092/0.054 — bit-identical to
+Phase 10 (drift only in 4th decimal). OOS top30 Sharpe **+3.834** vs
+Phase 10's **+3.728** (slightly better, within seed noise). Strong pass.
+
+#### 14B — unique-date encoding
+
+Single-file change to `PerStockExtractor.forward`. Hashes first-stock row
+to detect unique dates in batch, encodes each unique once, broadcasts back
+via `inverse` indexing. Exploits Phase 13's `dup_factor ≈ 2.4`. Three new
+tests verify equivalence with vanilla path (`atol=1e-5`) and gradient
+flow.
+
+50k smoke: fps **177/149/135** (vs 61/47/42 Phase 10), **+190-221%**.
+KL bit-identical. OOS Sharpe +3.673 (slightly under +3.728 — within seed
+noise). Encoder fwd+bwd time correctly cut by ~2.4×.
+
+#### 14C — combo (TF32 + unique-date) — **production champion**
+
+50k smoke: fps **182/154/140**, OOS top30 Sharpe **+3.902** (best seen
+at 50k), IC **+0.0086**. Beats random p50 by **+0.339**. 200k validation
+extended this: best @ 200k checkpoint Sharpe **+4.452** (+0.889 above
+random p50). 1M overnight made it the production model.
+
+#### 14D — torch.compile — BLOCKED
+
+Phase 14D wires `--compile-extractor / --compile-policy / --compile-mode`
+flags. PyTorch 2.x's `torch.compile` Inductor backend requires Triton.
+**Triton's Windows support isn't usable in our venv** (`triton-windows`
+package exists but is brittle). On Linux this would work; on this
+Windows box we get `torch._inductor.exc.TritonMissing` immediately.
+
+#### 14E — n_epochs sensitivity — eliminated
+
+`n_epochs=7` and `n_epochs=5` both gave the night's biggest fps wins
+(+275% and +338% respectively at 50k) but their OOS Sharpe dropped
+**below the random baseline**. At 50k step budget the model is
+underfit when fewer SGD epochs run. Production stays at `n_epochs=10`.
+
+#### The 1M overnight itself — **non-monotonic, peaks early, decays**
+
+Wall time 2 h 30 min on Phase 14C config. fps 107-179. KL settles to
+0.018-0.020 by 200k and stays there. **OOS Sharpe trajectory across 10
+checkpoints**:
+
+```
+   50k → +3.902   100k → +3.124   200k → +4.452 ← peak A
+  300k → +3.131   400k → +2.869   500k → +2.746
+  600k → +4.472   700k → +3.304   800k → +1.298 ← deepest dip
+  900k → +2.592    1M → +3.550    final.zip → +3.584
+```
+
+**Two near-equal peaks at 200k and 600k (~+4.47 Sharpe), three valleys
+(400-500k, 800k, 900k), end-of-training drift back toward random p50
+(+3.563)**.
+
+**Production lesson:** ship the **best checkpoint by OOS, NOT the final
+model**. Best is `runs/overnight_1m_phase14c/checkpoints/ppo_600000_steps.zip`,
+Sharpe **+4.472** (+0.909 above random p50, ~25% relative).
+
+**Factor importance evolution:** at 50k the top group was `hm_*` (hot
+money, 6 factors). At 1M `gtja_*` (191 GTJA Alpha191 factors)
+dominates — long-tail factor families need real training to be
+discovered.
+
+**5M is NOT recommended** without LR/KL/entropy annealing schedules.
+Plain `target_kl=0.30` + `learning_rate=1e-4` causes the late-training
+oscillation seen in this run; more steps don't help.
+
+---
+
 ### Phase 6 — GPU-vectorised framework target (designed 2026-05-01 afternoon, **built in Phase 7**)
 
 > Status: target set; actual build + first smoke documented in Phase 7
