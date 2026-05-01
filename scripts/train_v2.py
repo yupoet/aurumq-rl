@@ -63,13 +63,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
         "--rollout-buffer",
-        choices=("gpu", "cpu"),
+        choices=("gpu", "cpu", "index"),
         default="gpu",
         help=(
             "Which rollout buffer to use. 'gpu' (default) keeps every "
             "rollout tensor cuda-resident via GPURolloutBuffer; 'cpu' "
             "falls back to SB3's numpy/host-RAM RolloutBuffer for A/B "
-            "comparison. See spec §5.6 P1."
+            "comparison. 'index' uses IndexOnlyRolloutBuffer (Phase 9) "
+            "which stores t-indices instead of full obs, freeing ~6 GB "
+            "of VRAM and unlocking larger n_steps. See spec §5.6 P1/P2."
         ),
     )
     return p.parse_args(argv)
@@ -132,10 +134,40 @@ def main(argv: list[str] | None = None) -> int:
     if args.rollout_buffer == "gpu":
         ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
         print("[train_v2] using GPURolloutBuffer (cuda-resident)")
+    elif args.rollout_buffer == "index":
+        # SB3 instantiates ``rollout_buffer_class(...)`` inside
+        # ``_setup_model`` without exposing extra-kwargs hooks. We let
+        # SB3 build whatever it likes, then swap in our index-only
+        # buffer with the provider closures bound to ``env``. This is
+        # safe because SB3's ``OnPolicyAlgorithm.collect_rollouts`` and
+        # ``train()`` only access the buffer through public methods.
+        ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
+        print("[train_v2] using IndexOnlyRolloutBuffer (lazy obs gather)")
     else:
         print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
 
     model = PPO(**ppo_kwargs)
+
+    if args.rollout_buffer == "index":
+        from aurumq_rl.index_rollout_buffer import IndexOnlyRolloutBuffer
+
+        old = model.rollout_buffer
+        model.rollout_buffer = IndexOnlyRolloutBuffer(
+            buffer_size=old.buffer_size,
+            observation_space=env.observation_space,
+            action_space=env.action_space,
+            device=old.device,
+            gae_lambda=old.gae_lambda,
+            gamma=old.gamma,
+            n_envs=old.n_envs,
+            obs_provider=lambda t: env.panel[t],
+            obs_index_provider=lambda: env.last_obs_t,
+        )
+        # Free the placeholder buffer SB3 just allocated. Phase 8's
+        # GPURolloutBuffer holds a 6+ GB obs tensor at training scale;
+        # without del + empty_cache here we'd briefly hold both.
+        del old
+        torch.cuda.empty_cache()
 
     callbacks = []
     if args.checkpoint_freq > 0:
