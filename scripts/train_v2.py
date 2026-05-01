@@ -21,6 +21,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 
 from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
 from aurumq_rl.gpu_env import GPUStockPickingEnv
+from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
 from aurumq_rl.policy import PerStockEncoderPolicy
 
 
@@ -60,6 +61,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--encoder-out-dim", type=int, default=32)
     p.add_argument("--checkpoint-freq", type=int, default=200_000)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--rollout-buffer",
+        choices=("gpu", "cpu"),
+        default="gpu",
+        help=(
+            "Which rollout buffer to use. 'gpu' (default) keeps every "
+            "rollout tensor cuda-resident via GPURolloutBuffer; 'cpu' "
+            "falls back to SB3's numpy/host-RAM RolloutBuffer for A/B "
+            "comparison. See spec §5.6 P1."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -103,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         encoder_out_dim=args.encoder_out_dim,
     )
 
-    model = PPO(
+    ppo_kwargs: dict = dict(
         policy=PerStockEncoderPolicy,
         env=env,
         learning_rate=args.learning_rate,
@@ -117,6 +129,13 @@ def main(argv: list[str] | None = None) -> int:
         device="cuda",
         policy_kwargs=policy_kwargs,
     )
+    if args.rollout_buffer == "gpu":
+        ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
+        print("[train_v2] using GPURolloutBuffer (cuda-resident)")
+    else:
+        print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
+
+    model = PPO(**ppo_kwargs)
 
     callbacks = []
     if args.checkpoint_freq > 0:
@@ -152,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         "encoder_out_dim": args.encoder_out_dim,
         "top_k": args.top_k,
         "forward_period": args.forward_period,
+        "rollout_buffer": args.rollout_buffer,
     }
     (args.out_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",
