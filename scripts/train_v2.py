@@ -74,12 +74,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "of VRAM and unlocking larger n_steps. See spec §5.6 P1/P2."
         ),
     )
+    p.add_argument(
+        "--tf32",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable TF32 matmul on Ampere/Ada GPUs (Phase 14A). Sets "
+            "torch.backends.cuda.matmul.allow_tf32=True, "
+            "torch.backends.cudnn.allow_tf32=True. Pure speedup on fp32 "
+            "GEMM kernels (~1.5-2x); not mathematically identical but "
+            "no measurable training-quality impact across ML literature. "
+            "Phase 13 confirmed PPO is GEMM-bound (mm+addmm 67%% CUDA)."
+        ),
+    )
+    p.add_argument(
+        "--matmul-precision",
+        choices=("highest", "high", "medium"),
+        default="highest",
+        help=(
+            "torch.set_float32_matmul_precision setting. 'high' is the "
+            "TF32-friendly mode (used in conjunction with --tf32). "
+            "'medium' allows fp16 for matmul which we don't want here."
+        ),
+    )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Apply matmul precision settings BEFORE constructing any cuda tensor.
+    # (Phase 14A: TF32 / matmul-precision flags.)
+    print(f"[train_v2] torch={torch.__version__} cuda={torch.version.cuda} "
+          f"device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
+    if args.tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision(args.matmul_precision)
+        print(
+            f"[train_v2] TF32 ENABLED: matmul.allow_tf32={torch.backends.cuda.matmul.allow_tf32}, "
+            f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}, "
+            f"float32_matmul_precision={torch.get_float32_matmul_precision()}"
+        )
+    else:
+        torch.set_float32_matmul_precision(args.matmul_precision)
+        print(
+            f"[train_v2] TF32 disabled: matmul.allow_tf32={torch.backends.cuda.matmul.allow_tf32}, "
+            f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}, "
+            f"float32_matmul_precision={torch.get_float32_matmul_precision()}"
+        )
 
     print(f"[train_v2] loading panel from {args.data_path} ({args.start_date}..{args.end_date})...")
     loader = FactorPanelLoader(parquet_path=args.data_path)
