@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   readBacktest,
   readBacktestSeries,
+  readFactorImportance,
   readGpuJsonl,
   readMetricsJsonl,
   readSummary,
@@ -38,6 +39,9 @@ export async function GET(
   }
   if (part === "gpu") {
     return NextResponse.json(await readGpuJsonl(decoded));
+  }
+  if (part === "factor-importance") {
+    return NextResponse.json(await readFactorImportance(decoded));
   }
 
   const [summary, metrics, backtest, gpu] = await Promise.all([
