@@ -20,7 +20,9 @@ def test_extractor_output_shapes():
     obs = torch.randn(4, 50, 20)
     out = ext(obs)
     assert out["per_stock"].shape == (4, 50, 32)
-    assert out["pooled"].shape == (4, 32)
+    # pooled is concat(market_mean, opportunity_max) → 2 * out_dim
+    assert out["pooled"].shape == (4, 64)
+    assert ext.pooled_dim == 64
 
 
 def test_extractor_param_count_under_budget():
@@ -123,3 +125,24 @@ def test_policy_optimizer_tracks_all_trainable_params():
     assert missing == [], (
         f"optimizer is missing {len(missing)} trainable parameters: {missing}"
     )
+
+
+def test_extractor_dual_pooling_shape_and_mean_zero():
+    """P1: pooled is concat(market_mean, opportunity_max), per_stock is centered."""
+    ext = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8)
+    obs = torch.randn(2, 50, 20)
+    out = ext(obs)
+    assert out["per_stock"].shape == (2, 50, 8)
+    # cross-section centering — per-batch per_stock has zero mean over stock axis
+    assert out["per_stock"].mean(dim=1).abs().max().item() < 1e-5
+    # pooled = [market_mean, opportunity_max], so 2*out_dim
+    assert out["pooled"].shape == (2, 16)
+    assert torch.isfinite(out["per_stock"]).all()
+    assert torch.isfinite(out["pooled"]).all()
+
+
+def test_policy_value_net_input_dim_matches_pooled():
+    """P1: value_net's first Linear must accept 2*encoder_out_dim, not encoder_out_dim."""
+    policy = _make_policy(n_stocks=50, n_factors=20)
+    first_linear = next(m for m in policy.value_net.modules() if isinstance(m, torch.nn.Linear))
+    assert first_linear.in_features == 2 * policy._encoder_out_dim

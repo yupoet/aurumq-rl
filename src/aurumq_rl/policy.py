@@ -71,8 +71,13 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         # Override action_net and value_net with per-stock-aware heads
         n_stocks = self.action_space.shape[0]
         self.action_net = nn.Linear(self._encoder_out_dim, 1)  # per-stock score
+
+        # Value head input is concat(market_mean, opportunity_max) — see
+        # PerStockExtractor.forward. So the first Linear must accept
+        # 2 * encoder_out_dim, not encoder_out_dim.
+        pooled_dim = 2 * self._encoder_out_dim
         layers: list[nn.Module] = []
-        prev = self._encoder_out_dim
+        prev = pooled_dim
         for h in self._value_hidden:
             layers.append(nn.Linear(prev, h))
             layers.append(nn.ReLU())

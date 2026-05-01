@@ -14,8 +14,20 @@ class PerStockExtractor(BaseFeaturesExtractor):
     SB3 doesn't insist on a Tensor return — see PerStockEncoderPolicy.forward).
 
     Output keys:
-      - "per_stock":  (B, n_stocks, out_dim) — used by action head
-      - "pooled":     (B,         out_dim) — mean-pool across stocks, used by value head
+      - "per_stock":  (B, n_stocks, out_dim) — cross-section centered embeddings,
+                      used by the action head. Per-batch mean over stocks is ~0,
+                      so the actor scores stocks relative to today's market.
+      - "pooled":     (B, 2 * out_dim) — concat(market_mean, opportunity_max),
+                      used by the value head. ``market_mean`` is the LayerNorm'd
+                      stock-axis mean BEFORE centering (i.e. today's market
+                      baseline); ``opportunity_max`` is the per-feature max over
+                      the centered embeddings (the strongest cross-section
+                      deviation per channel).
+
+    The market-mean is computed BEFORE centering on purpose: computing it AFTER
+    centering yields ~0 (centering subtracts that very mean) and starves the
+    value head of any market-level signal — that was a latent bug in the
+    earlier dual-pooling attempt.
     """
 
     def __init__(
@@ -32,6 +44,9 @@ class PerStockExtractor(BaseFeaturesExtractor):
         self.n_stocks = n_stocks
         self.n_factors = n_factors
         self.out_dim = out_dim
+        # Pooled features (consumed by the value head) are concat of two
+        # out_dim-sized vectors. Expose for caller introspection.
+        self.pooled_dim = 2 * out_dim
 
         layers: list[nn.Module] = []
         prev = n_factors
@@ -41,11 +56,19 @@ class PerStockExtractor(BaseFeaturesExtractor):
             prev = h
         layers.append(nn.Linear(prev, out_dim))
         self.mlp = nn.Sequential(*layers)
+        self.norm = nn.LayerNorm(out_dim)
 
     def forward(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         # obs: (B, n_stocks, n_factors)
         b, s, f = obs.shape
         flat = obs.reshape(b * s, f)
-        encoded = self.mlp(flat).reshape(b, s, self.out_dim)
-        pooled = encoded.mean(dim=1)
-        return {"per_stock": encoded, "pooled": pooled}
+        normed = self.norm(self.mlp(flat).reshape(b, s, self.out_dim))
+
+        # market_mean is computed BEFORE centering on purpose (see class docstring).
+        market_mean = normed.mean(dim=1)
+        centered = normed - market_mean.unsqueeze(1)
+
+        opportunity_max = centered.max(dim=1).values
+        pooled = torch.cat([market_mean, opportunity_max], dim=-1)
+
+        return {"per_stock": centered, "pooled": pooled}
