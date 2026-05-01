@@ -111,6 +111,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "'medium' allows fp16 for matmul which we don't want here."
         ),
     )
+    p.add_argument(
+        "--compile-extractor",
+        action="store_true",
+        default=False,
+        help=(
+            "torch.compile the PerStockExtractor.forward (Phase 14D). "
+            "Produces a fused graph for the per-stock MLP + LayerNorm + "
+            "centering + pooling. Spec target: +10-30%% fps on top of TF32. "
+            "If graph break warnings flood the log, the speedup is gone — "
+            "rerun with --compile-mode default."
+        ),
+    )
+    p.add_argument(
+        "--compile-policy",
+        action="store_true",
+        default=False,
+        help=(
+            "torch.compile the action/value heads (action_net + value_net). "
+            "Independent of --compile-extractor. May give marginal gains; "
+            "extractor is the bigger target."
+        ),
+    )
+    p.add_argument(
+        "--compile-mode",
+        choices=("default", "reduce-overhead", "max-autotune"),
+        default="reduce-overhead",
+        help=(
+            "torch.compile mode. 'reduce-overhead' (default) is best for our "
+            "small encoder where Python/launch overhead matters most. "
+            "'max-autotune' tries harder but compile takes 30+ seconds and "
+            "PyTorch 16 can stall on it."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -217,6 +250,40 @@ def main(argv: list[str] | None = None) -> int:
             obs_index_provider=lambda: env.last_obs_t,
         )
         print("[train_v2] index buffer providers attached")
+
+    # Phase 14D: torch.compile the per-stock encoder and/or policy heads.
+    # Done AFTER PPO construction so model.policy.features_extractor /
+    # action_net / value_net exist. obs_provider closures call env.panel[t]
+    # directly (not via policy), so the index-buffer path is unaffected.
+    if args.compile_extractor and torch.cuda.is_available():
+        print(f"[train_v2] torch.compile features_extractor (mode={args.compile_mode})...")
+        try:
+            model.policy.features_extractor = torch.compile(
+                model.policy.features_extractor,
+                mode=args.compile_mode,
+                fullgraph=False,
+                dynamic=False,
+            )
+            print("[train_v2] features_extractor compile call returned (lazy; first forward triggers actual compile)")
+        except Exception as e:
+            print(f"[train_v2] features_extractor compile FAILED: {e!r}")
+            print("[train_v2] continuing without extractor compile")
+
+    if args.compile_policy and torch.cuda.is_available():
+        print(f"[train_v2] torch.compile action_net + value_net (mode={args.compile_mode})...")
+        try:
+            model.policy.action_net = torch.compile(
+                model.policy.action_net, mode=args.compile_mode,
+                fullgraph=False, dynamic=False,
+            )
+            model.policy.value_net = torch.compile(
+                model.policy.value_net, mode=args.compile_mode,
+                fullgraph=False, dynamic=False,
+            )
+            print("[train_v2] action_net + value_net compile calls returned (lazy)")
+        except Exception as e:
+            print(f"[train_v2] policy heads compile FAILED: {e!r}")
+            print("[train_v2] continuing without policy compile")
 
     callbacks = []
     if args.checkpoint_freq > 0:
