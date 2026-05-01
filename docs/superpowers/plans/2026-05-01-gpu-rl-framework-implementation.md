@@ -399,6 +399,15 @@ git commit -m "test(gpu-env): assert panel/returns/valid_mask residency on cuda"
 
 ### Task 1.3: reset() returns valid obs shape and types
 
+> **NOTE from Phase 1 retro:** SB3 2.8's `obs_as_tensor` doesn't accept
+> `torch.Tensor` (only `np.ndarray` and `dict`). `reset()` and
+> `step_wait()` MUST materialise the cuda obs to numpy at the VecEnv
+> boundary. Internal panel stays on cuda; only the return value is
+> numpy. The test below uses numpy assertions to match that reality.
+> Also use a smaller `episode_length`/`forward_period` so the default
+> `n_dates=60` panel from `make_synthetic_panel` has a valid start
+> window.
+
 - [ ] **Step 1: Add test**
 
 Append to `tests/test_gpu_env.py`:
@@ -408,15 +417,17 @@ Append to `tests/test_gpu_env.py`:
 def test_reset_returns_correct_shape_and_dtype():
     syn = make_synthetic_panel()
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=3, seed=42)
+    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=3,
+                             episode_length=30, forward_period=5, seed=42)
     obs = env.reset()
-    assert isinstance(obs, torch.Tensor)
+    assert isinstance(obs, np.ndarray)
     assert obs.shape == (3, 50, 20)         # (n_envs, n_stocks, n_factors)
-    assert obs.dtype == torch.float32
-    assert obs.device.type == "cuda"
+    assert obs.dtype == np.float32
     # Each env got an independently sampled start
     starts = env.t.cpu().tolist()
     assert all(0 <= s for s in starts)
+    # Internal panel still cuda-resident
+    assert env.panel.device.type == "cuda"
 ```
 
 - [ ] **Step 2: Run, expect pass**
@@ -449,10 +460,12 @@ def test_step_returns_obs_rewards_dones_infos():
     env.step_async(actions)
     obs, rewards, dones, infos = env.step_wait()
 
-    assert isinstance(obs, torch.Tensor) and obs.shape == (2, 50, 20)
+    assert isinstance(obs, np.ndarray) and obs.shape == (2, 50, 20) and obs.dtype == np.float32
     assert isinstance(rewards, np.ndarray) and rewards.shape == (2,) and rewards.dtype == np.float32
     assert isinstance(dones, np.ndarray) and dones.shape == (2,) and dones.dtype == bool
     assert isinstance(infos, list) and len(infos) == 2
+    # Internal panel still cuda
+    assert env.panel.device.type == "cuda"
 ```
 
 - [ ] **Step 2: Run, expect fail**
@@ -677,6 +690,14 @@ agent-env is done. Branch ready to merge to main.
 
 **Worktree:** `D:/dev/aurumq-rl-wt-policy` (branch `feat/gpu-framework-policy`)
 **Files created:** `src/aurumq_rl/feature_extractor.py`, `src/aurumq_rl/policy.py`, `tests/test_policy.py`
+
+> **NOTE from Phase 1 retro:** The cuda obs is materialised to numpy at the
+> VecEnv boundary (see updated spec §5.4). SB3 will hand the policy an
+> `obs` tensor that's already converted from numpy and moved to cuda by
+> `obs_as_tensor`. So `PerStockExtractor.forward(obs)` receives a cuda
+> float32 tensor of shape `(B, n_stocks, n_factors)` — same as the spec
+> said, just travelling through numpy in the middle. No code change here,
+> just a head's-up.
 
 ### Task 2.1: PerStockExtractor scaffold
 

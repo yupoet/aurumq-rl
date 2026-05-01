@@ -189,8 +189,8 @@ def step_wait(self) -> tuple[torch.Tensor, np.ndarray, np.ndarray, list[dict]]:
 ```
 
 Notes on the SB3 VecEnv contract:
-- `obs` is returned as a torch tensor on cuda; SB3 calls `obs_as_tensor(obs, device)` which is a no-op when the tensor is already on the right device.
-- `rewards` and `dones` go to numpy because SB3's `RolloutBuffer.add()` expects numpy arrays — see §5.6.
+- `obs` is returned **as a numpy array**, NOT a cuda tensor. Although SB3 docs hint at `obs_as_tensor` accepting tensors, in stable-baselines3 2.8.0 (`stable_baselines3.common.utils.obs_as_tensor`) the function only handles `np.ndarray` and `dict[str, np.ndarray]` — passing a `torch.Tensor` raises `TypeError`. So `step_wait()` must materialise the cuda obs to numpy at the VecEnv boundary (`return self._current_obs().detach().cpu().numpy()`). The internal panel stays on cuda; only the SB3-facing return value is numpy. SB3 will then `.cpu().numpy() → torch.tensor → .to(device='cuda')` it again on the way to the policy. The round-trip cost is captured in §5.6 and mitigated by P1 (GPURolloutBuffer).
+- `rewards` and `dones` similarly go to numpy because SB3's `RolloutBuffer.add()` expects numpy arrays — see §5.6.
 - For done envs, the returned obs is the **post-reset** obs (auto-reset semantics), not the terminal obs. PPO doesn't need `terminal_observation` (it bootstraps with `next_value=0` on done), so we don't populate it. Off-policy algos would; out of scope here.
 - `info["episode"]` is what the legacy gymnasium `Monitor` wrapper provides; SB3's `WandbMetricsCallback` and tb logger read it to populate `rollout/ep_rew_mean` / `rollout/ep_len_mean`. We construct it manually here because there is no `Monitor` wrapper in our single-process flow.
 - `steps_done[i] = 0` and `prev_top_idx[i] = 0` are reset per-env via `_reset_done_envs(dones)`.
