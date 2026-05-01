@@ -74,12 +74,191 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "of VRAM and unlocking larger n_steps. See spec §5.6 P1/P2."
         ),
     )
+    # Phase 13 — PPO SGD perf-probe flags. None of these change training
+    # semantics; they only attach instrumentation when --profile-sgd is
+    # passed. Default off so existing flow is unchanged.
+    p.add_argument(
+        "--run-name",
+        default=None,
+        help=(
+            "Run identifier for log/run identification. "
+            "Defaults to the basename of --out-dir."
+        ),
+    )
+    p.add_argument(
+        "--profile-sgd",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable Phase 13 PPO SGD per-stage timing. Adds a few hundred "
+            "microseconds of cuda.synchronize() overhead per minibatch "
+            "(only for the first --profile-sgd-minibatches batches)."
+        ),
+    )
+    p.add_argument(
+        "--profile-sgd-minibatches",
+        type=int,
+        default=20,
+        help="Number of minibatches to instrument with stage timers.",
+    )
+    p.add_argument(
+        "--profile-torch-profiler",
+        type=int,
+        default=0,
+        help=(
+            "If > 0, additionally wrap the first N minibatches in "
+            "torch.profiler.profile and dump tables + chrome trace to "
+            "--profile-output-dir."
+        ),
+    )
+    p.add_argument(
+        "--profile-memory",
+        action="store_true",
+        default=False,
+        help="Forwarded to torch.profiler. Records cuda memory usage.",
+    )
+    p.add_argument(
+        "--profile-print-every",
+        type=int,
+        default=10,
+        help="Print running stage summary every N minibatches.",
+    )
+    p.add_argument(
+        "--profile-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Where to save profiler outputs. Defaults to "
+            "<out-dir>/profiler."
+        ),
+    )
     return p.parse_args(argv)
+
+
+def _write_phase13_perf_summary(
+    *,
+    out_dir: Path,
+    profile_output_dir: Path,
+    model,  # noqa: ANN001 - PPO or ProfiledPPO; both expose what we need
+    args: argparse.Namespace,
+    run_name: str,
+) -> None:
+    """Render Phase 13 perf summary to perf_summary.txt + perf_summary.json.
+
+    When --profile-sgd was off, writes a minimal stub explaining how to
+    enable profiling. When on, pulls stage_times + top profiler ops off
+    the ProfiledPPO instance, runs diagnose_bottleneck +
+    recommend_next_phase, and prints/saves the result.
+    """
+    txt_path = out_dir / "perf_summary.txt"
+    json_path = out_dir / "perf_summary.json"
+    if not args.profile_sgd:
+        stub = (
+            "Phase 13 perf-probe was OFF for this run.\n"
+            "Re-run with --profile-sgd to capture stage timings.\n"
+        )
+        txt_path.write_text(stub, encoding="utf-8")
+        json_path.write_text(
+            json.dumps({"profile_sgd": False, "run_name": run_name}, indent=2),
+            encoding="utf-8",
+        )
+        return
+
+    from aurumq_rl.profiler_utils import (
+        diagnose_bottleneck,
+        get_sgd_stage_times,
+        recommend_next_phase,
+    )
+    from aurumq_rl.ppo_profiled import write_perf_summary_json
+
+    stage_times = get_sgd_stage_times()
+    top_cuda = list(getattr(model, "_profile_top_cuda", []))
+    top_cpu = list(getattr(model, "_profile_top_cpu", []))
+
+    diagnosis = diagnose_bottleneck(stage_times, profiler_top_ops_cuda=top_cuda)
+    recommendation = recommend_next_phase(diagnosis)
+
+    config = {
+        "run_name": run_name,
+        "rollout_buffer": args.rollout_buffer,
+        "n_envs": args.n_envs,
+        "n_steps": args.n_steps,
+        "batch_size": args.batch_size,
+        "n_epochs": args.n_epochs,
+        "total_timesteps": args.total_timesteps,
+        "profile_sgd_minibatches": args.profile_sgd_minibatches,
+        "profile_torch_profiler_n": args.profile_torch_profiler,
+        "profile_memory": args.profile_memory,
+        "profile_output_dir": str(profile_output_dir),
+    }
+
+    # Plain-text summary — both printed and saved. Mirrors the structure
+    # so the reader can copy-paste from the terminal or open the file.
+    lines: list[str] = []
+    lines.append("=== Phase 13 PPO SGD Perf Summary ===")
+    lines.append("Config:")
+    for k, v in config.items():
+        lines.append(f"  {k}={v}")
+    lines.append("")
+    lines.append("Stage timings (ms):")
+    for name, values in stage_times.items():
+        if not values:
+            continue
+        mean_ms = sum(values) / len(values)
+        last_ms = values[-1]
+        total_s = sum(values) / 1000.0
+        lines.append(
+            f"  {name:30s} mean={mean_ms:7.2f} last={last_ms:7.2f} "
+            f"n={len(values):4d} total={total_s:6.2f}s"
+        )
+    if top_cuda:
+        lines.append("")
+        lines.append("Top-40 self_cuda ops (us):")
+        for name, value in top_cuda[:40]:
+            lines.append(f"  {value:12.1f}  {name}")
+    if top_cpu:
+        lines.append("")
+        lines.append("Top-40 self_cpu ops (us):")
+        for name, value in top_cpu[:40]:
+            lines.append(f"  {value:12.1f}  {name}")
+    lines.append("")
+    lines.append("Diagnosis:")
+    for k, v in diagnosis.items():
+        if k == "evidence":
+            continue
+        lines.append(f"  {k}: {v}")
+    lines.append("")
+    lines.append(f"Recommendation: {recommendation}")
+    text = "\n".join(lines) + "\n"
+    print()
+    print(text)
+    txt_path.write_text(text, encoding="utf-8")
+
+    write_perf_summary_json(
+        json_path,
+        config=config,
+        stage_times=stage_times,
+        top_cuda_ops=top_cuda,
+        top_cpu_ops=top_cpu,
+        diagnosis=diagnosis,
+        recommendation=recommendation,
+    )
+    print(f"[train_v2] perf summary saved: {txt_path} + {json_path}")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve profile output dir up front; even when --profile-sgd is off
+    # we keep the path resolution deterministic so downstream tooling can
+    # rely on it. mkdir is deferred to first write so the dir is only
+    # created when something is actually written there.
+    profile_output_dir = args.profile_output_dir or (args.out_dir / "profiler")
+
+    # --run-name defaults to basename of --out-dir to keep the existing
+    # dashboard/run-id behaviour stable.
+    run_name = args.run_name or args.out_dir.name
 
     print(f"[train_v2] loading panel from {args.data_path} ({args.start_date}..{args.end_date})...")
     loader = FactorPanelLoader(parquet_path=args.data_path)
@@ -148,7 +327,30 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
 
-    model = PPO(**ppo_kwargs)
+    # Phase 13: switch to ProfiledPPO when --profile-sgd is on. Behaves
+    # identically to SB3's PPO when the flag is off; the only reason to
+    # always use ProfiledPPO would be if we wanted profiling on by
+    # default — we don't. Keeping the conditional preserves the existing
+    # codepath byte-for-byte for non-profile runs.
+    if args.profile_sgd:
+        from aurumq_rl.ppo_profiled import ProfiledPPO
+        ppo_kwargs.update(
+            profile_sgd=True,
+            profile_sgd_minibatches=args.profile_sgd_minibatches,
+            profile_torch_profiler_n=args.profile_torch_profiler,
+            profile_memory=args.profile_memory,
+            profile_print_every=args.profile_print_every,
+            profile_output_dir=profile_output_dir,
+        )
+        print(
+            "[train_v2] PHASE 13 perf-probe ON: "
+            f"minibatches={args.profile_sgd_minibatches} "
+            f"torch_profiler_n={args.profile_torch_profiler} "
+            f"output_dir={profile_output_dir}"
+        )
+        model = ProfiledPPO(**ppo_kwargs)
+    else:
+        model = PPO(**ppo_kwargs)
 
     if args.rollout_buffer == "index":
         # Provider closures bound to env's panel + last_obs_t. After this
@@ -185,8 +387,21 @@ def main(argv: list[str] | None = None) -> int:
     ))
     print(f"[train_v2] live metrics jsonl: {metrics_path}")
 
-    print(f"[train_v2] training for {args.total_timesteps:,} steps (n_envs={args.n_envs})...")
+    print(f"[train_v2] training for {args.total_timesteps:,} steps (n_envs={args.n_envs}, run={run_name})...")
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks or None)
+
+    # Phase 13: emit perf summary (text + JSON) after training. Always
+    # write the empty file when --profile-sgd is off so downstream tools
+    # have a stable artefact to look for; the body just notes "profiling
+    # was off". When --profile-sgd is on, render full diagnosis +
+    # recommendation.
+    _write_phase13_perf_summary(
+        out_dir=args.out_dir,
+        profile_output_dir=profile_output_dir,
+        model=model,
+        args=args,
+        run_name=run_name,
+    )
 
     final_path = args.out_dir / "ppo_final.zip"
     model.save(str(final_path))
