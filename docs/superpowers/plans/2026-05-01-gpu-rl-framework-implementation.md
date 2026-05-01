@@ -1952,6 +1952,16 @@ git commit -m "feat(train_v2): GPU-vectorised PPO training entry with PerStockEn
 
 ### Task 5.3: 50k smoke run on combined SHORT panel
 
+> **Phase 5 retro patch:** `n_steps=1024` was the original plan but causes
+> SB3 `RolloutBuffer.reset()` to try allocating
+> `(1024, 12, 3014, 343)` fp32 = **47 GiB host RAM**, which fails on
+> a 64 GB box due to fragmentation. The fix is to shrink `n_steps` to
+> 128 → buffer ≈ 6 GiB, fits comfortably. Per-PPO-update transitions
+> drop from 12,288 to 1,536 — smaller but adequate for pipeline
+> validation. If smoke OOS Sharpe is materially worse than the R3
+> baseline (`+3.301 ± 20%`), the proper fix is GPURolloutBuffer
+> (deferred plan), not bumping `n_steps` back up at this scale.
+
 - [ ] **Step 1: Run the smoke**
 
 ```bash
@@ -1962,7 +1972,7 @@ mkdir -p runs/smoke_v2_50k
     --start-date 2023-01-03 --end-date 2025-06-30 \
     --universe-filter main_board_non_st \
     --n-envs 12 --episode-length 240 \
-    --batch-size 512 --n-steps 1024 --n-epochs 10 \
+    --batch-size 512 --n-steps 128 --n-epochs 10 \
     --learning-rate 1e-4 --target-kl 0.20 --max-grad-norm 0.5 \
     --out-dir runs/smoke_v2_50k 2>&1 | tee runs/smoke_v2_50k.log
 ```
@@ -1975,7 +1985,11 @@ Expected: completes without crash; produces `runs/smoke_v2_50k/ppo_final.zip` an
 grep -E "fps " runs/smoke_v2_50k.log | tail -5
 ```
 
-Acceptance: fps ≥ 500. If < 500, see `docs/superpowers/specs/2026-05-01-gpu-rl-framework-design.md` §10 risk #1 — escalate to GPURolloutBuffer (P1 mitigation).
+Acceptance: fps ≥ 500. If < 500 with this `n_steps=128` config, the
+default RolloutBuffer's CPU↔GPU round-trip is the dominant cost.
+Promote `GPURolloutBuffer` from "deferred" to next plan (cuda-resident
+buffer, also forces n_steps ≤ ~160 due to 12 GB VRAM ceiling, but
+eliminates the 50 GB-per-rollout PCIe traffic).
 
 ### Task 5.4: Backtest + factor importance on the smoke
 

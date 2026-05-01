@@ -206,7 +206,13 @@ SB3's `RolloutBuffer.add(obs, action, reward, ...)` stores everything as **numpy
 1. Pull obs from GPU → CPU → numpy, store in buffer (`step_wait`).
 2. Pull buffer slices back GPU at SGD time.
 
-Per step: `(n_envs, n_stocks, n_factors) × fp32 = 12 × 3014 × 343 × 4 B ≈ 50 MB / step / direction`. At `n_steps=1024`: ~50 GB cross-PCIe per rollout. PCIe gen4 x16 ≈ 32 GB/s → ~1.5 s per rollout just in transfers. **Real impact: fps target may degrade from 1000-3000 down to 500-800**. Not catastrophic but well below ceiling.
+**Two layered costs** here, the second of which v1 of this spec missed:
+
+**(a) Per-rollout PCIe transfer.** Per step: `(n_envs, n_stocks, n_factors) × fp32 = 12 × 3014 × 343 × 4 B ≈ 50 MB / step / direction`. At `n_steps=1024`: ~50 GB cross-PCIe per rollout. PCIe gen4 x16 ≈ 32 GB/s → ~1.5 s per rollout in transfers. Mitigated by P1 GPURolloutBuffer.
+
+**(b) Up-front buffer allocation (Phase 5 blocker).** SB3's `RolloutBuffer.reset()` pre-allocates `np.zeros((n_steps, n_envs, *obs_shape), dtype=fp32)` in **contiguous host RAM**. With `n_steps=1024 × n_envs=12 × n_stocks=3014 × n_factors=343 × 4 B = 47.3 GiB`. This **fails to allocate** even on a 64 GB host due to fragmentation. There is no fps measurement to make — training never starts.
+
+The fix that matches the v1 spec scope: **cap `n_steps` so the rollout buffer fits**. With `n_steps=128`: buffer ≈ 6 GB, fits cleanly. PPO transitions per update drop from 12,288 to 1,536 — adequate for pipeline validation, may need GPURolloutBuffer in a follow-up if it constrains learning quality.
 
 **Mitigation tiers (in order of effort):**
 1. **P0 (default for v1):** accept the overhead, measure actual fps in smoke. If ≥ 500 fps and GPU mean ≥ 70 %, ship.

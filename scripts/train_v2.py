@@ -40,7 +40,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--top-k", type=int, default=30)
     p.add_argument("--cost-bps", type=float, default=30.0)
     p.add_argument("--batch-size", type=int, default=512)
-    p.add_argument("--n-steps", type=int, default=1024)
+    p.add_argument(
+        "--n-steps",
+        type=int,
+        default=128,
+        help=(
+            "PPO rollout length per env. Default 128 keeps the SB3 "
+            "host-RAM RolloutBuffer at ~6 GB for n_envs=12 / 3014 stocks / "
+            "343 factors. Larger values (e.g. 1024) try to allocate ~47 GB "
+            "and crash. See spec §5.6(b)."
+        ),
+    )
     p.add_argument("--n-epochs", type=int, default=10)
     p.add_argument("--learning-rate", type=float, default=1e-4)
     p.add_argument("--target-kl", type=float, default=0.20)
