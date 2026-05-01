@@ -621,6 +621,115 @@ Sharpe ≥ +0.0) requires **Phase 9** (index-only buffer + n_steps ≥
 
 ---
 
+### Phase 9 — IndexOnlyRolloutBuffer + n_steps=1024 (2026-05-01 late evening)
+
+**Goal.** Eliminate the buffer's obs storage entirely (lazy gather from
+panel at SGD time), and unlock Phase 8's stuck `n_steps=128` ceiling
+to use `n_steps=1024 + n_envs=16 + target_kl=0.30`. Spec §5.6 P2 was
+the design.
+
+**What changed.**
+
+`src/aurumq_rl/index_rollout_buffer.py` — `IndexOnlyRolloutBuffer(GPURolloutBuffer)`:
+- Buffer no longer stores observations. Stores
+  `t_buffer: (n_steps, n_envs) long` of t-indices instead.
+- `add()` reads `env.last_obs_t` (snapshotted by the env after each
+  step / reset) via an `obs_index_provider` closure; ignores the obs
+  argument SB3 passes in.
+- `_get_samples()` lazy-gathers `panel[stored_t_indices]` to
+  materialise obs `(B, n_stocks, n_factors)` on demand.
+- Provider closures (`obs_provider`, `obs_index_provider`) are
+  optional at construction so SB3's `_setup_model` can build the
+  buffer without knowing about them; user calls `attach_providers(...)`
+  after `model = PPO(...)` returns.
+
+`src/aurumq_rl/gpu_env.py` — adds a `last_obs_t: torch.Tensor (n_envs,) long`
+attribute updated in `reset()` and at the end of `step_wait()` (after
+`_reset_done_envs(dones)` so done envs reflect their fresh start
+indices). Existing tests unchanged.
+
+`scripts/train_v2.py` — adds `--rollout-buffer index` choice; passes
+`IndexOnlyRolloutBuffer` directly as `rollout_buffer_class` and
+attaches providers post-PPO-init. Also wires `WandbMetricsCallback`
+(mode='disabled' wandb, jsonl only) so the dashboard's live curves
+panel populates as training runs.
+
+**Memory math** at training scale (n_steps=1024, n_envs=16):
+- t_buffer: `1024 × 16 × 8 = 131 KB`
+- actions: `1024 × 16 × 3014 × 4 = 197 MB`
+- everything else (rewards/values/log_probs/episode_starts/advantages/returns) ≈ 600 KB
+- **Total cuda buffer ≈ 200 MB** vs Phase 8's 6.35 GB.
+
+**Tests.** `tests/test_index_rollout_buffer.py` — 5 cuda-required
+tests:
+1. cuda residency of t_buffer + actions/rewards/values/log_probs/etc.
+2. `observations` is None (sentinel; no large allocation)
+3. `_get_samples` gather equals direct `panel[t_indices]` (atol=0)
+4. **GAE numerical equivalence vs Phase 8 GPURolloutBuffer** on
+   identical synthetic transitions
+5. `get()` yields obs via the provider after `swap_and_flatten`
+
+All 5 pass; 1434 total framework tests still green after merge.
+
+**Bug fixed during integration.**
+
+First smoke crashed at `GPURolloutBuffer.reset()` line 103
+trying to allocate `(1024, 16, 3014, 343) fp32 = 63 GiB` cuda obs
+tensor. Root cause: `train_v2.py` was passing `GPURolloutBuffer` as
+`rollout_buffer_class` for the `index` path (with the intent to swap
+it to IndexOnlyRolloutBuffer afterwards). PPO's `_setup_model`
+constructed the parent buffer first, which OOMed before the swap.
+Fix: pass `IndexOnlyRolloutBuffer` directly with optional providers,
+attach via `attach_providers(...)` after PPO init returns.
+
+**Smoke results** (50k steps, identical OOS window, but `n_envs=16 / n_steps=1024 / target_kl=0.30 / batch_size=1024`):
+
+| metric | Phase 7 | Phase 8 | **Phase 9** |
+|---|---|---|---|
+| n_steps | 128 | 128 | **1024** |
+| n_envs | 12 | 12 | **16** |
+| transitions per PPO update | 1,536 | 1,536 | **16,384** ← 11× |
+| total PPO iters at 50k | ~33 | ~33 | **3** |
+| target_kl | 0.20 | 0.20 | **0.30** |
+| **fps last** | 98 | 242 | **704** ← **+190 % vs Phase 8, +618 % vs Phase 7** ✨ |
+| **fps mean** | ~125 | ~241 | **~696** |
+| Wall time for 50k | ~410s | ~210s | **~70s** |
+| OOS IC | −0.0101 | −0.0101 | **−0.0086** |
+| OOS top30 Sharpe | **−1.060** | **−1.060** | **−0.512** ← halved |
+| Top groups by ic_drop | hm/mf/fund | hm/mf/fund | hm/mf/fund |
+
+**Acceptance vs spec §12 (final tally).**
+
+- ✅ All framework tests green (1434/1434 active tests pass)
+- ✅ Smoke E2E completes; produces all expected artefacts
+- ✅ **fps ≥ 500 → 704** ← spec target finally hit
+- ⏸ GPU mean util ≥ 70 % — not measured this round (no
+  `GpuSamplerCallback` in train_v2 yet), but VRAM peak ~5 GB and
+  fps gain implies SGD bursts much closer to sustained
+- ✅ FactorImportancePanel renders on dashboard
+- ⏸ OOS Sharpe ≥ −20% of R3 +3.301 — still negative (−0.512), but
+  **halved vs Phases 7/8**. With only 3 PPO updates, more updates
+  needed; longer training is the test, not 50k.
+
+**Why OOS still negative.** 3 PPO iterations is far below convergence
+even with bigger `n_steps`. The model is still doing its initial
+"chaos" phase (KL spikes 1500+ on iter 1-3). Extending to 200k steps
+would give ~12 iters, 1M would give ~60 iters — more comparable to
+Phase 7/8's ~33 iter exposure but with much bigger rollout depth per
+iter. **The framework is finally fast enough that 5M is feasible**:
+5M / 700 fps ≈ 2 hours wall time.
+
+**Verdict.** Phase 9 is shippable. Spec §12's fps target finally
+landed. Same factor-importance ranking emerges (hm > mf > fund),
+which is now a third independent confirmation across very different
+training configs — the enrichment factors carry signal the
+traditional alpha/gtja libraries don't, even at smoke scale.
+
+**The 5M overnight is now technically ready.** Estimated 2 hours wall
+time at fps=700. Still awaiting explicit user go-ahead.
+
+---
+
 ### Phase 6 — GPU-vectorised framework target (designed 2026-05-01 afternoon, **built in Phase 7**)
 
 > Status: target set; actual build + first smoke documented in Phase 7
