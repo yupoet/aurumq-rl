@@ -167,8 +167,15 @@ def test_gae_matches_cpu_baseline():
 
     cpu_adv = cpu_buf.advantages
     cpu_ret = cpu_buf.returns
-    gpu_adv = gpu_buf.advantages.detach().cpu().numpy()
-    gpu_ret = gpu_buf.returns.detach().cpu().numpy()
+    # After compute_returns_and_advantage(), GPURolloutBuffer exposes
+    # values/returns/advantages as numpy (so SB3's explained_variance
+    # works without dispatching np.var into a torch.Tensor). Cuda
+    # mirrors live on _values_cuda / _advantages_cuda / _returns_cuda.
+    gpu_adv = gpu_buf.advantages
+    gpu_ret = gpu_buf.returns
+    if hasattr(gpu_adv, "detach"):
+        gpu_adv = gpu_adv.detach().cpu().numpy()
+        gpu_ret = gpu_ret.detach().cpu().numpy()
 
     np.testing.assert_allclose(gpu_adv, cpu_adv, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(gpu_ret, cpu_ret, atol=1e-4, rtol=1e-4)

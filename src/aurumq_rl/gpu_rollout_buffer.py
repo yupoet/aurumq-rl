@@ -254,6 +254,24 @@ class GPURolloutBuffer(RolloutBuffer):
         # TD(lambda) target.
         self.returns = self.advantages + self.values
 
+        # SB3's PPO.train() does
+        #   explained_variance(rollout_buffer.values.flatten(),
+        #                      rollout_buffer.returns.flatten())
+        # which calls np.var() on the result. np.var() can't dispatch into
+        # torch.Tensor (its kwargs don't match torch's signature). The
+        # values / returns / advantages tensors are tiny — only
+        # (buffer_size, n_envs) floats, ~50 KB each at training scale —
+        # so a one-shot CPU mirror at the end of GAE costs nothing
+        # (compared with the per-step obs round-trip we are eliminating)
+        # and lets SB3's logging path read numpy as it expects. The cuda
+        # tensors stay live for _get_samples().
+        self._values_cuda = self.values
+        self._returns_cuda = self.returns
+        self._advantages_cuda = self.advantages
+        self.values = self.values.detach().cpu().numpy()
+        self.returns = self.returns.detach().cpu().numpy()
+        self.advantages = self.advantages.detach().cpu().numpy()
+
     # ------------------------------------------------------------------
     # Sampling
     # ------------------------------------------------------------------
@@ -282,17 +300,18 @@ class GPURolloutBuffer(RolloutBuffer):
         indices = np.random.permutation(total)
 
         if not self.generator_ready:
-            for name in (
-                "observations",
-                "actions",
-                "values",
-                "log_probs",
-                "advantages",
-                "returns",
-            ):
+            # Swap the cuda copies that _get_samples reads from. The
+            # numpy mirrors of values/returns/advantages produced in
+            # compute_returns_and_advantage() are NOT flattened here —
+            # SB3's external readers (`explained_variance` etc.) call
+            # `.flatten()` on them themselves.
+            for name in ("observations", "actions", "log_probs"):
                 self.__dict__[name] = self.swap_and_flatten_torch(
                     self.__dict__[name]
                 )
+            self._values_cuda = self.swap_and_flatten_torch(self._values_cuda)
+            self._returns_cuda = self.swap_and_flatten_torch(self._returns_cuda)
+            self._advantages_cuda = self.swap_and_flatten_torch(self._advantages_cuda)
             self.generator_ready = True
 
         if batch_size is None:
@@ -318,15 +337,20 @@ class GPURolloutBuffer(RolloutBuffer):
         else:
             batch_inds = batch_inds.to(self.device, dtype=th.long)
 
-        # All tensors already swap_and_flatten'd by get().
+        # All tensors already swap_and_flatten'd by get(). Read values /
+        # returns / advantages from the cuda mirrors, NOT the numpy copies
+        # we exposed to SB3 in compute_returns_and_advantage().
+        values_cuda = getattr(self, "_values_cuda", self.values)
+        returns_cuda = getattr(self, "_returns_cuda", self.returns)
+        advantages_cuda = getattr(self, "_advantages_cuda", self.advantages)
         return RolloutBufferSamples(
             observations=self.observations[batch_inds],
             # Match parent: cast actions to float32 for the loss (this is
             # a no-op when actions are already float32, which they are for
             # our Box action space).
             actions=self.actions[batch_inds].to(dtype=th.float32),
-            old_values=self.values[batch_inds].flatten(),
+            old_values=values_cuda[batch_inds].flatten(),
             old_log_prob=self.log_probs[batch_inds].flatten(),
-            advantages=self.advantages[batch_inds].flatten(),
-            returns=self.returns[batch_inds].flatten(),
+            advantages=advantages_cuda[batch_inds].flatten(),
+            returns=returns_cuda[batch_inds].flatten(),
         )
