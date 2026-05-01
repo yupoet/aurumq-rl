@@ -87,3 +87,13 @@ def test_auto_reset_on_episode_end():
     assert env.steps_done[0].item() == 0, "steps_done resets after auto-reset"
     # New start was sampled (very likely different)
     assert env.t[0].item() != initial_t[0].item()
+
+
+@cuda
+def test_vecenv_required_methods():
+    syn = make_synthetic_panel()
+    panel, returns, valid_mask = _panel_to_cuda(syn)
+    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=2)
+    assert env.get_attr("render_mode") == [None, None]
+    assert env.env_is_wrapped(object) == [False, False]
+    env.close()
