@@ -15,6 +15,8 @@ import type {
 
 // Re-export shared types so existing server-side imports keep working.
 export type {
+  FactorGroupImportance,
+  FactorImportance,
   GpuSample,
   RunGroup,
   RunListEntry,
@@ -231,6 +233,15 @@ export async function metricsJsonlSize(id: string): Promise<number> {
 
 export async function readBacktestSeries(id: string): Promise<unknown | null> {
   const p = path.join(RUNS_DIR, ...id.split("/"), "backtest_series.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+export async function readFactorImportance(id: string): Promise<unknown | null> {
+  const p = path.join(RUNS_DIR, ...id.split("/"), "factor_importance.json");
   try {
     return JSON.parse(await fs.readFile(p, "utf-8"));
   } catch {

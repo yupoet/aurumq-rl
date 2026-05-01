@@ -85,3 +85,23 @@ export function groupRuns(runs: RunListEntry[]): RunDisplay[] {
   });
   return out;
 }
+
+export interface FactorGroupImportance {
+  n_factors: number;
+  n_seeds: number;
+  ic_drop_mean: number;
+  ic_drop_std: number;
+  sharpe_drop_mean: number;
+  sharpe_drop_std: number;
+  saliency_mean?: number;
+  saliency_max?: number;
+  saliency_std?: number;
+}
+
+export interface FactorImportance {
+  method: string;
+  panel: string;
+  val_window: string;
+  saliency_per_factor: Record<string, number>;
+  importance_per_group: Record<string, FactorGroupImportance>;
+}
