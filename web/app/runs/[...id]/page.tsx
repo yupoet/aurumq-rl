@@ -5,6 +5,7 @@ import {
   metricsJsonlSize,
   readBacktest,
   readBacktestSeries,
+  readFactorImportance,
   readGpuJsonl,
   readMetricsJsonl,
   readSummary,
@@ -19,6 +20,8 @@ import {
   type BacktestSeriesData,
 } from "@/components/BacktestSeriesPanel";
 import { GpuMetricsPanel } from "@/components/GpuMetricsPanel";
+import { FactorImportancePanel } from "@/components/FactorImportancePanel";
+import type { FactorImportance } from "@/lib/runs-shared";
 
 export const dynamic = "force-dynamic";
 
@@ -35,13 +38,14 @@ export default async function RunDetailPage({
   const { id } = await params;
   const decoded = id.map((s) => decodeURIComponent(s)).join("/");
 
-  const [summary, metrics, backtest, series, gpu, live, initialOffset] =
+  const [summary, metrics, backtest, series, gpu, fi, live, initialOffset] =
     await Promise.all([
       readSummary(decoded),
       readMetricsJsonl(decoded),
       readBacktest(decoded) as Promise<BacktestData | null>,
       readBacktestSeries(decoded) as Promise<BacktestSeriesData | null>,
       readGpuJsonl(decoded),
+      readFactorImportance(decoded) as Promise<FactorImportance | null>,
       isRunLive(decoded),
       metricsJsonlSize(decoded),
     ]);
@@ -86,6 +90,7 @@ export default async function RunDetailPage({
         <BacktestSeriesPanel data={series} realizedSharpe={backtest.top_k_sharpe} />
       )}
       {gpu.length > 0 && <GpuMetricsPanel data={gpu} />}
+      {fi != null && <FactorImportancePanel data={fi} />}
     </main>
   );
 }
