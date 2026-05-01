@@ -35,6 +35,7 @@ class PerStockExtractor(BaseFeaturesExtractor):
         observation_space: gym.spaces.Box,
         hidden: tuple[int, ...] = (128, 64),
         out_dim: int = 32,
+        unique_date: bool = False,
     ):
         # observation_space.shape = (n_stocks, n_factors)
         n_stocks, n_factors = observation_space.shape
@@ -44,6 +45,11 @@ class PerStockExtractor(BaseFeaturesExtractor):
         self.n_stocks = n_stocks
         self.n_factors = n_factors
         self.out_dim = out_dim
+        # Phase 14B: detect duplicate dates in a PPO mini-batch and encode
+        # each unique date once, broadcasting back to the full batch via
+        # the inverse map. Phase 13 measured dup_factor ≈ 2.4, so encoder
+        # forward+backward should drop by ~58%. Off by default.
+        self.unique_date = unique_date
         # Pooled features (consumed by the value head) are concat of two
         # out_dim-sized vectors. Expose for caller introspection.
         self.pooled_dim = 2 * out_dim
@@ -61,8 +67,45 @@ class PerStockExtractor(BaseFeaturesExtractor):
     def forward(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         # obs: (B, n_stocks, n_factors)
         b, s, f = obs.shape
-        flat = obs.reshape(b * s, f)
-        normed = self.norm(self.mlp(flat).reshape(b, s, self.out_dim))
+
+        if self.unique_date and b > 1:
+            # Phase 14B: detect unique dates by hashing the first-stock row.
+            # All n_stocks share the same trade_date in any obs, so
+            # obs[i, 0, :] uniquely identifies the date for batch slot i
+            # (env obs is purely panel[t] — see gpu_env._current_obs).
+            first_rows = obs[:, 0, :]  # (B, F)
+            unique_first, inverse = torch.unique(
+                first_rows, dim=0, return_inverse=True
+            )
+            u = unique_first.shape[0]
+            if u < b:
+                # Pick one representative batch slot per unique date (the
+                # lowest index). scatter_reduce_(amin) is the GPU-friendly
+                # way to materialize first_occurrence[u] = min{i: inverse[i] == u}.
+                first_occurrence = torch.full(
+                    (u,), b, dtype=torch.long, device=obs.device
+                )
+                batch_idx = torch.arange(b, device=obs.device)
+                first_occurrence.scatter_reduce_(
+                    0, inverse, batch_idx, reduce="amin", include_self=True
+                )
+                obs_unique = obs[first_occurrence]  # (U, S, F)
+                flat = obs_unique.reshape(u * s, f)
+                encoded_unique = self.mlp(flat).reshape(u, s, self.out_dim)
+                normed_unique = self.norm(encoded_unique)
+                # Broadcast back via inverse — gradients accumulate
+                # correctly at duplicated indices (PyTorch sums grads
+                # at gather/index targets).
+                normed = normed_unique[inverse]  # (B, S, out_dim)
+            else:
+                # No duplicates this batch — fall through to vanilla path
+                # (avoids the extra index ops when there's nothing to save).
+                flat = obs.reshape(b * s, f)
+                normed = self.norm(self.mlp(flat).reshape(b, s, self.out_dim))
+        else:
+            # Vanilla path (unchanged from Phase 10).
+            flat = obs.reshape(b * s, f)
+            normed = self.norm(self.mlp(flat).reshape(b, s, self.out_dim))
 
         # market_mean is computed BEFORE centering on purpose (see class docstring).
         market_mean = normed.mean(dim=1)

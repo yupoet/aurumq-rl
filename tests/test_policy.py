@@ -146,3 +146,52 @@ def test_policy_value_net_input_dim_matches_pooled():
     policy = _make_policy(n_stocks=50, n_factors=20)
     first_linear = next(m for m in policy.value_net.modules() if isinstance(m, torch.nn.Linear))
     assert first_linear.in_features == 2 * policy._encoder_out_dim
+
+
+def test_extractor_unique_date_no_dups_matches_vanilla():
+    """With all-distinct obs, unique path output equals vanilla within fp32 rounding."""
+    torch.manual_seed(0)
+    ext_v = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8, unique_date=False)
+    ext_u = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8, unique_date=True)
+    # share weights
+    ext_u.load_state_dict(ext_v.state_dict())
+    obs = torch.randn(4, 50, 20)
+    # rows are all distinct (random) → unique path falls through to vanilla
+    with torch.no_grad():
+        out_v = ext_v(obs)
+        out_u = ext_u(obs)
+    assert torch.allclose(out_v["per_stock"], out_u["per_stock"], atol=1e-5)
+    assert torch.allclose(out_v["pooled"], out_u["pooled"], atol=1e-5)
+
+
+def test_extractor_unique_date_with_dups_matches_vanilla():
+    """With duplicate dates (rows 0 and 2 identical), unique path output matches vanilla."""
+    torch.manual_seed(1)
+    ext_v = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8, unique_date=False)
+    ext_u = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8, unique_date=True)
+    ext_u.load_state_dict(ext_v.state_dict())
+    obs = torch.randn(4, 50, 20)
+    obs[2] = obs[0].clone()  # row 2 = row 0 (duplicate date)
+    obs[3] = obs[1].clone()  # row 3 = row 1
+    with torch.no_grad():
+        out_v = ext_v(obs)
+        out_u = ext_u(obs)
+    # output rows should match between paths
+    assert torch.allclose(out_v["per_stock"], out_u["per_stock"], atol=1e-5)
+    assert torch.allclose(out_v["pooled"], out_u["pooled"], atol=1e-5)
+    # rows 0,2 should be identical in both paths (since input rows are identical)
+    assert torch.allclose(out_u["per_stock"][0], out_u["per_stock"][2], atol=1e-5)
+
+
+def test_extractor_unique_date_gradient_flows():
+    """Backward through unique path produces non-zero grads on every parameter."""
+    torch.manual_seed(2)
+    ext = PerStockExtractor(_obs_space(50, 20), hidden=(64,), out_dim=8, unique_date=True)
+    obs = torch.randn(4, 50, 20)
+    obs[2] = obs[0].clone()  # introduce a duplicate
+    out = ext(obs)
+    loss = out["per_stock"].pow(2).mean() + out["pooled"].pow(2).mean()
+    loss.backward()
+    for name, p in ext.named_parameters():
+        assert p.grad is not None, f"{name}: grad is None"
+        assert p.grad.abs().max().item() > 0, f"{name}: grad is all-zero"

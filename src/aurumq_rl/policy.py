@@ -49,12 +49,15 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         encoder_hidden: tuple[int, ...] = (128, 64),
         encoder_out_dim: int = 32,
         value_hidden: tuple[int, ...] = (64,),
+        unique_date: bool = False,
         **kwargs: Any,
     ):
         # Hand the kwargs to SB3 with a custom features_extractor
         kwargs["features_extractor_class"] = PerStockExtractor
         kwargs["features_extractor_kwargs"] = {
-            "hidden": encoder_hidden, "out_dim": encoder_out_dim,
+            "hidden": encoder_hidden,
+            "out_dim": encoder_out_dim,
+            "unique_date": unique_date,
         }
         kwargs["share_features_extractor"] = True
         # Disable SB3's mlp_extractor splits with empty net_arch
