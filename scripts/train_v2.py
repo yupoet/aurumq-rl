@@ -40,7 +40,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--forward-period", type=int, default=10)
     p.add_argument("--top-k", type=int, default=30)
     p.add_argument("--cost-bps", type=float, default=30.0)
-    p.add_argument("--batch-size", type=int, default=512)
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=2048,
+        help=(
+            "PPO mini-batch size. Default 2048 — bigger batches keep the "
+            "GPU's tensor cores saturated during SGD on the per-stock "
+            "encoder; combined with bf16 autocast (Phase 11) this raises "
+            "fps ~2-2.5x. Cap is VRAM headroom: at obs (3014, 343) fp32 "
+            "and bf16 activations, batch=2048 sits ~9 GB on the 4070's "
+            "12 GB. Halve to 1024 if you OOM."
+        ),
+    )
     p.add_argument(
         "--n-steps",
         type=int,

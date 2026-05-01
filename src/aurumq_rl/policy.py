@@ -107,30 +107,55 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
     def _features(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         return self.features_extractor(obs)
 
+    @staticmethod
+    def _autocast():
+        """Mixed-precision context for the encoder + heads.
+
+        bf16 has fp32-equivalent dynamic range so no GradScaler is
+        needed and KL/entropy math downstream stays numerically stable.
+        Outside cuda we just yield a no-op contextmanager.
+        """
+        if torch.cuda.is_available():
+            return torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+        from contextlib import nullcontext
+        return nullcontext()
+
     def forward(self, obs, deterministic: bool = False):
-        feats = self._features(obs)
-        scores = self.action_net(feats["per_stock"]).squeeze(-1)  # (B, S)
-        values = self.value_net(feats["pooled"]).squeeze(-1)      # (B,)
+        with self._autocast():
+            feats = self._features(obs)
+            scores = self.action_net(feats["per_stock"]).squeeze(-1)  # (B, S)
+            values = self.value_net(feats["pooled"]).squeeze(-1)      # (B,)
+        # Cast back to fp32 for the action distribution + log-prob math.
+        # log_std is fp32; mixing dtypes in DiagGaussian breaks KL.
+        scores = scores.float()
+        values = values.float()
         distribution = self.action_dist.proba_distribution(scores, self.log_std)
         actions = distribution.get_actions(deterministic=deterministic)
         log_probs = distribution.log_prob(actions)
         return actions, values, log_probs
 
     def evaluate_actions(self, obs, actions):
-        feats = self._features(obs)
-        scores = self.action_net(feats["per_stock"]).squeeze(-1)
-        values = self.value_net(feats["pooled"]).squeeze(-1)
+        with self._autocast():
+            feats = self._features(obs)
+            scores = self.action_net(feats["per_stock"]).squeeze(-1)
+            values = self.value_net(feats["pooled"]).squeeze(-1)
+        scores = scores.float()
+        values = values.float()
         distribution = self.action_dist.proba_distribution(scores, self.log_std)
         log_probs = distribution.log_prob(actions)
         entropy = distribution.entropy()
         return values, log_probs, entropy
 
     def predict_values(self, obs):
-        feats = self._features(obs)
-        return self.value_net(feats["pooled"]).squeeze(-1)
+        with self._autocast():
+            features = self._features(obs)
+            values = self.value_net(features["pooled"]).squeeze(-1)
+        return values.float()
 
     def _predict(self, obs, deterministic: bool = False):
-        feats = self._features(obs)
-        scores = self.action_net(feats["per_stock"]).squeeze(-1)
+        with self._autocast():
+            feats = self._features(obs)
+            scores = self.action_net(feats["per_stock"]).squeeze(-1)
+        scores = scores.float()
         distribution = self.action_dist.proba_distribution(scores, self.log_std)
         return distribution.get_actions(deterministic=deterministic)
