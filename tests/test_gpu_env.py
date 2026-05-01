@@ -61,3 +61,29 @@ def test_step_returns_obs_rewards_dones_infos():
     assert isinstance(rewards, np.ndarray) and rewards.shape == (2,) and rewards.dtype == np.float32
     assert isinstance(dones, np.ndarray) and dones.shape == (2,) and dones.dtype == bool
     assert isinstance(infos, list) and len(infos) == 2
+
+
+@cuda
+def test_auto_reset_on_episode_end():
+    syn = make_synthetic_panel(n_dates=60)
+    panel, returns, valid_mask = _panel_to_cuda(syn)
+    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=1, episode_length=5,
+                             forward_period=2, top_k=5, seed=0)
+    env.reset()
+    initial_t = env.t.clone()
+    actions = np.zeros((1, 50), dtype=np.float32)
+    last_info = None
+    last_done = False
+    for _ in range(6):
+        env.step_async(actions)
+        _, _, dones, infos = env.step_wait()
+        if dones[0]:
+            last_done = True
+            last_info = infos[0]
+            break
+    assert last_done, "episode_length=5 should fire done within 6 steps"
+    assert "episode" in last_info, "done env must populate info['episode']"
+    assert {"r", "l"} <= last_info["episode"].keys()
+    assert env.steps_done[0].item() == 0, "steps_done resets after auto-reset"
+    # New start was sampled (very likely different)
+    assert env.t[0].item() != initial_t[0].item()
