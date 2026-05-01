@@ -73,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(sc, list) and sc:
             train_stock_codes = list(sc)
             print(f"[backtest] training universe: {len(train_stock_codes)} stocks (will align)")
+        # Default --n-factors to whatever training used. Required when the
+        # OOS panel has more factor columns than the model was trained on
+        # (e.g. combined panels with 350+ cols vs n_factors=64 at train).
+        if args.n_factors is None and isinstance(meta.get("factor_count"), int):
+            args.n_factors = int(meta["factor_count"])
+            print(
+                f"[backtest] n_factors={args.n_factors} (from training metadata)"
+            )
         # Honour per-prefix weights used at training time so OOS sees the
         # same scaling. Missing field -> no weighting (legacy runs).
         fgw = meta.get("feature_group_weights")
