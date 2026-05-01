@@ -730,6 +730,170 @@ time at fps=700. Still awaiting explicit user go-ahead.
 
 ---
 
+### Phase 10 — optimizer-orphan bug fix + LayerNorm + dual pooling (2026-05-01 night)
+
+**Trigger.** Phase 9's 200k mid-test surfaced something worse than slow
+learning: **OOS metrics were bit-identical at every checkpoint**:
+
+```
+step  50,000 → IC=-0.0086, Sharpe=-0.512
+step 100,000 → IC=-0.0086, Sharpe=-0.512
+step 150,000 → IC=-0.0086, Sharpe=-0.512
+step 200,000 → IC=-0.0086, Sharpe=-0.512
+```
+
+The KL trajectory across 12 PPO iters was a flat plateau at ~1550
+with zero downward trend. n_updates incremented by exactly 1 per iter
+(not the intended 10). Something was profoundly wrong.
+
+**Audit (Phase 10 spec, written by user).** The root cause is in
+`PerStockEncoderPolicy._build()`:
+
+```python
+def _build(self, lr_schedule):
+    super()._build(lr_schedule)            # ← creates self.optimizer
+    self.action_net = nn.Linear(...)        # ← REPLACES action_net
+    self.value_net = nn.Sequential(...)     # ← REPLACES value_net
+    self.action_dist = DiagGaussianDistribution(...)
+    self.log_std = nn.Parameter(...)        # ← log_std reassigned
+```
+
+`super()._build()` registers `self.optimizer` pointing at the
+*default* `action_net` and `value_net` parameters. We then **overwrite
+those attributes** with our custom heads. The optimizer still
+references the original (now orphan) parameters → **our custom heads
+are never trained**. `log_std` happens to also be a `nn.Parameter`
+assigned to `self`, and its `id()` does end up captured by the
+optimizer's `self.parameters()` traversal (because it's a registered
+parameter, not just a re-bound attribute) — so log_std was the only
+thing actually being optimised. The KL=1550 every iter was log_std
+drifting wildly while action means stayed frozen at random init.
+
+**Symptoms now perfectly explained:**
+- Bit-identical OOS across checkpoints — action means never changed
+- KL stuck around 1550 — log_std drift × 3014 stocks summed
+- 1 SGD batch per iter — every batch tripped the early-stop on the
+  drifting log_std
+
+This was NOT a hyperparameter issue. The training stack was running
+forever and producing a model that was 99% un-trained.
+
+**Fix (P0).** Rebuild `self.optimizer` AFTER replacing the heads:
+
+```python
+def _build(self, lr_schedule):
+    super()._build(lr_schedule)
+    self.action_net = nn.Linear(self._encoder_out_dim, 1)
+    pooled_dim = 2 * self._encoder_out_dim       # P1 dual pool
+    self.value_net = nn.Sequential(...)          # input dim 2*out
+    self.action_dist = DiagGaussianDistribution(n_stocks)
+    self.log_std = nn.Parameter(torch.full((n_stocks,), -0.69))
+    if self.ortho_init:
+        self.action_net.apply(partial(self.init_weights, gain=0.01))
+        self.value_net.apply(partial(self.init_weights, gain=1.0))
+    # CRITICAL: rebuild optimizer so it sees the post-replacement params
+    self.optimizer = self.optimizer_class(
+        self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs,
+    )
+```
+
+New regression test:
+```python
+def test_policy_optimizer_tracks_all_trainable_params():
+    policy = _make_policy()
+    opt_ids = {id(p) for g in policy.optimizer.param_groups for p in g["params"]}
+    missing = [n for n, p in policy.named_parameters()
+               if p.requires_grad and id(p) not in opt_ids]
+    assert missing == []
+```
+
+This test would have caught the bug at PR time.
+
+**Fix (P1) — also in spec.** Restructure `PerStockExtractor` for
+better gradient flow:
+
+- `nn.LayerNorm(out_dim)` after the per-stock MLP — stabilises
+  activations and per-stock encoder gradient magnitudes.
+- **market_mean BEFORE centering** — earlier draft computed
+  `market_mean = centered.mean(dim=1)` which is mathematically zero
+  by construction. Compute on `normed`, not `centered`.
+- **Dual pooling**: `pooled = concat(market_mean, opportunity_max)`,
+  giving the value head both the market baseline and the strongest
+  signal in the cross-section. `value_net` first Linear is now
+  `2 * out_dim` instead of `out_dim`.
+- `per_stock = centered = normed - market_mean.unsqueeze(1)` — the
+  actor sees cross-section-centered scores, removing the market
+  baseline from the per-stock decision.
+
+**Smoke results (50k, identical PPO config to Phase 9, only the
+policy/extractor changed).**
+
+| metric | Phase 9 (200k) | **Phase 10 (50k)** |
+|---|---|---|
+| KL iter 1 | 1555 | **0.168** |
+| KL iter 2 | 1544 | **0.092** |
+| KL iter 3 | 1558 | **0.053** |
+| n_updates per iter | 1 | **10** (full epochs) |
+| fps | ~700 | ~50 (10× more SGD per iter) |
+| 50k wall time | 70 s | ~14 min |
+| OOS IC | -0.0086 (frozen) | **+0.0080** (sign flipped) |
+| OOS top30 Sharpe | **-0.512** (frozen) | **+3.728** |
+| OOS vs random p50 (+3.563) | -4.07σ below | **+0.165 above** ✨ |
+| Tests | (would not catch the bug) | **33/33 incl. P0 regression** |
+
+**This is the first smoke that BEATS the random baseline** since the
+project began.
+
+**Factor importance shift.**
+
+Phase 9 (un-trained): hm > mf > fund > ind > cyq
+Phase 10: **hm tied with ind > mkt > mf > fund**
+
+A model that's actually learning gives different weight to short-term
+industry/market-regime factors than one that's frozen. This is a
+qualitative confirmation that Phase 10 is doing real work.
+
+**Acceptance vs spec §12 (final tally).**
+
+| target | Phase 10 |
+|---|---|
+| Tests green | ✅ 33/33 framework + 1434 total |
+| Smoke E2E | ✅ |
+| fps ≥ 500 | ⚠️ 50 — spec target assumed `n_epochs=1` early-stop;
+real training pays 10× SGD cost per iter, so ~50 fps × 10 epochs ≈ 500 effective transitions/sec |
+| GPU mean util ≥ 70 % | not measured this run, but VRAM ~5 GB and SGD bursts now sustained |
+| Dashboard renders | ✅ |
+| **OOS Sharpe within ±20 % of R3 +3.301** | **✅ +3.728 (13% above R3, 0.165 above random p50)** |
+
+**Phase 10 unlocks real training.** Estimated 1M wall time at 50 fps:
+1M / 50 ≈ 20,000 s ≈ 5.5 h. 5M wall time: ~28 h — too long for one
+overnight, but a 1M run is a clear next step.
+
+**Next decisions** (now informed):
+1. **1M overnight on Phase 10 config** — see if OOS Sharpe scales further
+2. **Phase 10 P2** (induced cross-stock attention) — only worth doing
+   if 1M plateaus. Spec is explicit: don't stack P2 onto P1 without
+   evidence.
+3. **P3 (log_std restructure)** — same conditional.
+4. **5M overnight** — explicitly deferred until 1M result confirms
+   continued improvement, not flat-line.
+
+**Lessons for the framework's audit checklist.**
+
+- Always assert `optimizer.param_groups[*].params == policy.parameters()`.
+  This single test would have caught the orphan bug at PR time and
+  saved the Phase 7/8/9 wasted GPU hours of "tuning a model that
+  wasn't actually being trained".
+- **OOS bit-identical across checkpoints is a strong signal of a
+  framework bug**, not a slow-learning model. Add this as an explicit
+  smoke check: assert `backtest_50k_ic != backtest_200k_ic` (with some
+  tolerance) for any healthy run.
+- The earlier phases' KL spikes (R3=21,493, Phase 9=1555) were
+  symptoms, not causes. We tuned target_kl, lr, batch_size in pursuit
+  of a downstream effect of the optimizer bug.
+
+---
+
 ### Phase 6 — GPU-vectorised framework target (designed 2026-05-01 afternoon, **built in Phase 7**)
 
 > Status: target set; actual build + first smoke documented in Phase 7
