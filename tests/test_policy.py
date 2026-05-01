@@ -110,3 +110,16 @@ def test_policy_bf16_autocast_finite():
     assert torch.isfinite(actions).all()
     assert torch.isfinite(values).all()
     assert torch.isfinite(log_probs).all()
+
+
+def test_policy_optimizer_tracks_all_trainable_params():
+    """P0 regression: rebuilt optimizer must see every trainable parameter."""
+    policy = _make_policy(n_stocks=50, n_factors=20)
+    opt_ids = {id(p) for g in policy.optimizer.param_groups for p in g["params"]}
+    missing = [
+        name for name, p in policy.named_parameters()
+        if p.requires_grad and id(p) not in opt_ids
+    ]
+    assert missing == [], (
+        f"optimizer is missing {len(missing)} trainable parameters: {missing}"
+    )

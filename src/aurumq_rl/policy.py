@@ -9,6 +9,7 @@ extractor returns a dict and the two heads need different shapes.
 """
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import gymnasium as gym
@@ -81,6 +82,22 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         # Re-init action distribution + log_std
         self.action_dist = DiagGaussianDistribution(n_stocks)
         self.log_std = nn.Parameter(torch.full((n_stocks,), -0.69, dtype=torch.float32))  # ~log(0.5)
+
+        if getattr(self, "ortho_init", False):
+            self.action_net.apply(partial(self.init_weights, gain=0.01))
+            self.value_net.apply(partial(self.init_weights, gain=1.0))
+
+        # CRITICAL: rebuild optimizer so it tracks the post-replacement
+        # action_net / value_net / log_std parameters. Without this, only
+        # parameters present at super()._build() time get optimized — which
+        # was the latent bug surfaced by the Phase 9 200k mid-test (OOS
+        # metrics bit-identical at every checkpoint because action_mean was
+        # frozen at random init, only log_std was drifting).
+        self.optimizer = self.optimizer_class(
+            self.parameters(),
+            lr=lr_schedule(1),
+            **self.optimizer_kwargs,
+        )
 
     def _features(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         return self.features_extractor(obs)
