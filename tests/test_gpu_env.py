@@ -37,10 +37,11 @@ def test_reset_returns_correct_shape_and_dtype():
     env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=3,
                              episode_length=30, forward_period=5, seed=42)
     obs = env.reset()
-    assert isinstance(obs, torch.Tensor)
+    # SB3 VecEnv contract requires numpy obs; internal panel stays on cuda.
+    assert isinstance(obs, np.ndarray)
     assert obs.shape == (3, 50, 20)         # (n_envs, n_stocks, n_factors)
-    assert obs.dtype == torch.float32
-    assert obs.device.type == "cuda"
+    assert obs.dtype == np.float32
+    assert env.panel.device.type == "cuda"  # internal residency unchanged
     # Each env got an independently sampled start
     starts = env.t.cpu().tolist()
     assert all(0 <= s for s in starts)
@@ -57,7 +58,7 @@ def test_step_returns_obs_rewards_dones_infos():
     env.step_async(actions)
     obs, rewards, dones, infos = env.step_wait()
 
-    assert isinstance(obs, torch.Tensor) and obs.shape == (2, 50, 20)
+    assert isinstance(obs, np.ndarray) and obs.shape == (2, 50, 20)
     assert isinstance(rewards, np.ndarray) and rewards.shape == (2,) and rewards.dtype == np.float32
     assert isinstance(dones, np.ndarray) and dones.shape == (2,) and dones.dtype == bool
     assert isinstance(infos, list) and len(infos) == 2
@@ -97,3 +98,18 @@ def test_vecenv_required_methods():
     assert env.get_attr("render_mode") == [None, None]
     assert env.env_is_wrapped(object) == [False, False]
     env.close()
+
+
+@cuda
+def test_sb3_ppo_one_rollout():
+    """Smoke: SB3 PPO can collect one rollout against our VecEnv without crashing."""
+    from stable_baselines3 import PPO
+
+    syn = make_synthetic_panel(n_dates=120, n_stocks=20, n_factors=8)
+    panel, returns, valid_mask = _panel_to_cuda(syn)
+    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=4, episode_length=30,
+                             forward_period=5, top_k=4, seed=0)
+    model = PPO("MlpPolicy", env, n_steps=64, batch_size=32, n_epochs=1,
+                verbose=0, device="cuda")
+    model.learn(total_timesteps=256)
+    # If we got here, collect_rollouts + train both worked

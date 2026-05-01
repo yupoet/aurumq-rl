@@ -81,7 +81,7 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done.zero_()
         self.episode_returns.zero_()
         self.prev_top_idx.zero_()
-        return self._current_obs()
+        return self._obs_for_sb3()
 
     def step_async(self, actions):
         self._pending_action = self._coerce_action(actions)
@@ -126,7 +126,7 @@ class GPUStockPickingEnv(VecEnv):
                 }
             self._reset_done_envs(dones)
 
-        obs = self._current_obs()
+        obs = self._obs_for_sb3()
         return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
 
     def _reset_done_envs(self, dones: torch.Tensor) -> None:
@@ -176,6 +176,18 @@ class GPUStockPickingEnv(VecEnv):
 
     def _current_obs(self) -> torch.Tensor:
         return self.panel[self.t]
+
+    def _obs_for_sb3(self) -> np.ndarray:
+        """Convert the cuda obs tensor to a numpy array for SB3's VecEnv contract.
+
+        SB3's ``obs_as_tensor`` only handles ``np.ndarray`` and ``dict`` — see
+        ``stable_baselines3.common.utils.obs_as_tensor``. The spec's assumption
+        that a cuda tensor is a no-op (§5.4) is incorrect against SB3 2.8.0,
+        so we convert at the VecEnv boundary. Internal state (``self.panel``)
+        stays on cuda; only the return value of ``reset()`` / ``step_wait()``
+        is materialised as numpy.
+        """
+        return self._current_obs().detach().cpu().numpy()
 
     def _sample_starts(self, mask: torch.Tensor) -> None:
         max_start = self.n_dates - self.episode_length - self.forward_period
