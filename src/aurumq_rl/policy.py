@@ -9,6 +9,7 @@ extractor returns a dict and the two heads need different shapes.
 """
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import gymnasium as gym
@@ -70,8 +71,13 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         # Override action_net and value_net with per-stock-aware heads
         n_stocks = self.action_space.shape[0]
         self.action_net = nn.Linear(self._encoder_out_dim, 1)  # per-stock score
+
+        # Value head input is concat(market_mean, opportunity_max) — see
+        # PerStockExtractor.forward. So the first Linear must accept
+        # 2 * encoder_out_dim, not encoder_out_dim.
+        pooled_dim = 2 * self._encoder_out_dim
         layers: list[nn.Module] = []
-        prev = self._encoder_out_dim
+        prev = pooled_dim
         for h in self._value_hidden:
             layers.append(nn.Linear(prev, h))
             layers.append(nn.ReLU())
@@ -81,6 +87,22 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         # Re-init action distribution + log_std
         self.action_dist = DiagGaussianDistribution(n_stocks)
         self.log_std = nn.Parameter(torch.full((n_stocks,), -0.69, dtype=torch.float32))  # ~log(0.5)
+
+        if getattr(self, "ortho_init", False):
+            self.action_net.apply(partial(self.init_weights, gain=0.01))
+            self.value_net.apply(partial(self.init_weights, gain=1.0))
+
+        # CRITICAL: rebuild optimizer so it tracks the post-replacement
+        # action_net / value_net / log_std parameters. Without this, only
+        # parameters present at super()._build() time get optimized — which
+        # was the latent bug surfaced by the Phase 9 200k mid-test (OOS
+        # metrics bit-identical at every checkpoint because action_mean was
+        # frozen at random init, only log_std was drifting).
+        self.optimizer = self.optimizer_class(
+            self.parameters(),
+            lr=lr_schedule(1),
+            **self.optimizer_kwargs,
+        )
 
     def _features(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         return self.features_extractor(obs)
