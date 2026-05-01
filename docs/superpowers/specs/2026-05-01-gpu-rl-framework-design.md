@@ -170,14 +170,30 @@ def step_wait(self) -> tuple[torch.Tensor, np.ndarray, np.ndarray, list[dict]]:
     self.t += 1
     self.steps_done += 1
     dones = self.steps_done >= self.episode_length
-    # 6. for done envs, resample new start index and zero prev_top_idx:
+    # 6. for done envs, build SB3-style episode info, then auto-reset
+    #    (SB3 VecEnv contract: dones envs are silently reset; the obs
+    #    returned for those envs is the FRESH obs after reset, not the
+    #    terminal obs. info["episode"] = {"r": <total_reward>, "l":
+    #    <length>} is what the Monitor wrapper / SB3 logger consumes
+    #    for tb metrics; without it ep_rew_mean stays empty.):
+    infos: list[dict] = [{} for _ in range(self.n_envs)]
     if dones.any():
-        self._reset_done_envs(dones)
+        for i in dones.nonzero(as_tuple=True)[0].tolist():
+            infos[i]["episode"] = {
+                "r": float(self.episode_returns[i].item()),
+                "l": int(self.steps_done[i].item()),
+            }
+        self._reset_done_envs(dones)        # resample t, zero steps_done & prev_top_idx
     obs = self.panel[self.t]               # (n_envs, n_stocks, n_factors)
-    return obs, rewards.cpu().numpy(), dones.cpu().numpy(), [{} for _ in range(self.n_envs)]
+    return obs, rewards.cpu().numpy(), dones.cpu().numpy(), infos
 ```
 
-Note: `obs` returned as torch tensor on cuda; SB3 will call `obs_as_tensor(obs, device)` which is a no-op when already a cuda tensor (verified). `rewards` and `dones` go to numpy because SB3's RolloutBuffer expects numpy (see Issue 2 below).
+Notes on the SB3 VecEnv contract:
+- `obs` is returned as a torch tensor on cuda; SB3 calls `obs_as_tensor(obs, device)` which is a no-op when the tensor is already on the right device.
+- `rewards` and `dones` go to numpy because SB3's `RolloutBuffer.add()` expects numpy arrays — see §5.6.
+- For done envs, the returned obs is the **post-reset** obs (auto-reset semantics), not the terminal obs. PPO doesn't need `terminal_observation` (it bootstraps with `next_value=0` on done), so we don't populate it. Off-policy algos would; out of scope here.
+- `info["episode"]` is what the legacy gymnasium `Monitor` wrapper provides; SB3's `WandbMetricsCallback` and tb logger read it to populate `rollout/ep_rew_mean` / `rollout/ep_len_mean`. We construct it manually here because there is no `Monitor` wrapper in our single-process flow.
+- `steps_done[i] = 0` and `prev_top_idx[i] = 0` are reset per-env via `_reset_done_envs(dones)`.
 
 ### 5.5 Why a single-process VecEnv (no SubprocVecEnv)
 
@@ -194,7 +210,7 @@ Per step: `(n_envs, n_stocks, n_factors) × fp32 = 12 × 3014 × 343 × 4 B ≈ 
 
 **Mitigation tiers (in order of effort):**
 1. **P0 (default for v1):** accept the overhead, measure actual fps in smoke. If ≥ 500 fps and GPU mean ≥ 70 %, ship.
-2. **P1 optimisation (if smoke fps < 500):** subclass `RolloutBuffer` → `GPURolloutBuffer` that keeps obs on GPU. SB3's PPO already supports `replay_buffer_class` indirectly (`buffer_class` arg). One pre-allocated tensor of shape `(n_steps, n_envs, *obs_shape)` on cuda. Eliminates both directions of transfer.
+2. **P1 optimisation (if smoke fps < 500):** subclass `RolloutBuffer` → `GPURolloutBuffer` that keeps obs on GPU. SB3's PPO accepts a `rollout_buffer_class` kwarg in `__init__` (PPO is on-policy; this is the right hook — `replay_buffer_class` is for off-policy algos like SAC and does not apply here). One pre-allocated tensor of shape `(n_steps, n_envs, *obs_shape)` on cuda. Eliminates both directions of transfer.
 3. **P2 (if SB3 buffer hooks are too restrictive):** bypass SB3's `collect_rollouts` entirely with a custom rollout loop (~150 lines).
 
 The framework targets **P0 first** for speed of delivery; the smoke measurement decides whether P1 is needed.
@@ -467,7 +483,7 @@ After env + policy + importance + web all merge, `agent-train` integrates and ru
 
 The framework is "done" when:
 
-1. All four parallel agents' tests pass and their PRs / merges are clean.
+1. All five parallel agents (env, policy, importance, web, train) pass their tests and merge cleanly.
 2. `train_v2.py` smoke run (50k steps, SHORT panel, all 343 factors) succeeds end-to-end and writes `factor_importance.json`.
 3. fps measured during the smoke is **≥ 500** (>= 6× the current 77 baseline) and GPU mean utilisation **≥ 70 %**.
 4. `FactorImportancePanel` renders for the smoke run in the web dashboard at http://localhost:3000.
