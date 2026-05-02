@@ -6,6 +6,7 @@ Input Parquet must contain columns prefixed with one of:
 
 * ``alpha_*``   alpha101 quant-volume factors
 * ``mf_*``      main-force capital flow
+* ``mfp_*``     main-force capital pressure / persistence (separate from mf_*)
 * ``hm_*``      hot-money seats
 * ``hk_*``      northbound capital
 * ``inst_*``    institutional flow (limit-up/down list)
@@ -72,6 +73,7 @@ NEW_STOCK_PROTECT_DAYS: int = 60
 FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "alpha_",
     "mf_",
+    "mfp_",  # main-force pressure / persistence; distinct from mf_*
     "hm_",
     "hk_",
     "inst_",
@@ -144,8 +146,8 @@ class FactorPanel(NamedTuple):
 
 
 def align_panel_to_stock_list(
-    panel: "FactorPanel", target_stock_codes: list[str]
-) -> "FactorPanel":
+    panel: FactorPanel, target_stock_codes: list[str]
+) -> FactorPanel:
     """Realign a FactorPanel to a fixed stock universe (order + count).
 
     For OOS backtest where the panel's stock universe differs from the one
@@ -437,6 +439,7 @@ class FactorPanelLoader:
         forward_period: int = 10,
         universe_filter: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
         feature_group_weights: dict[str, float] | None = None,
+        factor_names: list[str] | None = None,
     ) -> FactorPanel:
         """Load a factor panel from Parquet.
 
@@ -456,6 +459,13 @@ class FactorPanelLoader:
             whose name starts with ``prefix`` are multiplied by ``weight``.
             Columns without an explicit weight default to 1.0. ``None`` /
             ``{}`` are no-ops. See :func:`_apply_feature_group_weights`.
+        factor_names:
+            If given, load EXACTLY these columns in the EXACT order specified,
+            bypassing prefix-based discovery and ``n_factors``. Required for
+            OOS evaluation of a model trained with a fixed factor order: any
+            column missing from the parquet raises. Use this when the panel
+            schema has changed between train and eval (e.g., a new factor
+            prefix was added) and you must preserve the model's input layout.
 
         Returns
         -------
@@ -481,6 +491,7 @@ class FactorPanelLoader:
             forward_period=forward_period,
             universe_filter=universe_filter,
             feature_group_weights=feature_group_weights,
+            factor_names=factor_names,
         )
 
     def _load_from_parquet(
@@ -491,6 +502,7 @@ class FactorPanelLoader:
         forward_period: int,
         universe_filter: UniverseFilter,
         feature_group_weights: dict[str, float] | None = None,
+        factor_names: list[str] | None = None,
     ) -> FactorPanel:
         """Internal Parquet → FactorPanel conversion."""
         # Use polars scan for memory efficiency
@@ -528,6 +540,7 @@ class FactorPanelLoader:
             n_factors=n_factors,
             forward_period=forward_period,
             feature_group_weights=feature_group_weights,
+            factor_names=factor_names,
         )
 
     def _df_to_panel(
@@ -536,6 +549,7 @@ class FactorPanelLoader:
         n_factors: int | None,
         forward_period: int,
         feature_group_weights: dict[str, float] | None = None,
+        factor_names: list[str] | None = None,
     ) -> FactorPanel:
         """Convert polars DataFrame to numpy 3D panel."""
         dates = df["trade_date"].unique().sort().to_list()
@@ -544,8 +558,21 @@ class FactorPanelLoader:
         n_dates = len(dates)
         n_stocks = len(stock_codes)
 
-        # Discover factor columns
-        factor_cols = discover_factor_columns(df, n_factors=n_factors)
+        # Discover factor columns. If `factor_names` is given, use that EXACT
+        # list/order — required for OOS eval of models with a fixed input
+        # layout. Otherwise prefix-discover.
+        if factor_names is not None:
+            df_cols = set(df.columns)
+            missing = [c for c in factor_names if c not in df_cols]
+            if missing:
+                raise ValueError(
+                    f"factor_names contains columns not in panel: {missing[:8]}"
+                    f"{'...' if len(missing) > 8 else ''} "
+                    f"(panel has {len(df.columns)} columns)"
+                )
+            factor_cols = list(factor_names)
+        else:
+            factor_cols = discover_factor_columns(df, n_factors=n_factors)
         if not factor_cols:
             raise ValueError(
                 f"No factor columns found. Expected columns prefixed with "

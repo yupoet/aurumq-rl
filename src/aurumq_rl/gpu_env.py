@@ -9,8 +9,6 @@ See docs/superpowers/specs/2026-05-01-gpu-rl-framework-design.md §5.
 """
 from __future__ import annotations
 
-from typing import Any
-
 import gymnasium as gym
 import numpy as np
 import torch
@@ -104,9 +102,14 @@ class GPUStockPickingEnv(VecEnv):
         action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
         # 2. top-K
         top_idx = torch.topk(action, k=self.top_k, dim=-1).indices  # (n_envs, K)
-        # 3. forward returns gathered for the K picked stocks
-        fwd_t = (self.t + self.forward_period).clamp(max=self.n_dates - 1)
-        fwd_rets = self.returns[fwd_t].gather(1, top_idx)            # (n_envs, K)
+        # 3. forward returns. FactorPanelLoader already encodes
+        #    return_array[t] = log(close[t+forward_period] / close[t]),
+        #    so the t-th row IS the forward return realized by the action
+        #    taken at t. Indexing self.returns[t + forward_period] would
+        #    look at t+fp..t+2fp returns — a Phase 16 corrected this bug
+        #    (was double-shifting train vs OOS eval). _sample_starts
+        #    already keeps t in [0, n_dates - episode_length - fp).
+        fwd_rets = self.returns[self.t].gather(1, top_idx)           # (n_envs, K)
         rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
         # 4. turnover penalty (Jaccard-style)
         if self.turnover_coef > 0.0:

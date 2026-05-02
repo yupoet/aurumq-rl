@@ -16,7 +16,28 @@ import numpy as np
 
 @dataclass
 class BacktestResult:
-    """Outcome of a single backtest run."""
+    """Outcome of a single backtest run.
+
+    Phase 16: when ``forward_period > 1``, the per-day returns are
+    overlapping ``forward_period``-day windows. Annualising by
+    ``sqrt(252)`` then over-states Sharpe by ``sqrt(forward_period)``.
+    The result therefore carries three Sharpe values:
+
+    * ``top_k_sharpe_legacy``: ``sqrt(252)`` annualisation. Inflated.
+    * ``top_k_sharpe_adjusted``: ``sqrt(252 / forward_period)``.
+      The honest annualised Sharpe of an N-day forward-return stream
+      sampled daily. **Phase 16's primary metric.**
+    * ``top_k_sharpe_non_overlap``: same as adjusted but on a
+      non-overlapping subsample (every ``forward_period``-th row).
+      Lower-variance independent estimator; sanity check.
+
+    For backward compatibility ``top_k_sharpe`` is set to the adjusted
+    Sharpe (Phase 16's primary), so callers that index ``top_k_sharpe``
+    automatically pick up the corrected scale. ``random_baseline``
+    contains both ``*_sharpe`` (legacy) and ``*_sharpe_adjusted`` /
+    ``*_sharpe_non_overlap`` keys so the comparison can be done at
+    matching scales.
+    """
 
     ic: float
     ic_ir: float
@@ -26,6 +47,10 @@ class BacktestResult:
     n_dates: int = 0
     n_stocks: int = 0
     top_k: int = 0
+    forward_period: int = 1
+    top_k_sharpe_legacy: float = 0.0
+    top_k_sharpe_adjusted: float = 0.0
+    top_k_sharpe_non_overlap: float = 0.0
 
     def to_json(self, path: Path | str) -> None:
         Path(path).write_text(
@@ -104,32 +129,69 @@ def compute_ic_ir(predictions: np.ndarray, returns: np.ndarray) -> float:
     return float(arr.mean() / std)
 
 
-def compute_top_k_sharpe(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
-    """Annualized Sharpe of an equal-weight top-K portfolio.
-
-    Each date: pick the top_k stocks by prediction, equal-weight, take the
-    realized return as the cross-sectional mean of those K stocks. Compute
-    annualized Sharpe assuming 252 trading days.
-    """
+def _top_k_returns_series(
+    predictions: np.ndarray, returns: np.ndarray, top_k: int
+) -> list[float]:
+    """Per-date top-K equal-weight portfolio return; degenerate days skipped."""
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
-
-    portfolio_returns: list[float] = []
+    out: list[float] = []
     for t in range(predictions.shape[0]):
         p, r = predictions[t], returns[t]
         mask = np.isfinite(p) & np.isfinite(r)
         if mask.sum() < top_k:
             continue
         idx = np.argsort(-p[mask])[:top_k]
-        portfolio_returns.append(float(r[mask][idx].mean()))
+        out.append(float(r[mask][idx].mean()))
+    return out
 
-    if len(portfolio_returns) < 2:
+
+def compute_top_k_sharpe(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
+    """Legacy ``sqrt(252)`` annualised Sharpe (Phase ≤15 metric).
+
+    Kept as the historical name so existing callers / tests behave the same.
+    For Phase 16 use :func:`compute_top_k_sharpes`.
+    """
+    series = _top_k_returns_series(predictions, returns, top_k)
+    if len(series) < 2:
         return 0.0
-    arr = np.asarray(portfolio_returns)
+    arr = np.asarray(series)
     std = arr.std(ddof=1)
     if std < 1e-12:
         return 0.0
     return float(arr.mean() / std * np.sqrt(252))
+
+
+def compute_top_k_sharpes(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    top_k: int,
+    forward_period: int = 1,
+) -> dict[str, float]:
+    """Three Sharpe estimates of the top-K portfolio.
+
+    Returns a dict with keys ``legacy``, ``adjusted``, ``non_overlap``.
+    See :class:`BacktestResult` for semantics.
+    """
+    series = _top_k_returns_series(predictions, returns, top_k)
+    if len(series) < 2:
+        return {"legacy": 0.0, "adjusted": 0.0, "non_overlap": 0.0}
+    arr = np.asarray(series)
+    std = arr.std(ddof=1)
+    if std < 1e-12:
+        return {"legacy": 0.0, "adjusted": 0.0, "non_overlap": 0.0}
+    legacy = float(arr.mean() / std * np.sqrt(252))
+    adjusted = float(arr.mean() / std * np.sqrt(252 / max(forward_period, 1)))
+    if forward_period > 1 and len(arr) >= 2 * forward_period:
+        sub = arr[::forward_period]
+        sub_std = sub.std(ddof=1)
+        if sub_std > 1e-12:
+            non_overlap = float(sub.mean() / sub_std * np.sqrt(252 / forward_period))
+        else:
+            non_overlap = 0.0
+    else:
+        non_overlap = adjusted
+    return {"legacy": legacy, "adjusted": adjusted, "non_overlap": non_overlap}
 
 
 def compute_top_k_cumret(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
@@ -153,21 +215,56 @@ def random_baseline(
     top_k: int,
     n_simulations: int = 100,
     seed: int = 0,
+    forward_period: int = 1,
 ) -> dict[str, float]:
-    """Sharpe distribution of random top-K portfolios over the same dates."""
+    """Sharpe distribution of random top-K portfolios over the same dates.
+
+    Phase 16 reports legacy / adjusted / non-overlap percentiles. The
+    legacy fields are kept because existing dashboards consume them; for
+    the production "vs random" comparison use the ``*_adjusted`` keys.
+    """
     rng = np.random.default_rng(seed)
-    sharpes: list[float] = []
+    legacy: list[float] = []
+    adjusted: list[float] = []
+    non_overlap: list[float] = []
     for _ in range(n_simulations):
         preds = rng.normal(size=returns.shape)
-        sharpes.append(compute_top_k_sharpe(preds, returns, top_k=top_k))
+        d = compute_top_k_sharpes(
+            preds, returns, top_k=top_k, forward_period=forward_period,
+        )
+        legacy.append(d["legacy"])
+        adjusted.append(d["adjusted"])
+        non_overlap.append(d["non_overlap"])
 
-    arr = np.asarray(sharpes)
+    def _pct(arr_list: list[float]) -> dict[str, float]:
+        a = np.asarray(arr_list)
+        return {
+            "mean": float(a.mean()),
+            "std": float(a.std(ddof=1)) if len(a) > 1 else 0.0,
+            "p05": float(np.percentile(a, 5)),
+            "p50": float(np.percentile(a, 50)),
+            "p95": float(np.percentile(a, 95)),
+        }
+
+    leg = _pct(legacy)
+    adj = _pct(adjusted)
+    nov = _pct(non_overlap)
+    # Backward-compatible flat keys (legacy scale) plus explicit adjusted/non-overlap.
     return {
-        "mean_sharpe": float(arr.mean()),
-        "std_sharpe": float(arr.std(ddof=1)) if len(arr) > 1 else 0.0,
-        "p05_sharpe": float(np.percentile(arr, 5)),
-        "p50_sharpe": float(np.percentile(arr, 50)),
-        "p95_sharpe": float(np.percentile(arr, 95)),
+        "mean_sharpe": leg["mean"],
+        "std_sharpe": leg["std"],
+        "p05_sharpe": leg["p05"],
+        "p50_sharpe": leg["p50"],
+        "p95_sharpe": leg["p95"],
+        "mean_sharpe_adjusted": adj["mean"],
+        "std_sharpe_adjusted": adj["std"],
+        "p05_sharpe_adjusted": adj["p05"],
+        "p50_sharpe_adjusted": adj["p50"],
+        "p95_sharpe_adjusted": adj["p95"],
+        "mean_sharpe_non_overlap": nov["mean"],
+        "p05_sharpe_non_overlap": nov["p05"],
+        "p50_sharpe_non_overlap": nov["p50"],
+        "p95_sharpe_non_overlap": nov["p95"],
     }
 
 
@@ -177,19 +274,38 @@ def run_backtest(
     top_k: int = 30,
     n_random_simulations: int = 100,
     random_seed: int = 0,
+    forward_period: int = 1,
 ) -> BacktestResult:
-    """One-shot evaluation: IC + IR + top-K Sharpe + random baseline."""
+    """One-shot evaluation: IC + IR + top-K Sharpe trio + random baseline.
+
+    Phase 16: when ``forward_period > 1`` we additionally truncate the
+    last ``forward_period`` rows of both ``predictions`` and ``returns``
+    so the trailing all-zero rows produced by
+    :class:`FactorPanelLoader` (which has no future close to compute the
+    forward log-return) do not drag down the Sharpe mean.
+    """
+    if forward_period > 1 and predictions.shape[0] > forward_period:
+        predictions = predictions[: predictions.shape[0] - forward_period]
+        returns = returns[: returns.shape[0] - forward_period]
+    sharpes = compute_top_k_sharpes(
+        predictions, returns, top_k=top_k, forward_period=forward_period,
+    )
     return BacktestResult(
         ic=compute_ic(predictions, returns),
         ic_ir=compute_ic_ir(predictions, returns),
-        top_k_sharpe=compute_top_k_sharpe(predictions, returns, top_k),
+        top_k_sharpe=sharpes["adjusted"],  # primary metric for Phase 16
         top_k_cumret=compute_top_k_cumret(predictions, returns, top_k),
         random_baseline=random_baseline(
-            returns, top_k=top_k, n_simulations=n_random_simulations, seed=random_seed
+            returns, top_k=top_k, n_simulations=n_random_simulations,
+            seed=random_seed, forward_period=forward_period,
         ),
         n_dates=predictions.shape[0],
         n_stocks=predictions.shape[1],
         top_k=top_k,
+        forward_period=forward_period,
+        top_k_sharpe_legacy=sharpes["legacy"],
+        top_k_sharpe_adjusted=sharpes["adjusted"],
+        top_k_sharpe_non_overlap=sharpes["non_overlap"],
     )
 
 
@@ -246,6 +362,7 @@ def run_backtest_with_series(
     top_k: int = 30,
     n_random_simulations: int = 100,
     random_seed: int = 0,
+    forward_period: int = 1,
 ) -> tuple[BacktestResult, BacktestSeries]:
     """One-shot evaluation that also returns per-date / per-simulation series.
 
@@ -267,6 +384,7 @@ def run_backtest_with_series(
         top_k=top_k,
         n_random_simulations=n_random_simulations,
         random_seed=random_seed,
+        forward_period=forward_period,
     )
 
     # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
@@ -300,6 +418,7 @@ __all__ = [
     "compute_ic",
     "compute_ic_ir",
     "compute_top_k_sharpe",
+    "compute_top_k_sharpes",
     "compute_top_k_cumret",
     "random_baseline",
     "run_backtest",

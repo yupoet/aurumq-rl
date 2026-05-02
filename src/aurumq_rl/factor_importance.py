@@ -8,7 +8,7 @@ policy into the right closure.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -110,11 +110,43 @@ def _eval_top_k_metrics(
     forward_period: int,
     top_k: int,
 ) -> dict[str, float]:
-    """Score every date independently, build top-K portfolio, return IC + annualised Sharpe."""
+    """Score every date independently, build top-K portfolio, return IC + Sharpe metrics.
+
+    Phase 16 corrections vs Phase 15:
+
+    1. ``returns[t]`` is used (NOT ``returns[t + forward_period]``).
+       :class:`FactorPanelLoader` already encodes ``return_array[t] =
+       log(close[t+fp]/close[t])``, so the t-th row IS the forward return
+       realised by selecting at t. The earlier ``[t + fp]`` indexing
+       double-shifted the eval into ``t+fp .. t+2fp`` returns.
+    2. Three Sharpe values are reported:
+
+       * ``sharpe_legacy``: ``sqrt(252)`` annualisation. Inflated when
+         ``forward_period > 1`` because the per-day returns are overlapping
+         ``forward_period``-day windows. Kept for backward comparison only.
+       * ``sharpe_adjusted``: ``sqrt(252 / forward_period)`` annualisation —
+         the correct value for a stream of N-day forward returns sampled
+         daily. This is Phase 16's primary metric.
+       * ``sharpe_non_overlap``: take every ``forward_period``-th row only
+         (0, fp, 2fp, …) and annualise with ``sqrt(252 / forward_period)``.
+         Lower-variance estimator that is independent across rows. Used as
+         a sanity check; if it diverges sharply from ``sharpe_adjusted`` the
+         daily series has structure beyond the rolling-window overlap.
+
+    Backwards-compat: dict still contains ``sharpe`` set to
+    ``sharpe_adjusted`` so callers that already index ``["sharpe"]`` get
+    the corrected scale by default.
+    """
     T = panel.shape[0]
     valid_T = T - forward_period
     if valid_T <= 0:
-        return {"ic": 0.0, "sharpe": 0.0}
+        return {
+            "ic": 0.0,
+            "sharpe": 0.0,
+            "sharpe_legacy": 0.0,
+            "sharpe_adjusted": 0.0,
+            "sharpe_non_overlap": 0.0,
+        }
     portfolio_returns = []
     ics = []
     with torch.no_grad():
@@ -122,10 +154,11 @@ def _eval_top_k_metrics(
             obs = panel[t : t + 1]                         # (1, S, F)
             scores = score_fn(obs)[0]                       # (S,)
             top_idx = torch.topk(scores, top_k).indices
-            r = returns[t + forward_period][top_idx].mean()
+            r = returns[t][top_idx].mean()
             portfolio_returns.append(r.item())
-            # IC: corr(scores, future returns)
-            f = returns[t + forward_period]
+            # IC: corr(scores, future returns at the SAME t — the t-th row
+            # is already the forward-window return realised by t→t+fp).
+            f = returns[t]
             mask = torch.isfinite(scores) & torch.isfinite(f)
             if mask.sum() < 2 or scores[mask].std().item() < 1e-12:
                 continue
@@ -133,12 +166,36 @@ def _eval_top_k_metrics(
             if np.isfinite(c):
                 ics.append(c)
     if len(portfolio_returns) < 2:
-        return {"ic": 0.0, "sharpe": 0.0}
+        return {
+            "ic": 0.0,
+            "sharpe": 0.0,
+            "sharpe_legacy": 0.0,
+            "sharpe_adjusted": 0.0,
+            "sharpe_non_overlap": 0.0,
+        }
     arr = np.asarray(portfolio_returns)
     s = arr.std(ddof=1)
-    sharpe = float(arr.mean() / s * np.sqrt(252)) if s > 1e-12 else 0.0
+    if s > 1e-12:
+        sharpe_legacy = float(arr.mean() / s * np.sqrt(252))
+        sharpe_adjusted = float(arr.mean() / s * np.sqrt(252 / forward_period))
+    else:
+        sharpe_legacy = 0.0
+        sharpe_adjusted = 0.0
+    # non-overlap subsample: every forward_period-th observation
+    sub = arr[::forward_period] if forward_period > 1 else arr
+    if len(sub) > 1 and sub.std(ddof=1) > 1e-12:
+        sharpe_non_overlap = float(sub.mean() / sub.std(ddof=1) * np.sqrt(252 / forward_period))
+    else:
+        sharpe_non_overlap = 0.0
     ic = float(np.mean(ics)) if ics else 0.0
-    return {"ic": ic, "sharpe": sharpe}
+    return {
+        "ic": ic,
+        # Phase 16: primary metric is the adjusted Sharpe.
+        "sharpe": sharpe_adjusted,
+        "sharpe_legacy": sharpe_legacy,
+        "sharpe_adjusted": sharpe_adjusted,
+        "sharpe_non_overlap": sharpe_non_overlap,
+    }
 
 
 __all__ = ["integrated_gradients", "permutation_importance", "per_date_cross_section_shuffle"]

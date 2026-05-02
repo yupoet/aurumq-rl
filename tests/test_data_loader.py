@@ -70,10 +70,17 @@ def test_discover_factor_columns_empty_when_no_match() -> None:
 
 
 def test_factor_col_prefixes_constant_unchanged() -> None:
-    """Guard the documented prefix list — changing it is a contract break."""
+    """Guard the documented prefix list — changing it is a contract break.
+
+    Phase 16 added ``mfp_`` (main-force pressure / persistence). It MUST be
+    in the set; missing it pre-Phase-16 caused 12 columns to silently vanish
+    from the Phase 15 model and produced a misleading factor-importance read
+    that this test is here to prevent re-occurring.
+    """
     expected = {
         "alpha_",
         "mf_",
+        "mfp_",
         "hm_",
         "hk_",
         "inst_",
