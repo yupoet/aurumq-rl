@@ -87,3 +87,6 @@ Desktop.ini
 
 # External GitHub references (formula reference only, NOT vendored)
 refs/
+
+# Claude Code per-session state
+.claude/
