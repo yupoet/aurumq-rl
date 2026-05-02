@@ -10,7 +10,6 @@ Usage
 from __future__ import annotations
 
 import hashlib
-import os
 import sys
 from pathlib import Path
 
@@ -157,7 +156,7 @@ def main() -> int:
         remote_key = PREFIX + sub
         _upload_one(bucket, local, remote_key)
 
-    print(f"[oss-upload] DONE. Browse via:")
+    print("[oss-upload] DONE. Browse via:")
     print(f"  https://oss.console.aliyun.com/bucket/oss-cn-shenzhen/{BUCKET_NAME}/object?path={PREFIX}")
     return 0
 

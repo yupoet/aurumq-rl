@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     # Read training metadata first so we know the locked stock universe.
     meta_path = args.run_dir / "metadata.json"
     train_stock_codes: list[str] | None = None
+    train_factor_names: list[str] | None = None
     expected_obs_dim: int | None = None
     feature_group_weights: dict[str, float] | None = None
     if meta_path.exists():
@@ -84,13 +85,27 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(sc, list) and sc:
             train_stock_codes = list(sc)
             print(f"[backtest] training universe: {len(train_stock_codes)} stocks (will align)")
-        # Default --n-factors to whatever training used. Required when the
-        # OOS panel has more factor columns than the model was trained on
-        # (e.g. combined panels with 350+ cols vs n_factors=64 at train).
-        if args.n_factors is None and isinstance(meta.get("factor_count"), int):
+        # Phase 16: prefer the EXACT factor_names list captured at training
+        # time so a new prefix (e.g. mfp_) added afterward doesn't silently
+        # reorder columns and break the saved policy. Fall back to
+        # factor_count only when factor_names is absent (legacy runs).
+        fns = meta.get("factor_names")
+        if isinstance(fns, list) and fns:
+            train_factor_names = [str(c) for c in fns]
+            print(
+                f"[backtest] factor_names from metadata: {len(train_factor_names)} cols"
+            )
+        elif args.n_factors is None and isinstance(meta.get("factor_count"), int):
             args.n_factors = int(meta["factor_count"])
             print(
-                f"[backtest] n_factors={args.n_factors} (from training metadata)"
+                f"[backtest] n_factors={args.n_factors} (from training metadata; "
+                "no factor_names available — order may shift if prefixes changed)"
+            )
+        # forward_period: prefer training metadata over CLI default
+        if isinstance(meta.get("forward_period"), int):
+            args.forward_period = int(meta["forward_period"])
+            print(
+                f"[backtest] forward_period={args.forward_period} (from metadata)"
             )
         # Honour per-prefix weights used at training time so OOS sees the
         # same scaling. Missing field -> no weighting (legacy runs).
@@ -118,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
         feature_group_weights=feature_group_weights,
+        factor_names=train_factor_names,
     )
 
     raw_n_dates, raw_n_stocks, _ = panel.factor_array.shape
@@ -198,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         n_random_simulations=args.n_random_simulations,
         random_seed=args.seed,
+        forward_period=args.forward_period,
     )
 
     out_path = args.run_dir / "backtest.json"
@@ -206,10 +223,13 @@ def main(argv: list[str] | None = None) -> int:
     series.to_json(series_path)
     print(f"[backtest] wrote {out_path}")
     print(f"[backtest] wrote {series_path}")
+    rb = result.random_baseline
     print(
         f"[backtest] IC={result.ic:+.4f} IR={result.ic_ir:+.3f} "
-        f"top{args.top_k}_Sharpe={result.top_k_sharpe:+.3f} "
-        f"vs random p50 {result.random_baseline['p50_sharpe']:+.3f}"
+        f"adj_Sharpe={result.top_k_sharpe_adjusted:+.3f} "
+        f"vs random p50 adj {rb.get('p50_sharpe_adjusted', float('nan')):+.3f} "
+        f"(legacy {result.top_k_sharpe_legacy:+.3f}, "
+        f"non-overlap {result.top_k_sharpe_non_overlap:+.3f})"
     )
     return 0
 

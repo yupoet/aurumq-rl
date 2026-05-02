@@ -41,14 +41,23 @@ def main(argv: list[str] | None = None) -> int:
 
     meta = json.loads((args.run_dir / "metadata.json").read_text(encoding="utf-8"))
     n_factors = int(meta["factor_count"])
+    train_factor_names = meta.get("factor_names")
+    if isinstance(train_factor_names, list) and train_factor_names:
+        train_factor_names = [str(c) for c in train_factor_names]
+    else:
+        train_factor_names = None
+    if isinstance(meta.get("forward_period"), int):
+        args.forward_period = int(meta["forward_period"])
+        print(f"[importance] forward_period={args.forward_period} (from metadata)")
 
     loader = FactorPanelLoader(parquet_path=args.data_path)
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.val_start),
         end_date=dt.date.fromisoformat(args.val_end),
-        n_factors=n_factors,
+        n_factors=n_factors if train_factor_names is None else None,
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
+        factor_names=train_factor_names,
     )
 
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
