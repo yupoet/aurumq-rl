@@ -90,3 +90,6 @@ refs/
 
 # Claude Code per-session state
 .claude/
+
+# Per-member ensemble score caches (regenerable from models)
+reports/**/_scores_cache_*.npy
