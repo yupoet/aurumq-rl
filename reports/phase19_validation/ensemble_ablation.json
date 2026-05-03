@@ -1,0 +1,159 @@
+{
+  "ablations": [
+    {
+      "variant": "rankmean5_minus_16a",
+      "members": [
+        "17b",
+        "17d",
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.867692466444678,
+      "top_k_sharpe_non_overlap": 2.1337545049363373,
+      "ic": 0.025545906996338203,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.7257254114685279
+    },
+    {
+      "variant": "rankmean6 (baseline)",
+      "members": [
+        "16a",
+        "17b",
+        "17d",
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.8230946003301225,
+      "top_k_sharpe_non_overlap": 1.8838671490460264,
+      "ic": 0.02782142370180685,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.6811275453539725
+    },
+    {
+      "variant": "rankmean5_minus_17b",
+      "members": [
+        "16a",
+        "17d",
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.7811961338821527,
+      "top_k_sharpe_non_overlap": 2.1133660629856084,
+      "ic": 0.027663036308149345,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.6392290789060027
+    },
+    {
+      "variant": "rankmean3_top3_strong",
+      "members": [
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.7140952133552598,
+      "top_k_sharpe_non_overlap": 1.8446954404614384,
+      "ic": 0.026141300820163034,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.5721281583791098
+    },
+    {
+      "variant": "rankmean5_minus_17d",
+      "members": [
+        "16a",
+        "17b",
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.7111876631632865,
+      "top_k_sharpe_non_overlap": 1.325267762597706,
+      "ic": 0.027635937219358357,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.5692206081871365
+    },
+    {
+      "variant": "rankmean5_minus_p18s5",
+      "members": [
+        "16a",
+        "17b",
+        "17d",
+        "p18s4",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.6816046534053162,
+      "top_k_sharpe_non_overlap": 1.4199881382613946,
+      "ic": 0.022996068143487508,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.5396375984291661
+    },
+    {
+      "variant": "rankmean_all_loaded",
+      "members": [
+        "16a",
+        "17b",
+        "17c",
+        "17d",
+        "p18s4",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.6670591450190169,
+      "top_k_sharpe_non_overlap": 1.0525786697726247,
+      "ic": 0.024530114182113233,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.5250920900428668
+    },
+    {
+      "variant": "rankmean7_with_seed2_17c",
+      "members": [
+        "16a",
+        "17b",
+        "17d",
+        "p18s4",
+        "p18s5",
+        "p18s6",
+        "17c"
+      ],
+      "top_k_sharpe_adjusted": 1.665420001468409,
+      "top_k_sharpe_non_overlap": 1.0525786697726247,
+      "ic": 0.024530114182113233,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.523452946492259
+    },
+    {
+      "variant": "rankmean5_minus_p18s4",
+      "members": [
+        "16a",
+        "17b",
+        "17d",
+        "p18s5",
+        "p18s6"
+      ],
+      "top_k_sharpe_adjusted": 1.6537805161257138,
+      "top_k_sharpe_non_overlap": 1.592524243893761,
+      "ic": 0.023345855671128582,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.5118134611495637
+    },
+    {
+      "variant": "rankmean5_minus_p18s6",
+      "members": [
+        "16a",
+        "17b",
+        "17d",
+        "p18s4",
+        "p18s5"
+      ],
+      "top_k_sharpe_adjusted": 1.5011674975158302,
+      "top_k_sharpe_non_overlap": 1.1777661253458338,
+      "ic": 0.027252367936592962,
+      "random_p50_sharpe_adjusted": 1.14196705497615,
+      "vs_random_p50_adjusted": 0.3592004425396802
+    }
+  ],
+  "val_start": "2025-07-01",
+  "val_end": "2026-04-24"
+}

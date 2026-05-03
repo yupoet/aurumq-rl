@@ -1,0 +1,12 @@
+{
+  "panel_min_date": "2023-01-03",
+  "panel_max_date": "2026-04-24",
+  "n_unique_trade_dates": 800,
+  "post_val_end_dates": 0,
+  "forward_period": 10,
+  "fresh_holdout_status": "INSUFFICIENT",
+  "fresh_holdout_threshold_smoke": 20,
+  "fresh_holdout_threshold_formal": 40,
+  "pct_chg_scale": "decimal (p01=-0.0836, p99=+0.1001)",
+  "data_sha256_first16": "4fd735f488c53ca2"
+}

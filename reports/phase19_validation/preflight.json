@@ -1,0 +1,27 @@
+{
+  "branch": "main",
+  "head": "4124599",
+  "cuda": "NVIDIA RTX 4070",
+  "data_path": "data/factor_panel_combined_short_2023_2026.parquet",
+  "data_size": 8063859043,
+  "data_sha256_first16": "4fd735f488c53ca2",
+  "data_mtime_epoch": 1777598402,
+  "eval_scripts_corrected_field_count": {
+    "_eval_all_checkpoints.py": 14,
+    "_ensemble_eval.py": 15
+  },
+  "models_sha256_first16": {
+    "16a": "ae924791643ee77d",
+    "17b": "ae94766f39e66363",
+    "17d": "ccdefab50691eae7",
+    "p18s4": "fd1795da33a6f321",
+    "p18s5": "2806973c2e3dd138",
+    "p18s6": "abcaa313db3888ac",
+    "17c (excluded)": "d3cd78fa108d3ea4",
+    "p18s7 (excluded)": "f8523e3f49cde6a2"
+  },
+  "forward_period": 10,
+  "top_k": 30,
+  "val_window": "2025-07-01..2026-04-24",
+  "fresh_holdout_status": "INSUFFICIENT"
+}
