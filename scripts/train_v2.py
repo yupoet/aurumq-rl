@@ -190,6 +190,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "panel load, before tensors hit cuda. Recorded in metadata."
         ),
     )
+    p.add_argument(
+        "--lock-universe-from",
+        type=Path,
+        default=None,
+        help=(
+            "Phase 20: lock the training stock universe to the stock_codes "
+            "list saved in another model's metadata.json. After load_panel, "
+            "the panel is realigned via align_panel_to_stock_list so the "
+            "model's action_dim matches the donor universe. Stocks not "
+            "present in this run's train window get is_st/is_suspended=True "
+            "(filtered by GPUStockPickingEnv). Use to compare extended-data "
+            "training against an existing model on the same stock universe."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -278,6 +292,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[train_v2] dropped {len(dropped_factors)} factor cols matching {prefixes}: "
                   f"{dropped_factors[:6]}{'...' if len(dropped_factors) > 6 else ''}")
             print(f"[train_v2] panel after drop: dates={n_dates} stocks={n_stocks} factors={n_factors}")
+
+    # Phase 20: optional universe lock to a donor metadata's stock_codes.
+    if args.lock_universe_from is not None:
+        from aurumq_rl.data_loader import align_panel_to_stock_list
+        donor_meta = json.loads(args.lock_universe_from.read_text(encoding="utf-8"))
+        donor_codes = list(donor_meta["stock_codes"])
+        before = panel.factor_array.shape[1]
+        panel = align_panel_to_stock_list(panel, donor_codes)
+        n_dates, n_stocks, n_factors = panel.factor_array.shape
+        print(f"[train_v2] universe locked to {args.lock_universe_from.name}: "
+              f"{before} -> {n_stocks} stocks (zero-padded missing, dropped extras)")
 
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
