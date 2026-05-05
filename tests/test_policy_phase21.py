@@ -96,10 +96,10 @@ def test_invalid_stocks_get_neg_inf_logits():
     obs = _make_obs_tensors(mask=mask)
     dist = p.get_distribution(obs)
     loc = dist.loc
-    assert (loc[0, 4:] <= -1e8).all()
-    assert (loc[0, :4] > -1e8).all()
-    assert (loc[1, :4] <= -1e8).all()
-    assert (loc[1, 4:] > -1e8).all()
+    assert (loc[0, 4:] <= -50).all()
+    assert (loc[0, :4] > -50).all()
+    assert (loc[1, :4] <= -50).all()
+    assert (loc[1, 4:] > -50).all()
 
 
 def test_empty_mask_raises():

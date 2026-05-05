@@ -15,7 +15,7 @@ Architecture
 The action space stays ``Box(0,1,(S,))`` so the env's existing top-K
 selection is preserved. The distribution is a per-stock Normal whose loc
 is hard-masked at invalid positions; the env will never pick those stocks
-because top-K argsort sees ``-1e9`` scores.
+because top-K argsort sees ``-100.0`` scores.
 """
 from __future__ import annotations
 
@@ -164,7 +164,13 @@ class PerStockEncoderPolicyV2(ActorCriticPolicy):
 
     def _logits(self, head_in, valid_mask):
         logits = self.actor_head(head_in).squeeze(-1)            # (B, S)
-        return logits.masked_fill(~valid_mask, -1e9)
+        # Phase 21 fix: -100.0 is well below typical valid scores (~[-3, +3]
+        # after LayerNorm) so top-K never reaches invalid positions, but stays
+        # within float32's stable precision range — unlike -1e9, where the
+        # ~1e2 absolute precision near magnitude 1e9 caused the buffer-roundtrip
+        # action to drift relative to loc, making per-stock log_prob explode by
+        # (drift/scale)^2 ~ 4e4 and pushing approx_kl to exp(40+) at PPO update.
+        return logits.masked_fill(~valid_mask, -100.0)
 
     def _value(self, head_in, valid_mask):
         tokens = self.value_token_mlp(head_in)                  # (B, S, H)
