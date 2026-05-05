@@ -22,7 +22,10 @@ def _panel_to_cuda(syn, device="cuda"):
 def test_env_residency_on_cuda():
     syn = make_synthetic_panel(n_dates=60, n_stocks=50, n_factors=20)
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=4)
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask, n_envs=4)
     assert env.panel.device.type == "cuda"
     assert env.returns.device.type == "cuda"
     assert env.valid_mask.device.type == "cuda"
@@ -34,13 +37,16 @@ def test_env_residency_on_cuda():
 def test_reset_returns_correct_shape_and_dtype():
     syn = make_synthetic_panel()
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=3,
-                             episode_length=30, forward_period=5, seed=42)
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask,
+                             n_envs=3, episode_length=30, forward_period=5, seed=42)
     obs = env.reset()
-    # SB3 VecEnv contract requires numpy obs; internal panel stays on cuda.
-    assert isinstance(obs, np.ndarray)
-    assert obs.shape == (3, 50, 20)         # (n_envs, n_stocks, n_factors)
-    assert obs.dtype == np.float32
+    # SB3 VecEnv contract requires dict obs; internal panel stays on cuda.
+    assert isinstance(obs, dict)
+    assert obs["stock"].shape == (3, 50, 20)  # (n_envs, n_stocks, n_factors)
+    assert obs["stock"].dtype == np.float32
     assert env.panel.device.type == "cuda"  # internal residency unchanged
     # Each env got an independently sampled start
     starts = env.t.cpu().tolist()
@@ -51,14 +57,18 @@ def test_reset_returns_correct_shape_and_dtype():
 def test_step_returns_obs_rewards_dones_infos():
     syn = make_synthetic_panel(n_dates=120)
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=2, episode_length=50,
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask,
+                             n_envs=2, episode_length=50,
                              forward_period=5, top_k=10, cost_bps=0.0, seed=0)
     env.reset()
     actions = np.random.default_rng(0).standard_normal((2, 50)).astype(np.float32)
     env.step_async(actions)
     obs, rewards, dones, infos = env.step_wait()
 
-    assert isinstance(obs, np.ndarray) and obs.shape == (2, 50, 20)
+    assert isinstance(obs, dict) and obs["stock"].shape == (2, 50, 20)
     assert isinstance(rewards, np.ndarray) and rewards.shape == (2,) and rewards.dtype == np.float32
     assert isinstance(dones, np.ndarray) and dones.shape == (2,) and dones.dtype == bool
     assert isinstance(infos, list) and len(infos) == 2
@@ -68,7 +78,11 @@ def test_step_returns_obs_rewards_dones_infos():
 def test_auto_reset_on_episode_end():
     syn = make_synthetic_panel(n_dates=60)
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=1, episode_length=5,
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask,
+                             n_envs=1, episode_length=5,
                              forward_period=2, top_k=5, seed=0)
     env.reset()
     initial_t = env.t.clone()
@@ -94,7 +108,10 @@ def test_auto_reset_on_episode_end():
 def test_vecenv_required_methods():
     syn = make_synthetic_panel()
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=2)
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask, n_envs=2)
     assert env.get_attr("render_mode") == [None, None]
     assert env.env_is_wrapped(object) == [False, False]
     env.close()
@@ -107,9 +124,14 @@ def test_sb3_ppo_one_rollout():
 
     syn = make_synthetic_panel(n_dates=120, n_stocks=20, n_factors=8)
     panel, returns, valid_mask = _panel_to_cuda(syn)
-    env = GPUStockPickingEnv(panel, returns, valid_mask, n_envs=4, episode_length=30,
+    T = panel.shape[0]
+    # Phase 21: dummy regime tensor; this test does not exercise regime semantics.
+    regime = torch.zeros(T, 1, device=panel.device)
+    env = GPUStockPickingEnv(panel, regime=regime, returns=returns, valid_mask=valid_mask,
+                             n_envs=4, episode_length=30,
                              forward_period=5, top_k=4, seed=0)
-    model = PPO("MlpPolicy", env, n_steps=64, batch_size=32, n_epochs=1,
+    # Dict obs requires MultiInputPolicy instead of MlpPolicy.
+    model = PPO("MultiInputPolicy", env, n_steps=64, batch_size=32, n_epochs=1,
                 verbose=0, device="cuda")
     model.learn(total_timesteps=256)
     # If we got here, collect_rollouts + train both worked

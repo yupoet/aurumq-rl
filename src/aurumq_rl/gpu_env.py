@@ -21,6 +21,7 @@ class GPUStockPickingEnv(VecEnv):
     def __init__(
         self,
         panel: torch.Tensor,        # (T, S, F) fp32 cuda
+        regime: torch.Tensor,       # (T, R)    fp32 cuda
         returns: torch.Tensor,      # (T, S)    fp32 cuda
         valid_mask: torch.Tensor,   # (T, S)    bool cuda
         n_envs: int,
@@ -34,15 +35,21 @@ class GPUStockPickingEnv(VecEnv):
     ) -> None:
         if panel.device.type != "cuda":
             raise ValueError("panel must be a cuda tensor")
+        if regime.device.type != "cuda":
+            raise ValueError("regime must be a cuda tensor")
+        if regime.shape[0] != panel.shape[0]:
+            raise ValueError("regime and panel must have the same number of dates (dim 0)")
         if panel.shape[0] != returns.shape[0] or panel.shape[1] != returns.shape[1]:
             raise ValueError("panel and returns date/stock dims must match")
         if panel.shape[:2] != valid_mask.shape:
             raise ValueError("panel and valid_mask date/stock dims must match")
 
         self.panel = panel
+        self.regime = regime
         self.returns = returns
         self.valid_mask = valid_mask
         self.n_dates, self.n_stocks, self.n_factors = panel.shape
+        self.n_regime = regime.shape[1]
         self.episode_length = episode_length
         self.forward_period = forward_period
         self.top_k = top_k
@@ -66,11 +73,23 @@ class GPUStockPickingEnv(VecEnv):
         self.last_obs_t = torch.zeros(n_envs, dtype=torch.long, device=self.device)
         self._pending_action: torch.Tensor | None = None
 
-        observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=(self.n_stocks, self.n_factors),
-            dtype=np.float32,
-        )
+        observation_space = gym.spaces.Dict({
+            "stock": gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.n_stocks, self.n_factors),
+                dtype=np.float32,
+            ),
+            "regime": gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.n_regime,),
+                dtype=np.float32,
+            ),
+            "valid_mask": gym.spaces.Box(
+                low=0.0, high=1.0,
+                shape=(self.n_stocks,),
+                dtype=np.float32,
+            ),
+        })
         action_space = gym.spaces.Box(
             low=0.0, high=1.0,
             shape=(self.n_stocks,),
@@ -189,20 +208,28 @@ class GPUStockPickingEnv(VecEnv):
             return torch.as_tensor(actions, dtype=torch.float32, device=self.device)
         return actions.to(self.device, dtype=torch.float32)
 
-    def _current_obs(self) -> torch.Tensor:
-        return self.panel[self.t]
+    def _obs_for_sb3(self) -> dict[str, np.ndarray]:
+        """Return the Dict obs SB3 expects.
 
-    def _obs_for_sb3(self) -> np.ndarray:
-        """Convert the cuda obs tensor to a numpy array for SB3's VecEnv contract.
-
-        SB3's ``obs_as_tensor`` only handles ``np.ndarray`` and ``dict`` — see
-        ``stable_baselines3.common.utils.obs_as_tensor``. The spec's assumption
-        that a cuda tensor is a no-op (§5.4) is incorrect against SB3 2.8.0,
-        so we convert at the VecEnv boundary. Internal state (``self.panel``)
-        stays on cuda; only the return value of ``reset()`` / ``step_wait()``
-        is materialised as numpy.
+        SB3's ``obs_as_tensor`` handles dict-of-numpy directly; each value
+        is moved to the policy device individually. We materialise the
+        per-key cuda slices to numpy at the VecEnv boundary.
         """
-        return self._current_obs().detach().cpu().numpy()
+        t = self.t  # (n_envs,) long cuda
+        stock_obs = self.panel.index_select(0, t).detach().cpu().numpy()
+        regime_obs = self.regime.index_select(0, t).detach().cpu().numpy()
+        mask_obs = (
+            self.valid_mask.index_select(0, t)
+            .to(dtype=torch.float32)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        return {
+            "stock": stock_obs.astype(np.float32, copy=False),
+            "regime": regime_obs.astype(np.float32, copy=False),
+            "valid_mask": mask_obs.astype(np.float32, copy=False),
+        }
 
     def _sample_starts(self, mask: torch.Tensor) -> None:
         max_start = self.n_dates - self.episode_length - self.forward_period
