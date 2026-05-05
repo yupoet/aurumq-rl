@@ -121,3 +121,18 @@ def test_parse_args_drop_factor_prefix_multi():
         "--drop-factor-prefix", "mkt_", "ind_",
     ])
     assert args.drop_factor_prefix == ["mkt_", "ind_"]
+
+
+def test_parse_phase21_regime_flags():
+    from train_v2 import parse_args
+
+    args = parse_args([
+        "--total-timesteps", "1000",
+        "--data-path", "x.parquet",
+        "--start-date", "2024-01-01",
+        "--end-date", "2024-12-31",
+        "--out-dir", "/tmp/x",
+    ])
+    assert args.regime_encoder_out_dim == 16
+    assert args.regime_encoder_hidden == 64
+    assert args.critic_token_hidden == 64

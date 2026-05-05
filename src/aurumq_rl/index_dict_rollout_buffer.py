@@ -112,6 +112,35 @@ class IndexOnlyDictRolloutBuffer(DictRolloutBuffer):
     # Storage allocation
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Properties: values / returns must always appear as numpy to SB3
+    # callers (e.g. PPO.train's explained_variance call). After get() runs
+    # the first time they are converted to flat cuda tensors internally;
+    # the properties below transparently detach + move to CPU + convert.
+    # ------------------------------------------------------------------
+
+    @property
+    def values(self) -> np.ndarray:  # type: ignore[override]
+        v = self.__dict__.get("_values_data")
+        if isinstance(v, th.Tensor):
+            return v.detach().cpu().numpy()
+        return v  # type: ignore[return-value]
+
+    @values.setter
+    def values(self, v: "np.ndarray | th.Tensor") -> None:
+        self.__dict__["_values_data"] = v
+
+    @property
+    def returns(self) -> np.ndarray:  # type: ignore[override]
+        r = self.__dict__.get("_returns_data")
+        if isinstance(r, th.Tensor):
+            return r.detach().cpu().numpy()
+        return r  # type: ignore[return-value]
+
+    @returns.setter
+    def returns(self, r: "np.ndarray | th.Tensor") -> None:
+        self.__dict__["_returns_data"] = r
+
     def reset(self) -> None:  # type: ignore[override]
         """Allocate ``t_buffer`` in place of the (huge) per-key obs arrays.
 
@@ -217,9 +246,11 @@ class IndexOnlyDictRolloutBuffer(DictRolloutBuffer):
         self.actions[self.pos].copy_(action_t)
 
         # GAE bookkeeping stored as numpy (matches parent's layout).
+        # values uses the private backing key to avoid the property returning
+        # a copy (which would make the assignment a no-op).
         self.rewards[self.pos] = np.asarray(reward, dtype=np.float32)
         self.episode_starts[self.pos] = np.asarray(episode_start, dtype=np.float32)
-        self.values[self.pos] = value.detach().cpu().numpy().flatten()
+        self.__dict__["_values_data"][self.pos] = value.detach().cpu().numpy().flatten()
         self.log_probs[self.pos] = log_prob.detach().cpu().numpy().flatten()
 
         self.pos += 1
@@ -250,14 +281,19 @@ class IndexOnlyDictRolloutBuffer(DictRolloutBuffer):
             self.actions = _swap_and_flatten_torch(self.actions)
 
             # Convert numpy GAE arrays to flat CUDA tensors.
+            # values / returns use private backing keys (_values_data /
+            # _returns_data) so their property getters can transparently
+            # return numpy to SB3 callers like PPO.train's explained_variance.
+            _private_key = {"values": "_values_data", "returns": "_returns_data"}
             for name in ("log_probs", "values", "returns", "advantages"):
-                arr = self.__dict__[name]  # numpy (buffer_size, n_envs)
+                key = _private_key.get(name, name)
+                arr = self.__dict__[key]  # numpy (buffer_size, n_envs)
                 flat = th.as_tensor(
                     arr.swapaxes(0, 1).reshape(-1),
                     dtype=th.float32,
                     device=device_of(self),
                 )
-                self.__dict__[name] = flat
+                self.__dict__[key] = flat
 
             self.generator_ready = True
 
@@ -309,13 +345,20 @@ class IndexOnlyDictRolloutBuffer(DictRolloutBuffer):
             "valid_mask": self._mask_provider(t_idx),
         }
 
+        # Access backing tensors directly; at SGD time these are flat CUDA
+        # tensors (converted from numpy in get()). self.values / self.returns
+        # go through property getters which call .cpu().numpy(), breaking
+        # torch indexing — use the raw _*_data keys instead.
+        values_data = self.__dict__["_values_data"]
+        returns_data = self.__dict__["_returns_data"]
+
         return DictRolloutBufferSamples(
             observations=observations,
             actions=self.actions[batch_inds].to(dtype=th.float32),
-            old_values=self.values[batch_inds].flatten(),
+            old_values=values_data[batch_inds].flatten(),
             old_log_prob=self.log_probs[batch_inds].flatten(),
             advantages=self.advantages[batch_inds].flatten(),
-            returns=self.returns[batch_inds].flatten(),
+            returns=returns_data[batch_inds].flatten(),
         )
 
 

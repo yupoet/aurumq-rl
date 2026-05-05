@@ -19,10 +19,15 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+from aurumq_rl.data_loader import (
+    FORBIDDEN_PREFIXES,
+    FactorPanelLoader,
+    UniverseFilter,
+)
 from aurumq_rl.gpu_env import GPUStockPickingEnv
 from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
-from aurumq_rl.policy import PerStockEncoderPolicy
+from aurumq_rl.index_dict_rollout_buffer import IndexOnlyDictRolloutBuffer
+from aurumq_rl.policy import PerStockEncoderPolicyV2
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -59,6 +64,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--encoder-hidden", default="128,64",
                    help="comma-separated layer sizes for the per-stock MLP hidden layers")
     p.add_argument("--encoder-out-dim", type=int, default=32)
+    p.add_argument(
+        "--regime-encoder-out-dim",
+        type=int,
+        default=16,
+        help="RegimeEncoder output dim R'. Default 16.",
+    )
+    p.add_argument(
+        "--regime-encoder-hidden",
+        type=int,
+        default=64,
+        help="RegimeEncoder hidden width. Default 64.",
+    )
+    p.add_argument(
+        "--critic-token-hidden",
+        type=int,
+        default=64,
+        help="Per-stock value MLP hidden width (critic b2). Default 64.",
+    )
     p.add_argument("--checkpoint-freq", type=int, default=200_000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
@@ -69,7 +92,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Which rollout buffer to use. 'gpu' (default) keeps every "
             "rollout tensor cuda-resident via GPURolloutBuffer; 'cpu' "
             "falls back to SB3's numpy/host-RAM RolloutBuffer for A/B "
-            "comparison. 'index' uses IndexOnlyRolloutBuffer (Phase 9) "
+            "comparison. 'index' uses IndexOnlyDictRolloutBuffer (Phase 21) "
             "which stores t-indices instead of full obs, freeing ~6 GB "
             "of VRAM and unlocking larger n_steps. See spec §5.6 P1/P2."
         ),
@@ -287,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
                 dates=list(panel.dates),
                 stock_codes=list(panel.stock_codes),
                 factor_names=[panel.factor_names[i] for i in keep_idx],
+                regime_array=panel.regime_array,
+                regime_names=panel.regime_names,
             )
             n_dates, n_stocks, n_factors = panel.factor_array.shape
             print(f"[train_v2] dropped {len(dropped_factors)} factor cols matching {prefixes}: "
@@ -304,7 +329,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[train_v2] universe locked to {args.lock_universe_from.name}: "
               f"{before} -> {n_stocks} stocks (zero-padded missing, dropped extras)")
 
+    # Phase 21 schema lock — re-assert that the per-stock encoder cannot see
+    # any forbidden prefix. data_loader's allowlist already filters these
+    # out, but this catches accidental future regressions or hand-built
+    # panels.
+    forbidden_in_panel = [c for c in panel.factor_names
+                          if c.startswith(FORBIDDEN_PREFIXES)]
+    if forbidden_in_panel:
+        raise RuntimeError(
+            f"Phase 21 schema lock violated: stock encoder cannot accept "
+            f"columns with forbidden prefixes. Found: {forbidden_in_panel[:8]}"
+            f"{'...' if len(forbidden_in_panel) > 8 else ''}. "
+            f"Move them to regime features or remove from the panel."
+        )
+
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
+    regime_t = torch.from_numpy(panel.regime_array).to("cuda")  # Phase 21
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
     valid_mask = (
         ~torch.from_numpy(panel.is_st_array).to("cuda")
@@ -313,7 +353,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     env = GPUStockPickingEnv(
-        panel_t, returns_t, valid_mask,
+        panel=panel_t,
+        regime=regime_t,
+        returns=returns_t,
+        valid_mask=valid_mask,
         n_envs=args.n_envs,
         episode_length=args.episode_length,
         forward_period=args.forward_period,
@@ -326,8 +369,13 @@ def main(argv: list[str] | None = None) -> int:
     policy_kwargs = dict(
         encoder_hidden=encoder_hidden,
         encoder_out_dim=args.encoder_out_dim,
-        unique_date=args.unique_date_encoding,
+        regime_encoder_hidden=args.regime_encoder_hidden,
+        regime_encoder_out_dim=args.regime_encoder_out_dim,
+        critic_token_hidden=args.critic_token_hidden,
     )
+    if args.unique_date_encoding:
+        print("[train_v2] WARNING: --unique-date-encoding is ignored under V2 "
+              "(PerStockEncoderV2 has no unique_date branch).")
 
     # Phase 15D: build LR (callable or float)
     lr_input = _make_lr_callable(args.learning_rate, args.lr_schedule, args.lr_final_frac)
@@ -359,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[train_v2] resumed: total_timesteps_so_far={model.num_timesteps:,}")
     else:
         ppo_kwargs: dict = dict(
-            policy=PerStockEncoderPolicy,
+            policy=PerStockEncoderPolicyV2,
             env=env,
             learning_rate=lr_input,
             batch_size=args.batch_size,
@@ -376,29 +424,29 @@ def main(argv: list[str] | None = None) -> int:
             ppo_kwargs["rollout_buffer_class"] = GPURolloutBuffer
             print("[train_v2] using GPURolloutBuffer (cuda-resident)")
         elif args.rollout_buffer == "index":
-            # Pass IndexOnlyRolloutBuffer directly to PPO. Without this, SB3's
-            # _setup_model would build the parent GPURolloutBuffer at the
-            # full (n_steps, n_envs, n_stocks, n_factors) shape — which at
-            # n_steps=1024/n_envs=16/3014/343 = 63 GiB and OOMs on cuda
-            # before training starts. IndexOnlyRolloutBuffer's __init__
-            # accepts the provider closures as Optional so SB3 can build
-            # it; we attach them via .attach_providers() right after.
-            from aurumq_rl.index_rollout_buffer import IndexOnlyRolloutBuffer
-            ppo_kwargs["rollout_buffer_class"] = IndexOnlyRolloutBuffer
-            print("[train_v2] using IndexOnlyRolloutBuffer (lazy obs gather)")
+            # Pass IndexOnlyDictRolloutBuffer directly to PPO. Without this,
+            # SB3's _setup_model would allocate the full obs at construction
+            # shape (n_steps, n_envs, n_stocks, n_factors) which OOMs on
+            # cuda. The dict buffer's __init__ accepts provider closures as
+            # Optional so SB3 can build it; we attach them via
+            # .attach_providers() right after model construction.
+            ppo_kwargs["rollout_buffer_class"] = IndexOnlyDictRolloutBuffer
+            print("[train_v2] using IndexOnlyDictRolloutBuffer (Dict obs, lazy gather)")
         else:
             print("[train_v2] using SB3 default RolloutBuffer (numpy/host-RAM)")
 
         model = PPO(**ppo_kwargs)
 
-    # IndexOnlyRolloutBuffer always needs providers attached, whether the
+    # IndexOnlyDictRolloutBuffer always needs providers attached, whether the
     # buffer was created fresh (PPO(...)) or rebuilt during PPO.load().
-    if type(model.rollout_buffer).__name__ == "IndexOnlyRolloutBuffer":
+    if type(model.rollout_buffer).__name__ == "IndexOnlyDictRolloutBuffer":
         model.rollout_buffer.attach_providers(
-            obs_provider=lambda t: env.panel[t],
+            stock_provider=lambda t: env.panel.index_select(0, t),
+            regime_provider=lambda t: env.regime.index_select(0, t),
+            mask_provider=lambda t: env.valid_mask.index_select(0, t).to(dtype=torch.float32),
             obs_index_provider=lambda: env.last_obs_t,
         )
-        print("[train_v2] index buffer providers attached")
+        print("[train_v2] dict-index buffer providers attached")
 
     # Phase 14D: torch.compile the per-stock encoder and/or policy heads.
     # Done AFTER PPO construction so model.policy.features_extractor /
@@ -481,20 +529,27 @@ def main(argv: list[str] | None = None) -> int:
 
     metadata = {
         "algorithm": "PPO",
-        "framework": "gpu_v2",
-        "policy_class": "PerStockEncoderPolicy",
+        "framework": "gpu_v2_phase21",
+        "policy_class": "PerStockEncoderPolicyV2",
         "training_timesteps": args.total_timesteps,
         "n_envs": args.n_envs,
-        "obs_shape": [n_stocks, n_factors],
+        "obs_dict": True,
+        "stock_obs_shape": [n_stocks, n_factors],
+        "regime_dim": int(panel.regime_array.shape[1]),
         "action_shape": [n_stocks],
         "factor_count": n_factors,
         "stock_codes": panel.stock_codes,
-        "factor_names": panel.factor_names,
+        "stock_factor_names": panel.factor_names,         # per-stock only (Phase 21)
+        "regime_factor_names": list(panel.regime_names),  # 8 v0 names
+        "factor_names": panel.factor_names,                # legacy alias
         "train_start_date": args.start_date,
         "train_end_date": args.end_date,
         "universe": args.universe_filter,
         "encoder_hidden": list(encoder_hidden),
         "encoder_out_dim": args.encoder_out_dim,
+        "regime_encoder_hidden": args.regime_encoder_hidden,
+        "regime_encoder_out_dim": args.regime_encoder_out_dim,
+        "critic_token_hidden": args.critic_token_hidden,
         "top_k": args.top_k,
         "forward_period": args.forward_period,
         "rollout_buffer": args.rollout_buffer,
@@ -527,8 +582,8 @@ def main(argv: list[str] | None = None) -> int:
         "top_k": args.top_k,
         "out_dir": str(args.out_dir),
         "onnx_path": "",
-        "framework": "gpu_v2",
-        "policy_class": "PerStockEncoderPolicy",
+        "framework": "gpu_v2_phase21",
+        "policy_class": "PerStockEncoderPolicyV2",
         "metrics_summary": {},
     }
     (args.out_dir / "training_summary.json").write_text(
