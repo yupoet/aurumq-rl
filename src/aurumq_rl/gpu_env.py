@@ -117,6 +117,17 @@ class GPUStockPickingEnv(VecEnv):
         action = self._pending_action
         self._pending_action = None
 
+        # Phase 21 fix: snapshot last_obs_t to the CURRENT t (the t of the obs
+        # SB3 just passed to policy.forward). This matches what the buffer's
+        # add() will record. Updating last_obs_t at the end of step_wait (to
+        # the post-advance t) is wrong — SB3 calls buffer.add(self._last_obs)
+        # AFTER env.step but BEFORE updating self._last_obs to the new obs,
+        # so the buffer must store the t that produced the OLD obs.
+        # V1 had this bug too but its DiagGaussian + no-hard-mask was tolerant
+        # to small obs differences between t and t+1; V2's hard mask makes the
+        # mismatch explode at PPO update time.
+        self.last_obs_t = self.t.clone()
+
         # 1. mask invalid stocks (they can never enter top-K)
         action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
         # 2. top-K
@@ -157,9 +168,13 @@ class GPUStockPickingEnv(VecEnv):
                 }
             self._reset_done_envs(dones)
 
-        # Snapshot AFTER any auto-reset so done envs reflect their fresh
-        # start indices. The IndexOnlyRolloutBuffer reads this in add().
-        self.last_obs_t = self.t.clone()
+        # NOTE: do NOT update self.last_obs_t here. It was already set at the
+        # start of step_wait to the t of the obs SB3 just consumed (the obs
+        # that produced this step's actions). The buffer's add() runs AFTER
+        # this return but BEFORE SB3 updates its self._last_obs reference,
+        # so the buffer correctly records the producing t. The next iteration
+        # of SB3's collect_rollouts loop calls step_async/step_wait again,
+        # which re-snapshots last_obs_t at the top of the next step_wait.
         obs = self._obs_for_sb3()
         return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
 
