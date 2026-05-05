@@ -188,7 +188,7 @@ class FactorPanel(NamedTuple):
     stock_codes: list[str]
     factor_names: list[str]
     regime_array: np.ndarray = np.zeros((0, 0), dtype=np.float32)
-    regime_names: list[str] = []
+    regime_names: tuple[str, ...] = ()
 
 
 def align_panel_to_stock_list(
@@ -252,7 +252,7 @@ def align_panel_to_stock_list(
         stock_codes=list(target_stock_codes),
         factor_names=list(panel.factor_names),
         regime_array=panel.regime_array.copy(),
-        regime_names=list(panel.regime_names),
+        regime_names=tuple(panel.regime_names),
     )
 
 
@@ -807,7 +807,7 @@ class FactorPanelLoader:
             stock_codes=stock_codes,
             factor_names=factor_cols,
             regime_array=regime_array,
-            regime_names=list(REGIME_FEATURE_NAMES),
+            regime_names=tuple(REGIME_FEATURE_NAMES),
         )
 
     def get_date_range(self) -> tuple[datetime.date | None, datetime.date | None]:
@@ -912,7 +912,7 @@ class FactorPanelLoader:
             stock_codes=stock_codes,
             factor_names=factor_names,
             regime_array=regime_array,
-            regime_names=list(REGIME_FEATURE_NAMES),
+            regime_names=tuple(REGIME_FEATURE_NAMES),
         )
 
 
