@@ -127,3 +127,29 @@ def test_predict_values_returns_b_shape():
     obs = _make_obs_tensors()
     v = p.predict_values(obs)
     assert v.shape == (2,)
+
+
+def test_log_prob_bounded_under_mask():
+    """Regression: with -1e9 mask the per-stock log_prob exploded after a small
+    SGD step on log_std, pushing approx_kl to exp(40+) and breaking PPO. With
+    the -100 mask we use now, log_prob magnitudes stay in float32-stable range
+    (< ~1e6 even for large S)."""
+    torch.manual_seed(0)
+    p = _build_policy(S=64, F=5, R=8)  # larger S to amplify any per-stock blow-up
+    mask = torch.zeros(2, 64, dtype=torch.float32)
+    mask[:, :8] = 1.0  # 8 valid out of 64 — typical of late-2025 universe
+    obs = _make_obs_tensors(B=2, S=64, F=5, R=8, mask=mask)
+
+    actions, _, log_prob_old = p.forward(obs, deterministic=False)
+    # Simulate one SGD step on log_std (the parameter most affecting log_prob).
+    with torch.no_grad():
+        p.log_std.add_(torch.randn_like(p.log_std) * 1e-4)
+    _, log_prob_new, _ = p.evaluate_actions(obs, actions)
+
+    # log_ratio per sample must stay bounded — < 1e3 is generous; -1e9 mask
+    # would have made this 1e8+.
+    log_ratio = (log_prob_new - log_prob_old).abs()
+    assert log_ratio.max() < 1e3, (
+        f"log_prob ratio exploded: max={log_ratio.max().item():.3e}. "
+        f"Mask value too large; check policy._logits."
+    )
