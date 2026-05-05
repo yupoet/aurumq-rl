@@ -37,7 +37,11 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+from aurumq_rl.data_loader import (
+    FactorPanelLoader,
+    UniverseFilter,
+    align_panel_to_stock_list,
+)
 from aurumq_rl.gpu_env import GPUStockPickingEnv  # noqa: F401  (custom_objects)
 from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
 from aurumq_rl.index_dict_rollout_buffer import IndexOnlyDictRolloutBuffer
@@ -159,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.run_dir / 'metadata.json'} predates Phase 21; cannot run sanity checks."
         )
     stock_factor_names = meta.get("stock_factor_names") or meta.get("factor_names")
+    train_stock_codes = meta["stock_codes"]
 
     loader = FactorPanelLoader(parquet_path=args.data_path)
     panel = loader.load_panel(
@@ -168,6 +173,9 @@ def main(argv: list[str] | None = None) -> int:
         forward_period=args.forward_period,
         factor_names=stock_factor_names,
     )
+    # Align to the train universe so the model's per-stock heads (log_std,
+    # actor_head bias) line up. Phase 16+ mismatch fix.
+    panel = align_panel_to_stock_list(panel, train_stock_codes)
 
     ckpt_path = args.checkpoint or (args.run_dir / "ppo_final.zip")
     print(f"[sanity] loading checkpoint: {ckpt_path}")

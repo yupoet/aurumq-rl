@@ -1,19 +1,53 @@
-# Phase 21 — V2 Architecture Hard Switch
+# Phase 21 — V2 Architecture: HYPOTHESIS REJECTED
 
-> 2026-05-05. Hard fork from V1: Dict observation space + split-head policy
-> + 8 v0 regime features + IndexOnlyDictRolloutBuffer +
-> is_suspended_default_True fix. Phase 16-19 zips become forensic
-> artifacts; the new V2 path is the only training path going forward.
+> 2026-05-05. The Phase 21 V2 architecture (Dict obs + split-head + regime
+> indicator + hard mask) was implemented end-to-end and ran a 300k seed=42
+> sanity train. It UNDERPERFORMS the Phase 16a V1 baseline by 1.15
+> vs_p50_adj. The regime path is functionally dead — actor produces
+> identical OOS scores under real / zero / batch-mean / shuffled regime
+> input. **Recommend: do NOT merge V2 to main; keep on `feat/phase21-v2-architecture`
+> as a forensic artifact. Phase 16a remains production. Phase 18 ens_rankmean6
+> remains the strongest ensemble candidate.**
 
 ## TL;DR
 
-* Architecture per `docs/superpowers/specs/2026-05-05-phase21-v2-architecture-design.md`.
-* Implementation plan at `docs/superpowers/plans/2026-05-05-phase21-v2-architecture.md`.
-* Phase 21A 300k seed=42 sanity train: best `vs_random_p50_adjusted = ___`
-  (vs Phase 16a baseline +0.428: Δ = ___).
-* Sanity check 1 (regime ablation): see `phase21_sanity_checks.json`.
-* Sanity check 2 (leakage delta): ___ .
-* Sanity check 3 (b1 vs b2): DEFERRED to Phase 22 — see plan Task 5.4 Step 3.
+* Architecture spec: `docs/superpowers/specs/2026-05-05-phase21-v2-architecture-design.md`.
+* Implementation plan: `docs/superpowers/plans/2026-05-05-phase21-v2-architecture.md`.
+* Phase 21A 300k seed=42 sanity train: **best `vs_random_p50_adjusted = -0.723`** (step 149952).
+  vs Phase 16a baseline +0.428: **Δ = -1.15**. Spec §10's "+0.30 minimum / -0.10 below baseline triggers investigation" gate fails by a wide margin.
+* Sanity check 1 (regime ablation): real / zero / batch-mean / shuffled all produce EXACTLY +0.433 adj_sharpe. **Regime path is dead.**
+* Sanity check 2 (leakage delta): real - zero = +0.000. Confirms regime ablation finding.
+* Sanity check 3 (b1 vs b2): DEFERRED — moot now that the regime path is unused (the b2 vs b1 distinction only matters if the regime input affects the value head).
+
+## What we learned
+
+* **The split-head architecture's regime path collapsed to zero gradient signal during training.** The actor learned to ignore the (B, R') regime broadcast entirely. Possible causes (any combination):
+  1. Hard mask `-100.0` dominates the actor's loss, shrinking the regime path's gradient relative to the per-stock signal.
+  2. Regime encoder out_dim (16) is half the stock encoder out_dim (32), so the actor head's regime weights are statistically less likely to learn anything before the per-stock weights converge.
+  3. Cross-section variation in stock features already implicitly captures regime info — the explicit (B, R') input is redundant.
+  4. `target_kl=0.30` early-stops PPO at ~9 SGD updates per iteration (clip_fraction ≈ 0.30, approx_kl ≈ 0.03 per iter); 9 is enough for the dominant per-stock pathway but possibly not for the regime co-pathway to find signal.
+* **V2 underperforms V1 by 1.15 vs_p50_adj at the same training budget.** The Dict-obs / mask / split-head overhead reduces the effective optimization rate without delivering the regime benefit it was supposed to enable.
+
+## Architectural decisions (as implemented)
+
+The full design lives in the spec; key load-bearing points:
+
+* **Dict observation space**: `{stock: (S, F_stock), regime: (R,), valid_mask: (S,)}`. Stock encoder physically cannot see regime/mkt features (allowlist + runtime assert).
+* **Split-head policy**: per-stock encoder + regime encoder + concat at the head. Actor (`Linear → mask -100 → Normal(loc, exp(log_std))`) and critic (per-stock value MLP → masked_mean → Linear) share `head_in`. Critic uses true b2 ordering.
+* **Hard mask**: `valid_mask` is enforced at logit time AND at masked_mean. `-100.0` (not the spec's `-1e9` — see fix below).
+* **Action space stays Box(0, 1, (S,))**: env applies top-K post-sample. Distribution is per-stock Normal; log_prob summed over S.
+* **8 v0 regime features**: breadth_d/20d, xs_disp_d/20d, idx_ret_20d/60d (compounded via `expm1(cumsum(log1p))`), idx_vol_20d, extreme_imbalance_norm. Computed on the same valid_mask the env uses.
+* **is_suspended default-True**: pre-IPO and delisted (t, j) cells default to suspended. Phase 19 bug fix.
+
+Two production-grade bugs surfaced during Phase 21A and were fixed (kept under V2):
+
+1. **Mask magnitude bug** (commit 89b13bb). The spec's `-1e9` mask put loc at magnitude 1e9 where float32 precision is ~1e2; the buffer-roundtripped action drifted by ~100 units, so per-stock log_prob `((action-loc)/scale)^2 ≈ 4e4` and joint over 3000 stocks pushed approx_kl to exp(40+). Fix: use `-100.0` — top-K still rejects invalid (typical valid scores are in [-3, +3] after LayerNorm) but stays in float32-stable range. Pinned by regression test `test_log_prob_bounded_under_mask`.
+
+2. **last_obs_t timing bug** (commit 50cb3a8). `env.last_obs_t` was being updated at the END of `step_wait` (post-advance), but SB3 calls `rollout_buffer.add(self._last_obs)` AFTER `env.step` and BEFORE updating `self._last_obs` to the new obs — so the buffer was storing the t for the WRONG obs. PPO then re-evaluated against a different observation than was sampled, blowing up approx_kl despite the mask fix. **V1 had this same bug** but its DiagGaussian + no-hard-mask was tolerant; V2's hard mask makes it explode. Fix: snapshot `last_obs_t = self.t` at the START of `step_wait`, before any advance.
+
+The latter is a **silent correctness improvement applicable to V1 too**, even if V2 is rolled back. Phase 22 should consider porting the fix to the V1 path on a separate branch and re-running Phase 16a to see whether the corrected timing changes the baseline.
+
+One spec deviation: `RegimeEncoder` no longer has an input `LayerNorm(regime_dim)` (Task 3.2 finding). Input LayerNorm was shift-invariant — `LayerNorm(x+c) == LayerNorm(x)` — which killed the b2 critic test. The output LayerNorm is preserved.
 
 ## Architectural decisions
 
@@ -85,57 +119,71 @@ One acceptable spec deviation surfaced during Task 3.2: the spec's `RegimeEncode
 
 V1 test files removed: `tests/test_policy.py`. The V1 `PerStockExtractor` / `PerStockEncoderPolicy` classes are deleted; their existing tests would not have applied to V2.
 
-## Migration
+## Migration / production status
 
-V1 zips at `models/production/phase16_*` `phase17_*` `phase18_*` `phase20_*` are NO LONGER LOADABLE under V2 codebase. **Do not delete them.** They remain on disk and OSS as forensic artifacts; several reports cite their sha256 digests.
+**V2 is NOT being merged to main.** The Phase 21 V2 codebase lives on `feat/phase21-v2-architecture` indefinitely as a forensic artifact. Future phases that want to retry the regime indicator or split-head should branch from there or cherry-pick specific fixes (e.g. the `last_obs_t` timing fix, which is a real bug in V1 too).
 
-V2 zips initially land at `runs/phase21_*/`. Promotion to `models/production/` requires a fresh-holdout pass (Phase 19's INSUFFICIENT verdict still applies — need ≥40 fresh post-2026-04-24 dates).
+Production status (UNCHANGED from before Phase 21):
+- `models/production/phase16_16a_drop_mkt_best.zip` (sha256[:16] `ae924791643ee77d`) remains the production single-model baseline at +0.428 vs_p50_adj.
+- `ens_rankmean6` (Phase 18) remains the strongest ensemble candidate at +0.711 vs_p50_adj — but stranded behind the Phase 19 INSUFFICIENT fresh-holdout gate.
+- The 6-member Phase 18 zips remain loadable under the pre-Phase-21 V1 main branch.
 
-## Phase 21A sanity train — TO BE FILLED
+## Phase 21A sanity train — RESULTS
 
 Configuration:
 - panel: `data/factor_panel_combined_short_2023_2026.parquet`
 - train window: 2023-01-03 .. 2025-06-30
 - OOS window: 2025-07-01 .. 2026-04-24
-- universe: main_board_non_st, n=____, factors=___
+- universe: main_board_non_st, n=3014 stocks, 353 factors
 - 300k timesteps, n_envs=16, episode=240, batch=1024, n_steps=1024, n_epochs=10
 - learning_rate=1e-4, target_kl=0.30, max_grad_norm=0.5
 - top_k=30, forward_period=10, seed=42
 - regime_encoder_hidden=64, regime_encoder_out_dim=16, critic_token_hidden=64
 - rollout_buffer=index (IndexOnlyDictRolloutBuffer)
+- wall time: ~3.2 hours (RTX 4070, 26 fps SGD-bound)
 
-Result:
+Result (best checkpoint = step 149952):
 
 | metric | Phase 16a baseline | Phase 21A | Δ |
 |---|---:|---:|---:|
-| best step | 224928 | ___ | |
-| adj Sharpe | +1.593 | ___ | ___ |
-| **vs random p50 adj** | **+0.428** | **___** | **___** |
-| non-overlap Sharpe | +1.112 | ___ | ___ |
-| IC | +0.0143 | ___ | ___ |
+| best step | 224928 | 149952 | |
+| adj Sharpe | +1.593 | +0.442 | -1.151 |
+| **vs random p50 adj** | **+0.428** | **-0.723** | **-1.151** |
+| non-overlap Sharpe | +1.112 | +0.960 | -0.152 |
+| IC (display bug, see below) | +0.0143 | +0.0034 | (eval-side artefact) |
 
-Verdict: ___
+PPO training health check (good): approx_kl 0.03, clip_fraction 0.30, explained_variance 0.96, value_loss 0.034, entropy stable at -2.2e3, std 0.502. So PPO trained correctly; the issue is the ARCHITECTURE under-utilizing its parameters, not a training-dynamics bug.
+
+Verdict: **REJECTED.** Phase 21 hypothesis ("split-head + regime indicator improves OOS") is not supported. V2 is significantly worse than V1 at the same training budget. Phase 16a remains production. Phase 18 ens_rankmean6 remains the strongest ensemble candidate.
+
+Eval-script note: `_eval_all_checkpoints.py` reports IC values that are nearly identical (±1e-7) across all checkpoints. This is a display bug — the IC is computed from a panel-derived signal rather than the model's per-checkpoint predictions. It does NOT affect the Sharpe / vs_p50_adj numbers (which DO vary correctly per checkpoint). To investigate / fix in Phase 22 if anyone wants per-checkpoint IC.
 
 ## Three architectural sanity checks
 
-1. **Actor regime ablation**: see `phase21_sanity_checks.json`.
-   - real: ___ adj_S
-   - zero: ___ adj_S
-   - batch-mean: ___ adj_S
-   - shuffled: ___ adj_S
-   - delta(real - zero): ___
+1. **Actor regime ablation** (`phase21_sanity_checks.json`):
+   - real:        +0.433 adj_S
+   - zero:        +0.433 adj_S
+   - batch-mean:  +0.433 adj_S
+   - shuffled:    +0.433 adj_S
+   - **delta(real - zero) = +0.000**
 
-2. **Leakage delta**: ___ . Interpretation: ___.
+   The actor is identical across all four regime substitutions, to the precision of the scoring loop. The regime path is unambiguously dead.
 
-3. **b1 vs b2 critic**: DEFERRED to Phase 22.
+2. **Leakage delta**: 0.000. This is fully consistent with the regime path being unused. There is nothing to leak — the actor isn't using regime info at all, so we can't distinguish "regime helps but the encoder leaked it through stock features" from "regime is dead weight".
+
+3. **b1 vs b2 critic**: DEFERRED. Now moot given (1): the critic's regime pathway is also unused (the regime input is the same `regime_emb` broadcast that the actor ignores). Even if the critic's value MLP were re-architected to use it, the ACTOR is regime-blind and its decisions wouldn't change.
 
 ## Next phase
 
-* Phase 22 multi-seed sweep on V2 to rebuild the ensemble baseline (Phase 18 ens_rankmean6 is stranded under V1).
-* Phase 22 fresh-holdout collection (≥40 days post-2026-04-24 needed for production promotion).
-* Phase 22 Ubuntu-side regime enrichment: VIX-equivalent, fund flows, real index series (replace the equal-weight `idx_ret` proxy with a market-cap-weighted index).
-* Phase 22 b1 vs true-b2 critic ablation (deferred from Phase 21).
-* Phase 22 update spec doc to reflect the RegimeEncoder input-LayerNorm removal.
+Given Phase 21's negative result, the priorities for Phase 22 are different from what the Phase 21 plan envisioned:
+
+* **Cherry-pick the `last_obs_t` timing fix to V1's main branch** and re-run Phase 16a as a sanity check. The fix is a genuine bug; V1 was tolerant but not necessarily optimal under it. If V1 with the timing fix outperforms +0.428, that's a free win without any architectural change.
+* **Try regime indicator as a per-stock factor instead of split-head**: append the 8 regime features to every stock's per-stock factor vector (so they enter the per-stock encoder directly, not via a parallel head). This keeps V1's monolithic flow but gives the encoder access to regime context. Much smaller change vs Phase 21's hard fork.
+* **If revisiting split-head, replace concat with FiLM-style modulation** (regime modulates per-stock embedding via per-channel scale + bias). The concat path's regime contribution gets washed out; FiLM forces regime to bias every stock's embedding directly.
+* Phase 18 ens_rankmean6 fresh-holdout gate (≥40 days post-2026-04-24) still applies — fresh data collection is unrelated to the V1/V2 question and should proceed regardless.
+* Update the spec doc (commit f60741d) to reflect the two known bugs (mask magnitude, `last_obs_t` timing) and the RegimeEncoder input-LayerNorm removal.
+
+**Phase 21 is officially closed as REJECTED.** No multi-seed sweep, no further training under this architecture.
 
 ## Artifacts
 
