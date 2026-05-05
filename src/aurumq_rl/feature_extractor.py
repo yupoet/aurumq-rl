@@ -75,8 +75,10 @@ class RegimeEncoder(nn.Module):
         super().__init__()
         self.regime_dim = regime_dim
         self.out_dim = out_dim
+        # No input LayerNorm: normalizing the input would remove additive shifts,
+        # making the encoder shift-invariant and defeating regime sensitivity tests.
+        # The output LayerNorm stabilises activations without masking input variance.
         self.net = nn.Sequential(
-            nn.LayerNorm(regime_dim),
             nn.Linear(regime_dim, hidden),
             nn.SiLU(),
             nn.Linear(hidden, out_dim),
