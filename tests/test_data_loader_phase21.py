@@ -11,7 +11,9 @@ from aurumq_rl.data_loader import (
     FactorPanel,
     FactorPanelLoader,
     FORBIDDEN_PREFIXES,
+    REGIME_FEATURE_NAMES,
     STOCK_FACTOR_PREFIXES,
+    _compute_regime_features,
     discover_factor_columns,
 )
 
@@ -101,3 +103,89 @@ def test_discover_factor_columns_n_factors_limit():
     })
     cols = discover_factor_columns(df, n_factors=2)
     assert cols == ["alpha_001", "alpha_002"]
+
+
+# ------------------- Regime features -------------------
+
+def _compute_regime_directly(pct: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Reference implementation used as test oracle for _compute_regime_features."""
+    T, S = pct.shape
+    out = np.zeros((T, 8), dtype=np.float32)
+    breadth_d = np.zeros(T, dtype=np.float32)
+    xs_disp_d = np.zeros(T, dtype=np.float32)
+    idx_ret_d = np.zeros(T, dtype=np.float32)
+    extreme_imb = np.zeros(T, dtype=np.float32)
+    for t in range(T):
+        v = valid[t]
+        n = int(v.sum())
+        if n == 0:
+            continue
+        p = pct[t][v]
+        breadth_d[t] = float((p > 0).mean())
+        xs_disp_d[t] = float(p.std()) if n > 1 else 0.0
+        idx_ret_d[t] = float(p.mean())
+        up = int((p >= 0.099).sum())
+        dn = int((p <= -0.099).sum())
+        extreme_imb[t] = float(up - dn) / float(n)
+
+    def _rmean(a, w):
+        out = np.zeros_like(a)
+        for t in range(len(a)):
+            lo = max(0, t - w + 1)
+            out[t] = float(a[lo:t + 1].mean())
+        return out
+
+    out[:, 0] = breadth_d
+    out[:, 1] = _rmean(breadth_d, 20)
+    out[:, 2] = xs_disp_d
+    out[:, 3] = _rmean(xs_disp_d, 20)
+    for t in range(T):
+        lo20 = max(0, t - 19)
+        out[t, 4] = float(np.prod(1.0 + idx_ret_d[lo20:t + 1]) - 1.0)
+        lo60 = max(0, t - 59)
+        out[t, 5] = float(np.prod(1.0 + idx_ret_d[lo60:t + 1]) - 1.0)
+    for t in range(T):
+        lo = max(0, t - 19)
+        seg = idx_ret_d[lo:t + 1]
+        out[t, 6] = float(seg.std()) * float(np.sqrt(252.0)) if len(seg) > 1 else 0.0
+    out[:, 7] = extreme_imb
+    return out
+
+
+def test_regime_feature_names_constant_and_length():
+    assert len(REGIME_FEATURE_NAMES) == 8
+    assert REGIME_FEATURE_NAMES[0] == "regime_breadth_d"
+    assert REGIME_FEATURE_NAMES[7] == "regime_extreme_imbalance_norm"
+
+
+def test_factor_panel_has_regime_array(tmp_path):
+    df = _build_panel_df()
+    parquet_path = tmp_path / "panel.parquet"
+    df.write_parquet(parquet_path)
+    loader = FactorPanelLoader(parquet_path=parquet_path)
+    panel = loader.load_panel(
+        start_date=dt.date(2024, 1, 2), end_date=dt.date(2024, 1, 8),
+        forward_period=1,
+    )
+    assert hasattr(panel, "regime_array")
+    assert panel.regime_array.shape == (5, 8)
+    assert panel.regime_array.dtype == np.float32
+    assert np.isfinite(panel.regime_array).all()
+    assert list(panel.regime_names) == list(REGIME_FEATURE_NAMES)
+
+
+def test_regime_features_match_reference():
+    """Hand-built (T=5, S=4) panel, compare to the inline reference oracle."""
+    pct = np.array([
+        [+0.10, -0.05, +0.02, +0.0],
+        [-0.099, +0.099, +0.0, +0.0],
+        [+0.05, +0.05, -0.05, -0.05],
+        [+0.10, +0.099, -0.099, +0.02],
+        [+0.0,  +0.0,  +0.0,  +0.0],
+    ], dtype=np.float32)
+    valid = np.ones_like(pct, dtype=np.bool_)
+    expected = _compute_regime_directly(pct, valid)
+
+    got = _compute_regime_features(pct, valid)
+    assert got.shape == expected.shape
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-6)

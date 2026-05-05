@@ -104,6 +104,21 @@ FORBIDDEN_PREFIXES: tuple[str, ...] = (
 # Will be removed in a follow-up cleanup; do NOT add new references.
 FACTOR_COL_PREFIXES = STOCK_FACTOR_PREFIXES
 
+# Phase 21 v0 regime feature names — the 8 cross-section/index time-series
+# columns computed by :func:`_compute_regime_features` and stored in
+# :attr:`FactorPanel.regime_array`. Order is load-bearing: the RegimeEncoder
+# consumes these by position.
+REGIME_FEATURE_NAMES: tuple[str, ...] = (
+    "regime_breadth_d",
+    "regime_breadth_20d",
+    "regime_xs_disp_d",
+    "regime_xs_disp_20d",
+    "regime_idx_ret_20d",
+    "regime_idx_ret_60d",
+    "regime_idx_vol_20d",
+    "regime_extreme_imbalance_norm",
+)
+
 # Required columns in input Parquet
 REQUIRED_COLUMNS: tuple[str, ...] = ("ts_code", "trade_date", "close", "pct_chg", "vol")
 
@@ -129,6 +144,11 @@ class UniverseFilter(StrEnum):
 class FactorPanel(NamedTuple):
     """Container for a 3D factor panel + auxiliary arrays.
 
+    Phase 21 narrows ``factor_array`` / ``factor_names`` to per-stock factors
+    ONLY (mkt_/index_/regime_/global_ excluded by data_loader's allowlist),
+    and adds ``regime_array`` / ``regime_names`` for the date-level regime
+    context tensor consumed by the new RegimeEncoder.
+
     Attributes
     ----------
     factor_array:
@@ -149,6 +169,13 @@ class FactorPanel(NamedTuple):
         list[str], length n_stocks.
     factor_names:
         list[str], length n_factors.
+    regime_array:
+        shape (n_dates, 8), float32. The 8 v0 cross-section/index regime
+        features per :data:`REGIME_FEATURE_NAMES`. Default empty so legacy
+        callers that build FactorPanel by hand continue to work.
+    regime_names:
+        list[str], length 8. Names of the regime features. Default empty
+        list for legacy compatibility.
     """
 
     factor_array: np.ndarray
@@ -160,6 +187,8 @@ class FactorPanel(NamedTuple):
     dates: list[datetime.date]
     stock_codes: list[str]
     factor_names: list[str]
+    regime_array: np.ndarray = np.zeros((0, 0), dtype=np.float32)
+    regime_names: list[str] = []
 
 
 def align_panel_to_stock_list(
@@ -222,6 +251,8 @@ def align_panel_to_stock_list(
         dates=list(panel.dates),
         stock_codes=list(target_stock_codes),
         factor_names=list(panel.factor_names),
+        regime_array=panel.regime_array.copy(),
+        regime_names=list(panel.regime_names),
     )
 
 
@@ -402,6 +433,92 @@ def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray
             0.0,
         )
     return log_ret.astype(np.float32)
+
+
+def _compute_regime_features(
+    pct_change: np.ndarray, valid_mask: np.ndarray
+) -> np.ndarray:
+    """Compute the 8 v0 regime features per :data:`REGIME_FEATURE_NAMES`.
+
+    Parameters
+    ----------
+    pct_change:
+        (T, S) decimal pct change (e.g. +10% = 0.10).
+    valid_mask:
+        (T, S) bool. Cells where the stock is suspended / pre-IPO / ST should
+        be False so they don't contribute to cross-section stats. The mask
+        used here MUST match the env's ``valid_mask`` so train- and OOS-time
+        regime stats stay comparable.
+
+    Returns
+    -------
+    np.ndarray of shape (T, 8), dtype float32, all finite.
+    """
+    T, S = pct_change.shape
+    pct = pct_change.astype(np.float32, copy=False)
+    valid = valid_mask.astype(np.bool_, copy=False)
+
+    breadth_d = np.zeros(T, dtype=np.float32)
+    xs_disp_d = np.zeros(T, dtype=np.float32)
+    idx_ret_d = np.zeros(T, dtype=np.float32)
+    extreme_imb = np.zeros(T, dtype=np.float32)
+
+    for t in range(T):
+        v = valid[t]
+        n = int(v.sum())
+        if n == 0:
+            continue
+        p = pct[t][v]
+        breadth_d[t] = float((p > 0).mean())
+        if n > 1:
+            xs_disp_d[t] = float(p.std())
+        idx_ret_d[t] = float(p.mean())
+        up = int((p >= 0.099).sum())
+        dn = int((p <= -0.099).sum())
+        extreme_imb[t] = float(up - dn) / float(n)
+
+    out = np.zeros((T, 8), dtype=np.float32)
+
+    def _rolling_mean(a: np.ndarray, w: int) -> np.ndarray:
+        r = np.zeros_like(a)
+        cs = np.cumsum(a, dtype=np.float64)
+        for t in range(len(a)):
+            lo = max(0, t - w + 1)
+            seg_sum = cs[t] - (cs[lo - 1] if lo > 0 else 0.0)
+            r[t] = float(seg_sum / float(t - lo + 1))
+        return r.astype(np.float32, copy=False)
+
+    out[:, 0] = breadth_d
+    out[:, 1] = _rolling_mean(breadth_d, 20)
+    out[:, 2] = xs_disp_d
+    out[:, 3] = _rolling_mean(xs_disp_d, 20)
+
+    log1p_idx = np.log1p(idx_ret_d.astype(np.float64))
+    cs = np.cumsum(log1p_idx)
+    for t in range(T):
+        lo20 = max(0, t - 19)
+        seg20 = cs[t] - (cs[lo20 - 1] if lo20 > 0 else 0.0)
+        out[t, 4] = float(np.expm1(seg20))
+        lo60 = max(0, t - 59)
+        seg60 = cs[t] - (cs[lo60 - 1] if lo60 > 0 else 0.0)
+        out[t, 5] = float(np.expm1(seg60))
+
+    for t in range(T):
+        lo = max(0, t - 19)
+        seg = idx_ret_d[lo:t + 1]
+        if len(seg) > 1:
+            out[t, 6] = float(seg.std()) * float(np.sqrt(252.0))
+
+    out[:, 7] = extreme_imb
+
+    if not np.isfinite(out).all():
+        col_idx = int(np.argmax(~np.isfinite(out).all(axis=0)))
+        bad = REGIME_FEATURE_NAMES[col_idx] if col_idx < len(REGIME_FEATURE_NAMES) else f"col_{col_idx}"
+        raise ValueError(
+            f"_compute_regime_features produced non-finite values in column {bad!r}; "
+            "check upstream pct_change for NaN / inf."
+        )
+    return out
 
 
 def discover_factor_columns(
@@ -670,6 +787,15 @@ class FactorPanelLoader:
             factor_array, factor_cols, feature_group_weights
         )
 
+        # Phase 21: regime tensor. Use the same valid_mask the env will use
+        # so train- and eval-time regime stats are comparable.
+        valid_for_regime = (
+            (~is_st_array)
+            & (~is_suspended_array)
+            & (days_since_ipo_array >= NEW_STOCK_PROTECT_DAYS)
+        )
+        regime_array = _compute_regime_features(pct_change_array, valid_for_regime)
+
         return FactorPanel(
             factor_array=factor_array,
             return_array=return_array,
@@ -680,6 +806,8 @@ class FactorPanelLoader:
             dates=dates,
             stock_codes=stock_codes,
             factor_names=factor_cols,
+            regime_array=regime_array,
+            regime_names=list(REGIME_FEATURE_NAMES),
         )
 
     def get_date_range(self) -> tuple[datetime.date | None, datetime.date | None]:
@@ -765,6 +893,14 @@ class FactorPanelLoader:
         # Synthetic codes (NOT real stock codes)
         stock_codes = [f"SYN_{i:05d}" for i in range(n_stocks)]
 
+        # Phase 21: regime tensor (same valid_mask logic as _df_to_panel)
+        valid_for_regime = (
+            (~is_st_array)
+            & (~is_suspended_array)
+            & (days_since_ipo_array >= NEW_STOCK_PROTECT_DAYS)
+        )
+        regime_array = _compute_regime_features(pct_change_array, valid_for_regime)
+
         return FactorPanel(
             factor_array=factor_array,
             return_array=return_array,
@@ -775,6 +911,8 @@ class FactorPanelLoader:
             dates=dates,
             stock_codes=stock_codes,
             factor_names=factor_names,
+            regime_array=regime_array,
+            regime_names=list(REGIME_FEATURE_NAMES),
         )
 
 
@@ -785,6 +923,7 @@ __all__ = [
     "STOCK_FACTOR_PREFIXES",
     "FORBIDDEN_PREFIXES",
     "FACTOR_COL_PREFIXES",  # legacy alias
+    "REGIME_FEATURE_NAMES",
     "REQUIRED_COLUMNS",
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",
