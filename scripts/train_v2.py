@@ -204,6 +204,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "training against an existing model on the same stock universe."
         ),
     )
+    # ---- Phase 22: main-wave reward ----
+    p.add_argument(
+        "--reward-mode",
+        choices=("forward_n_day", "main_wave_hold"),
+        default="forward_n_day",
+        help=(
+            "forward_n_day (default, V1 legacy): reward = mean(N-day forward "
+            "log return). main_wave_hold (Phase 22): reward = mean(realized "
+            "hold return under min(5d, MA5<MA10 death cross) signal-exit). "
+            "When main_wave_hold, the env's valid_mask is also tightened to "
+            "entry_eligible_mask (basic & liquidity & not below-MA-state) so "
+            "training reward and OOS eval filter on the same criterion."
+        ),
+    )
+    p.add_argument("--mwl-hold-window", type=int, default=5,
+                   help="Phase 22 main-wave: max hold days (default 5).")
+    p.add_argument("--mwl-vol-window", type=int, default=20,
+                   help="Phase 22 main-wave: past-vol window for threshold (default 20).")
+    p.add_argument("--mwl-sigma-multiplier", type=float, default=2.0,
+                   help="Phase 22 main-wave: sigma multiplier (default 2.0).")
+    p.add_argument("--mwl-absolute-threshold", type=float, default=0.06,
+                   help="Phase 22 main-wave: absolute threshold floor (default 0.06).")
+    p.add_argument("--mwl-amount-ma-min", type=float, default=1e8,
+                   help="Phase 22 main-wave: minimum 20d avg amount in 元 (default 1e8).")
     return p.parse_args(argv)
 
 
@@ -306,11 +330,85 @@ def main(argv: list[str] | None = None) -> int:
 
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
-    valid_mask = (
-        ~torch.from_numpy(panel.is_st_array).to("cuda")
-        & ~torch.from_numpy(panel.is_suspended_array).to("cuda")
-        & (torch.from_numpy(panel.days_since_ipo_array).to("cuda") >= 60)
+    valid_basic_np = (
+        (~panel.is_st_array)
+        & (~panel.is_suspended_array)
+        & (panel.days_since_ipo_array >= 60)
     )
+    valid_mask = torch.from_numpy(valid_basic_np).to("cuda")
+
+    # Phase 22: main-wave reward. Compute hold_return + entry_eligible_mask
+    # over the train window and pass them to the env. Re-reads close/vol
+    # from the parquet (panel.factor_array is z-scored, can't recover raw
+    # close from it).
+    hold_returns_t: torch.Tensor | None = None
+    if args.reward_mode == "main_wave_hold":
+        from aurumq_rl.main_wave_labels import MainWaveConfig, compute_main_wave_labels
+        import polars as pl
+
+        print("[train_v2] Phase 22: re-reading close/vol/pct_chg for main-wave labels...")
+        df_raw = pl.read_parquet(args.data_path)
+        df_raw = df_raw.filter(
+            (pl.col("trade_date") >= dt.date.fromisoformat(args.start_date))
+            & (pl.col("trade_date") <= dt.date.fromisoformat(args.end_date))
+        )
+        # Pivot per panel.dates × panel.stock_codes order
+        train_codes = list(panel.stock_codes)
+        date_set = set(panel.dates)
+
+        def _pivot_to_array(field: str) -> np.ndarray:
+            piv = (
+                df_raw.select(["trade_date", "ts_code", field])
+                .pivot(values=field, index="trade_date", on="ts_code")
+                .sort("trade_date")
+            )
+            existing = {c for c in piv.columns if c != "trade_date"}
+            arrs: list[np.ndarray] = []
+            for code in train_codes:
+                if code in existing:
+                    col = piv.get_column(code).fill_null(0.0).to_numpy()
+                else:
+                    col = np.zeros(piv.height, dtype=np.float32)
+                arrs.append(col.astype(np.float32, copy=False))
+            stacked = np.stack(arrs, axis=1)
+            # Re-align rows to panel.dates
+            piv_dates = piv.get_column("trade_date").to_list()
+            d2r = {d: i for i, d in enumerate(piv_dates)}
+            idx = [d2r[d] for d in panel.dates if d in d2r]
+            return stacked[idx]
+
+        close_arr = _pivot_to_array("close")
+        vol_arr = _pivot_to_array("vol")
+        pct_arr = _pivot_to_array("pct_chg")
+
+        cfg = MainWaveConfig(
+            hold_window=args.mwl_hold_window,
+            vol_window=args.mwl_vol_window,
+            sigma_multiplier=args.mwl_sigma_multiplier,
+            absolute_threshold=args.mwl_absolute_threshold,
+            amount_ma_window=20,
+            amount_ma_min=args.mwl_amount_ma_min,
+        )
+        print("[train_v2] computing main-wave labels for training reward...")
+        labels = compute_main_wave_labels(
+            close=close_arr, pct_chg=pct_arr, vol=vol_arr,
+            valid_mask_basic=valid_basic_np, cfg=cfg,
+        )
+        hold_returns_t = torch.from_numpy(labels.hold_return).to("cuda")
+        # Tighten valid_mask to entry_eligible & label_valid: training will
+        # only top-K from stocks that the new eval would consider tradeable.
+        valid_mask = torch.from_numpy(
+            labels.entry_eligible_mask & labels.label_valid_mask
+        ).to("cuda")
+        n_eligible = int(valid_mask.sum().item())
+        n_total = int(valid_mask.numel())
+        n_hits = int(labels.hit_main_wave.sum())
+        print(
+            f"[train_v2] reward=main_wave_hold: "
+            f"eligible={n_eligible:,}/{n_total:,} ({100.0*n_eligible/n_total:.1f}%), "
+            f"main_wave_hits={n_hits:,} (base rate {100.0*n_hits/max(int(labels.label_valid_mask.sum()),1):.2f}%), "
+            f"hold_window={cfg.hold_window}, amount_ma_min={cfg.amount_ma_min:.0e}"
+        )
 
     env = GPUStockPickingEnv(
         panel_t, returns_t, valid_mask,
@@ -320,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         cost_bps=args.cost_bps,
         seed=args.seed,
+        hold_returns=hold_returns_t,
     )
 
     encoder_hidden = tuple(int(x) for x in args.encoder_hidden.split(","))
@@ -503,6 +602,15 @@ def main(argv: list[str] | None = None) -> int:
         "resume_from": str(args.resume_from) if args.resume_from else None,
         "dropped_factor_prefixes": list(args.drop_factor_prefix) if args.drop_factor_prefix else [],
         "dropped_factor_names": dropped_factors,
+        # Phase 22
+        "reward_mode": args.reward_mode,
+        "main_wave_config": {
+            "hold_window": args.mwl_hold_window,
+            "vol_window": args.mwl_vol_window,
+            "sigma_multiplier": args.mwl_sigma_multiplier,
+            "absolute_threshold": args.mwl_absolute_threshold,
+            "amount_ma_min": args.mwl_amount_ma_min,
+        } if args.reward_mode == "main_wave_hold" else None,
     }
     (args.out_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",

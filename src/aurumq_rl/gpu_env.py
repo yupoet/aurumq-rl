@@ -31,6 +31,12 @@ class GPUStockPickingEnv(VecEnv):
         turnover_coef: float = 0.0,
         device: str = "cuda",
         seed: int | None = None,
+        # Phase 22: optional reward override. If hold_returns is provided,
+        # the env uses it instead of `returns` for reward (per-stock realized
+        # hold return under signal-exit). When None, falls back to V1 behaviour
+        # (mean of N-day forward log return). Indexing is the same: row t is
+        # the reward for action taken at t.
+        hold_returns: torch.Tensor | None = None,   # (T, S) fp32 cuda
     ) -> None:
         if panel.device.type != "cuda":
             raise ValueError("panel must be a cuda tensor")
@@ -38,9 +44,20 @@ class GPUStockPickingEnv(VecEnv):
             raise ValueError("panel and returns date/stock dims must match")
         if panel.shape[:2] != valid_mask.shape:
             raise ValueError("panel and valid_mask date/stock dims must match")
+        if hold_returns is not None:
+            if hold_returns.device.type != "cuda":
+                raise ValueError("hold_returns must be a cuda tensor")
+            if hold_returns.shape != returns.shape:
+                raise ValueError(
+                    f"hold_returns shape {tuple(hold_returns.shape)} must match "
+                    f"returns shape {tuple(returns.shape)}"
+                )
 
         self.panel = panel
         self.returns = returns
+        # Phase 22: when hold_returns provided, the env uses it as the reward
+        # source. Otherwise falls back to `returns` (legacy 10d forward mean).
+        self.hold_returns = hold_returns
         self.valid_mask = valid_mask
         self.n_dates, self.n_stocks, self.n_factors = panel.shape
         self.episode_length = episode_length
@@ -98,18 +115,24 @@ class GPUStockPickingEnv(VecEnv):
         action = self._pending_action
         self._pending_action = None
 
+        # Phase 22 fix: snapshot last_obs_t to the CURRENT t (the t of the obs
+        # SB3 just passed to policy.forward). SB3 calls rollout_buffer.add(
+        # self._last_obs) AFTER env.step but BEFORE updating self._last_obs to
+        # the new obs, so the buffer must store the t that produced the OLD
+        # obs. The previous end-of-step-wait update wrote the post-advance t,
+        # corrupting evaluate_actions during PPO updates.
+        self.last_obs_t = self.t.clone()
+
         # 1. mask invalid stocks (they can never enter top-K)
         action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
         # 2. top-K
         top_idx = torch.topk(action, k=self.top_k, dim=-1).indices  # (n_envs, K)
-        # 3. forward returns. FactorPanelLoader already encodes
-        #    return_array[t] = log(close[t+forward_period] / close[t]),
-        #    so the t-th row IS the forward return realized by the action
-        #    taken at t. Indexing self.returns[t + forward_period] would
-        #    look at t+fp..t+2fp returns — a Phase 16 corrected this bug
-        #    (was double-shifting train vs OOS eval). _sample_starts
-        #    already keeps t in [0, n_dates - episode_length - fp).
-        fwd_rets = self.returns[self.t].gather(1, top_idx)           # (n_envs, K)
+        # 3. realized return. Phase 22: prefer hold_returns (per-stock realized
+        #    hold_return under MA5/MA10 signal exit, capped at 5 days) when
+        #    provided; else fall back to V1's 10d forward mean. Both use the
+        #    same indexing: row t is the realized return for action at t.
+        return_source = self.hold_returns if self.hold_returns is not None else self.returns
+        fwd_rets = return_source[self.t].gather(1, top_idx)          # (n_envs, K)
         rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
         # 4. turnover penalty (Jaccard-style)
         if self.turnover_coef > 0.0:
@@ -138,9 +161,10 @@ class GPUStockPickingEnv(VecEnv):
                 }
             self._reset_done_envs(dones)
 
-        # Snapshot AFTER any auto-reset so done envs reflect their fresh
-        # start indices. The IndexOnlyRolloutBuffer reads this in add().
-        self.last_obs_t = self.t.clone()
+        # NOTE: do NOT update self.last_obs_t here. It was already snapshotted
+        # at the top of step_wait to the t of the obs SB3 just consumed.
+        # Re-setting it post-advance would re-introduce the off-by-one bug
+        # that PPO update sees inconsistent log_probs across rollout vs eval.
         obs = self._obs_for_sb3()
         return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
 
