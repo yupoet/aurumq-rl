@@ -785,7 +785,6 @@ __all__ = [
     "STOCK_FACTOR_PREFIXES",
     "FORBIDDEN_PREFIXES",
     "FACTOR_COL_PREFIXES",  # legacy alias
-    "REGIME_FEATURE_NAMES",  # added by Task 1.3
     "REQUIRED_COLUMNS",
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",

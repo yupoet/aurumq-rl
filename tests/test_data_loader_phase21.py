@@ -6,7 +6,6 @@ import datetime as dt
 
 import numpy as np
 import polars as pl
-import pytest
 
 from aurumq_rl.data_loader import (
     FactorPanel,
