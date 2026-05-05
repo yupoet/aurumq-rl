@@ -31,6 +31,7 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.buffers import RolloutBuffer
+from stable_baselines3.common.utils import obs_as_tensor
 
 from aurumq_rl.backtest import run_backtest_with_series
 from aurumq_rl.data_loader import (
@@ -38,6 +39,8 @@ from aurumq_rl.data_loader import (
     UniverseFilter,
     align_panel_to_stock_list,
 )
+from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
+from aurumq_rl.index_dict_rollout_buffer import IndexOnlyDictRolloutBuffer
 
 _CKPT_RE = re.compile(r"ppo_(\d+)_steps\.zip$")
 
@@ -79,15 +82,26 @@ def main() -> int:
         print(f"[eval] {meta_path} not found", file=sys.stderr)
         return 1
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    # --- Phase 21 V2 guard: V1 checkpoints cannot be evaluated by this codebase ---
+    if "regime_factor_names" not in meta:
+        raise RuntimeError(
+            f"{meta_path} predates Phase 21 (no regime_factor_names key). "
+            f"V2 codebase cannot evaluate V1 checkpoints; either roll back to "
+            f"a V1 commit or re-train under V2."
+        )
+    # V2: stock factors and regime factors are stored under separate keys.
+    # Fall back to legacy `factor_names` if `stock_factor_names` is absent (shouldn't happen).
+    stock_factor_names = meta.get("stock_factor_names") or meta.get("factor_names")
+
     train_stock_codes = meta["stock_codes"]
     factor_count = meta["factor_count"]
-    train_factor_names = meta.get("factor_names")
-    if isinstance(train_factor_names, list) and train_factor_names:
-        train_factor_names = [str(c) for c in train_factor_names]
-        print(f"[eval] factor_names from metadata: {len(train_factor_names)} cols")
+    if isinstance(stock_factor_names, list) and stock_factor_names:
+        stock_factor_names = [str(c) for c in stock_factor_names]
+        print(f"[eval] stock_factor_names from metadata: {len(stock_factor_names)} cols")
     else:
-        train_factor_names = None
-        print("[eval] WARN: metadata.json has no factor_names; falling back to "
+        stock_factor_names = None
+        print("[eval] WARN: metadata.json has no stock_factor_names; falling back to "
               "factor_count — column ORDER may shift if a new prefix was added.")
     forward_period = int(meta.get("forward_period", 10))
     print(f"[eval] forward_period={forward_period}")
@@ -103,18 +117,33 @@ def main() -> int:
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.val_start),
         end_date=dt.date.fromisoformat(args.val_end),
-        n_factors=factor_count if train_factor_names is None else None,
+        n_factors=factor_count if stock_factor_names is None else None,
         forward_period=forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
-        factor_names=train_factor_names,
+        factor_names=stock_factor_names,
     )
     panel = align_panel_to_stock_list(panel, train_stock_codes)
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[eval] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
+    # Phase 21 V2: build all tensors including regime and valid_mask.
     panel_t = torch.from_numpy(panel.factor_array).to(args.device)
+    regime_t = torch.from_numpy(panel.regime_array).to(args.device)
+    valid_mask_t = (
+        ~torch.from_numpy(panel.is_st_array).to(args.device)
+        & ~torch.from_numpy(panel.is_suspended_array).to(args.device)
+        & (torch.from_numpy(panel.days_since_ipo_array).to(args.device) >= 60)
+    )
+    print(f"[eval] regime_t: {tuple(regime_t.shape)}  valid_mask_t: {tuple(valid_mask_t.shape)}")
 
-    custom_objects = {"rollout_buffer_class": RolloutBuffer}
+    # V2 checkpoints use IndexOnlyDictRolloutBuffer (rollout_buffer="index") or
+    # GPURolloutBuffer (rollout_buffer="gpu"). Supply both so PPO.load can
+    # deserialise whichever was saved without hitting a missing-module error.
+    custom_objects = {
+        "rollout_buffer_class": IndexOnlyDictRolloutBuffer,
+        "IndexOnlyDictRolloutBuffer": IndexOnlyDictRolloutBuffer,
+        "GPURolloutBuffer": GPURolloutBuffer,
+    }
 
     rows = []
     for step, ckpt_path in checkpoints:
@@ -124,11 +153,20 @@ def main() -> int:
             model.policy.eval()
             model.policy.to(args.device)
             scores = []
+            policy_device = next(model.policy.parameters()).device
             with torch.no_grad():
                 for t in range(n_dates):
-                    feats = model.policy.features_extractor(panel_t[t : t + 1])
-                    s = model.policy.action_net(feats["per_stock"]).squeeze(-1)
-                    scores.append(s[0].detach().cpu().numpy())
+                    # Phase 21 V2: policy.forward expects Dict of tensors on the policy device.
+                    # obs_as_tensor converts dict-of-numpy → dict-of-tensor in one shot.
+                    obs_np = {
+                        "stock": panel_t[t : t + 1].detach().cpu().numpy(),        # (1, S, F_stock)
+                        "regime": regime_t[t : t + 1].detach().cpu().numpy(),      # (1, R)
+                        "valid_mask": valid_mask_t[t : t + 1]
+                            .to(dtype=torch.float32).detach().cpu().numpy(),        # (1, S)
+                    }
+                    obs_tensor = obs_as_tensor(obs_np, policy_device)
+                    actions, _, _ = model.policy.forward(obs_tensor, deterministic=True)
+                    scores.append(actions.detach().cpu().numpy().squeeze(0))        # (S,)
             preds = np.stack(scores, axis=0)
             result, _series = run_backtest_with_series(
                 predictions=preds,
