@@ -588,7 +588,12 @@ class FactorPanelLoader:
         close_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         pct_change_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         is_st_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
-        is_suspended_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
+        # Phase 21: default to True (suspended). Only (t, j) cells that have a
+        # parquet row are then UPDATED below — pre-IPO and delisted (t, j) stay
+        # True. The previous default (False) silently let the env treat zero-padded
+        # rows as tradeable, which contaminated cross-section centering and
+        # `valid_mask` once n_stocks * (1 - listed_fraction) ≳ 5%.
+        is_suspended_array = np.ones((n_dates, n_stocks), dtype=np.bool_)
         days_since_ipo_array = np.full(
             (n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32
         )
