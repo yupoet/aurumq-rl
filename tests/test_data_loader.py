@@ -76,6 +76,8 @@ def test_factor_col_prefixes_constant_unchanged() -> None:
     in the set; missing it pre-Phase-16 caused 12 columns to silently vanish
     from the Phase 15 model and produced a misleading factor-importance read
     that this test is here to prevent re-occurring.
+
+    Phase 21: mkt_ moved to regime context (no longer per-stock encoder input).
     """
     expected = {
         "alpha_",
@@ -90,7 +92,6 @@ def test_factor_col_prefixes_constant_unchanged() -> None:
         "sh_",
         "fund_",
         "ind_",
-        "mkt_",
         "gtja_",
     }
     assert set(FACTOR_COL_PREFIXES) == expected

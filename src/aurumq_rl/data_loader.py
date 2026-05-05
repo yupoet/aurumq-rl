@@ -69,8 +69,12 @@ import polars as pl
 DEFAULT_PARQUET_PATH: str = "data/factor_panel.parquet"
 NEW_STOCK_PROTECT_DAYS: int = 60
 
-# Factor column prefixes (recognized by data_loader)
-FACTOR_COL_PREFIXES: tuple[str, ...] = (
+# Per-stock factor column prefixes (consumed by the per-stock encoder).
+# Phase 21 NARROWS this to per-stock cross-section factors only — `mkt_*`
+# columns are now considered cross-section-constant regime context and are
+# explicitly forbidden from reaching the per-stock encoder. They remain
+# usable for regime feature computation; see `_compute_regime_features`.
+STOCK_FACTOR_PREFIXES: tuple[str, ...] = (
     "alpha_",
     "mf_",
     "mfp_",  # main-force pressure / persistence; distinct from mf_*
@@ -83,9 +87,22 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "sh_",
     "fund_",
     "ind_",
-    "mkt_",
     "gtja_",
 )
+
+# Prefixes that must NEVER appear as per-stock encoder input. The schema
+# lock at training startup re-asserts this; data_loader silently filters
+# them out of `discover_factor_columns`.
+FORBIDDEN_PREFIXES: tuple[str, ...] = (
+    "mkt_",
+    "index_",
+    "regime_",
+    "global_",
+)
+
+# Backwards-compat alias kept for any external code reading the V1 name.
+# Will be removed in a follow-up cleanup; do NOT add new references.
+FACTOR_COL_PREFIXES = STOCK_FACTOR_PREFIXES
 
 # Required columns in input Parquet
 REQUIRED_COLUMNS: tuple[str, ...] = ("ts_code", "trade_date", "close", "pct_chg", "vol")
@@ -390,9 +407,13 @@ def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray
 def discover_factor_columns(
     df: pl.DataFrame,
     n_factors: int | None = None,
-    prefixes: tuple[str, ...] = FACTOR_COL_PREFIXES,
+    prefixes: tuple[str, ...] = STOCK_FACTOR_PREFIXES,
 ) -> list[str]:
-    """Discover factor columns in a DataFrame by prefix matching.
+    """Return per-stock factor column names sorted alphabetically.
+
+    Columns whose prefix appears in :data:`FORBIDDEN_PREFIXES` are silently
+    dropped — the per-stock encoder must never see them (Phase 21 schema
+    lock). Columns whose prefix is not in the allowlist are also dropped.
 
     Parameters
     ----------
@@ -402,16 +423,22 @@ def discover_factor_columns(
         If given, truncate to first N columns (alphabetical order).
         If None, return all matched columns.
     prefixes:
-        Recognized prefixes.
+        Recognized prefixes (allowed columns).
 
     Returns
     -------
     Sorted list of factor column names.
     """
-    matched = sorted([c for c in df.columns if c.startswith(prefixes)])
+    cols: list[str] = []
+    for c in df.columns:
+        if any(c.startswith(fp) for fp in FORBIDDEN_PREFIXES):
+            continue
+        if any(c.startswith(p) for p in prefixes):
+            cols.append(c)
+    cols.sort()
     if n_factors is not None:
-        return matched[:n_factors]
-    return matched
+        cols = cols[:n_factors]
+    return cols
 
 
 # ---------------------------------------------------------------------------
@@ -755,9 +782,13 @@ __all__ = [
     "FactorPanel",
     "FactorPanelLoader",
     "UniverseFilter",
-    "FACTOR_COL_PREFIXES",
+    "STOCK_FACTOR_PREFIXES",
+    "FORBIDDEN_PREFIXES",
+    "FACTOR_COL_PREFIXES",  # legacy alias
+    "REGIME_FEATURE_NAMES",  # added by Task 1.3
     "REQUIRED_COLUMNS",
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",
     "filter_universe",
+    "align_panel_to_stock_list",
 ]

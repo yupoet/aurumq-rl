@@ -11,6 +11,9 @@ import pytest
 from aurumq_rl.data_loader import (
     FactorPanel,
     FactorPanelLoader,
+    FORBIDDEN_PREFIXES,
+    STOCK_FACTOR_PREFIXES,
+    discover_factor_columns,
 )
 
 
@@ -64,3 +67,38 @@ def test_is_suspended_default_true_for_missing_rows(tmp_path):
     b = panel.stock_codes.index("000001.SZ")
     assert panel.is_suspended_array[2, b] == True
     assert panel.is_suspended_array[0, b] == False
+
+
+def test_stock_factor_prefixes_excludes_mkt():
+    assert "mkt_" not in STOCK_FACTOR_PREFIXES
+    assert "alpha_" in STOCK_FACTOR_PREFIXES
+
+
+def test_forbidden_prefixes_constant_present():
+    assert FORBIDDEN_PREFIXES == ("mkt_", "index_", "regime_", "global_")
+
+
+def test_discover_factor_columns_filters_forbidden():
+    df = pl.DataFrame({
+        "trade_date": [dt.date(2024, 1, 2)],
+        "ts_code": ["A.SH"],
+        "alpha_001": [0.1],
+        "mf_001": [0.2],
+        "mkt_congestion": [0.3],   # forbidden
+        "regime_breadth_d": [0.4], # forbidden
+        "global_vix": [0.5],       # forbidden
+        "unknown_x": [0.6],        # not in allowlist, should also be skipped
+    })
+    cols = discover_factor_columns(df)
+    assert cols == ["alpha_001", "mf_001"]
+
+
+def test_discover_factor_columns_n_factors_limit():
+    df = pl.DataFrame({
+        "trade_date": [dt.date(2024, 1, 2)],
+        "ts_code": ["A.SH"],
+        "alpha_001": [0.1], "alpha_002": [0.2], "alpha_003": [0.3],
+        "mf_001": [0.4],
+    })
+    cols = discover_factor_columns(df, n_factors=2)
+    assert cols == ["alpha_001", "alpha_002"]
