@@ -33,6 +33,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n-seeds", type=int, default=5)
     p.add_argument("--ig-alpha-steps", type=int, default=50)
     p.add_argument("--ig-batch-size", type=int, default=8)
+    p.add_argument("--checkpoint", type=Path, default=None,
+                   help="Specific ckpt path; default = ppo_final.zip in run-dir")
+    p.add_argument("--out-json", type=Path, default=None,
+                   help="Output JSON path; default = run-dir/factor_importance.json")
+    p.add_argument("--skip-permutation", action="store_true",
+                   help="Skip Method A (permutation, slow). Run only IG (Method B).")
     return p.parse_args(argv)
 
 
@@ -63,8 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
 
-    final_model_path = next(args.run_dir.glob("*_final.zip"))
-    model = PPO.load(str(final_model_path), device="cuda")
+    if args.checkpoint is not None:
+        ckpt_path = args.checkpoint
+    else:
+        ckpt_path = next(args.run_dir.glob("*_final.zip"))
+    print(f"[importance] loading {ckpt_path}")
+    model = PPO.load(str(ckpt_path), device="cuda")
     model.policy.eval()
 
     def score_fn(obs: torch.Tensor) -> torch.Tensor:
@@ -77,43 +87,50 @@ def main(argv: list[str] | None = None) -> int:
     saliency = integrated_gradients(score_fn, ig_batch, n_alpha_steps=args.ig_alpha_steps).cpu().numpy()
     saliency_per_factor = {name: float(saliency[i]) for i, name in enumerate(panel.factor_names)}
 
-    # Permutation
-    perm_out = permutation_importance(
-        score_fn=score_fn,
-        val_panel=panel_t,
-        val_returns=returns_t,
-        factor_names=panel.factor_names,
-        forward_period=args.forward_period,
-        top_k=args.top_k,
-        n_seeds=args.n_seeds,
-    )
+    # Permutation (optional — slow, ~5-15 min depending on n_factors)
+    perm_out: dict = {}
+    if not args.skip_permutation:
+        perm_out = permutation_importance(
+            score_fn=score_fn,
+            val_panel=panel_t,
+            val_returns=returns_t,
+            factor_names=panel.factor_names,
+            forward_period=args.forward_period,
+            top_k=args.top_k,
+            n_seeds=args.n_seeds,
+        )
 
-    # Aggregate saliency by prefix
-    by_prefix: dict[str, list[float]] = {}
-    for name, s in saliency_per_factor.items():
-        prefix = name.split("_", 1)[0] if "_" in name else name
-        by_prefix.setdefault(prefix, []).append(s)
-    for prefix, drops in perm_out.items():
-        sals = by_prefix.get(prefix, [])
-        if sals:
-            drops["saliency_mean"] = float(np.mean(sals))
-            drops["saliency_max"] = float(np.max(sals))
-            drops["saliency_std"] = float(np.std(sals, ddof=1) if len(sals) > 1 else 0.0)
+        # Aggregate saliency by prefix
+        by_prefix: dict[str, list[float]] = {}
+        for name, s in saliency_per_factor.items():
+            prefix = name.split("_", 1)[0] if "_" in name else name
+            by_prefix.setdefault(prefix, []).append(s)
+        for prefix, drops in perm_out.items():
+            sals = by_prefix.get(prefix, [])
+            if sals:
+                drops["saliency_mean"] = float(np.mean(sals))
+                drops["saliency_max"] = float(np.max(sals))
+                drops["saliency_std"] = float(np.std(sals, ddof=1) if len(sals) > 1 else 0.0)
 
     output = {
-        "method": "integrated_gradients_v1+permutation_v1",
+        "method": "integrated_gradients_v1" + ("+permutation_v1" if not args.skip_permutation else ""),
         "panel": str(args.data_path),
         "val_window": f"{args.val_start}..{args.val_end}",
+        "checkpoint": str(ckpt_path),
+        # Compute_factor_weights.py expects these exact keys:
+        "factor_names": list(panel.factor_names),
+        "ig_per_factor": [float(saliency[i]) for i in range(len(panel.factor_names))],
         "saliency_per_factor": saliency_per_factor,
         "importance_per_group": perm_out,
     }
-    out_path = args.run_dir / "factor_importance.json"
+    out_path = args.out_json if args.out_json is not None else args.run_dir / "factor_importance.json"
     out_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"[importance] wrote {out_path}")
-    print("[importance] top groups by ic_drop_mean:")
-    ranked = sorted(perm_out.items(), key=lambda kv: -kv[1]["ic_drop_mean"])
-    for prefix, m in ranked[:5]:
-        print(f"  {prefix:8s}  ic_drop={m['ic_drop_mean']:+.4f}  n_factors={m['n_factors']}")
+    if perm_out:
+        print("[importance] top groups by ic_drop_mean:")
+        ranked = sorted(perm_out.items(), key=lambda kv: -kv[1]["ic_drop_mean"])
+        for prefix, m in ranked[:5]:
+            print(f"  {prefix:8s}  ic_drop={m['ic_drop_mean']:+.4f}  n_factors={m['n_factors']}")
     return 0
 
 

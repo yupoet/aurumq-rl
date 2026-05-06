@@ -42,6 +42,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "(must contain {'ig_per_factor': [...], 'factor_names': [...]})")
     p.add_argument("--tk-md", type=Path, required=True,
                    help="Markdown report from _inspect_factor_at_t_minus_k.py")
+    p.add_argument("--tk-extra-json", type=Path, default=None,
+                   help="Optional second T-k source (JSON with {factor: {mean@T-1: ...}}) "
+                        "merged with --tk-md results. Used for technical factors that "
+                        "weren't in the parquet so didn't appear in the .md scan.")
     p.add_argument("--out-json", type=Path, required=True)
     p.add_argument("--w-min", type=float, default=0.20)
     p.add_argument("--w-max", type=float, default=3.00)
@@ -95,6 +99,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- Load T-k z-scores ----
     tk_scores = _parse_tk_md(args.tk_md)
+    if args.tk_extra_json is not None and args.tk_extra_json.exists():
+        extra = json.loads(args.tk_extra_json.read_text(encoding="utf-8"))
+        for name, record in extra.items():
+            v = record.get("mean@T-1") if isinstance(record, dict) else None
+            if v is not None and isinstance(v, (int, float)) and not (v != v):  # not NaN
+                tk_scores[name] = abs(float(v))
+        print(f"[weights] merged {len(extra)} factors from {args.tk_extra_json}")
 
     # ---- Union of factor names ----
     all_factors = sorted(set(ig_scores) | set(tk_scores))
