@@ -240,6 +240,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "tech_/cmf_/zt_."
         ),
     )
+    p.add_argument(
+        "--factor-weights-json",
+        type=Path,
+        default=None,
+        help=(
+            "Phase 25: path to JSON of per-factor importance-derived weights "
+            "{factor_name: float}. Applied AFTER cross-section z-score and "
+            "AFTER prefix-group weights (composes multiplicatively). Factors "
+            "absent from the dict get weight 1.0 (no penalty)."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -293,12 +304,22 @@ def main(argv: list[str] | None = None) -> int:
         parquet_path=args.data_path,
         add_technical_factors=args.add_technical_factors,
     )
+    # Phase 25: optional per-factor weights from importance analysis
+    per_factor_weights = None
+    if args.factor_weights_json is not None:
+        weights_data = json.loads(args.factor_weights_json.read_text(encoding="utf-8"))
+        per_factor_weights = weights_data.get("weights", weights_data)
+        print(f"[train_v2] loaded {len(per_factor_weights)} per-factor weights from "
+              f"{args.factor_weights_json}: "
+              f"min={min(per_factor_weights.values()):.3f} "
+              f"max={max(per_factor_weights.values()):.3f}")
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.start_date),
         end_date=dt.date.fromisoformat(args.end_date),
         n_factors=args.n_factors,
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
+        per_factor_weights=per_factor_weights,
     )
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[train_v2] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")

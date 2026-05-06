@@ -371,6 +371,48 @@ def _apply_feature_group_weights(
     return factor_array
 
 
+def _apply_per_factor_weights(
+    factor_array: np.ndarray,
+    factor_names: list[str],
+    per_factor_weights: dict[str, float] | None,
+    default_weight: float = 1.0,
+) -> np.ndarray:
+    """Phase 25: per-factor scalar weights (NOT prefix-group).
+
+    For each ``(factor_name, weight)`` entry, multiply that exact column.
+    Factors absent from the dict get ``default_weight`` (default 1.0 — no
+    suppression). Used to apply continuous importance-derived weights.
+
+    Applied AFTER cross-section z-score and AFTER feature_group_weights,
+    so it composes (multiplicatively) with any prefix-group weights.
+    """
+    if not per_factor_weights:
+        return factor_array
+    if not isinstance(per_factor_weights, dict):
+        raise TypeError(
+            "per_factor_weights must be a dict[str, float], got "
+            f"{type(per_factor_weights).__name__}"
+        )
+    name_to_idx = {n: i for i, n in enumerate(factor_names)}
+    n_total = factor_array.shape[2]
+    weights_vec = np.full(n_total, default_weight, dtype=np.float32)
+    n_matched = 0
+    for name, w in per_factor_weights.items():
+        idx = name_to_idx.get(name)
+        if idx is None:
+            continue
+        try:
+            weights_vec[idx] = float(w)
+            n_matched += 1
+        except (TypeError, ValueError) as e:
+            raise TypeError(
+                f"per_factor_weights[{name!r}] must be a float, got "
+                f"{w!r} ({type(w).__name__})"
+            ) from e
+    factor_array *= weights_vec[None, None, :]
+    return factor_array
+
+
 def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray:
     """Compute log return with NaN/zero-price safety."""
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -448,6 +490,7 @@ class FactorPanelLoader:
         universe_filter: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        per_factor_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Load a factor panel from Parquet.
 
@@ -500,6 +543,7 @@ class FactorPanelLoader:
             universe_filter=universe_filter,
             feature_group_weights=feature_group_weights,
             factor_names=factor_names,
+            per_factor_weights=per_factor_weights,
         )
 
     def _load_from_parquet(
@@ -511,6 +555,7 @@ class FactorPanelLoader:
         universe_filter: UniverseFilter,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        per_factor_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Internal Parquet → FactorPanel conversion."""
         # Use polars scan for memory efficiency
@@ -549,6 +594,7 @@ class FactorPanelLoader:
             forward_period=forward_period,
             feature_group_weights=feature_group_weights,
             factor_names=factor_names,
+            per_factor_weights=per_factor_weights,
         )
 
     def _df_to_panel(
@@ -558,6 +604,7 @@ class FactorPanelLoader:
         forward_period: int,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        per_factor_weights: dict[str, float] | None = None,
     ) -> FactorPanel:
         """Convert polars DataFrame to numpy 3D panel."""
         dates = df["trade_date"].unique().sort().to_list()
@@ -713,6 +760,12 @@ class FactorPanelLoader:
         # away. See `_apply_feature_group_weights` for semantics.
         factor_array = _apply_feature_group_weights(
             factor_array, factor_cols, feature_group_weights
+        )
+
+        # Phase 25: per-factor importance-derived weights (continuous,
+        # composes multiplicatively with prefix-group weights above).
+        factor_array = _apply_per_factor_weights(
+            factor_array, factor_cols, per_factor_weights
         )
 
         return FactorPanel(
