@@ -428,8 +428,16 @@ class FactorPanelLoader:
         Path to a Parquet file (single-file or hive-partitioned glob).
     """
 
-    def __init__(self, parquet_path: str | Path = DEFAULT_PARQUET_PATH) -> None:
+    def __init__(
+        self,
+        parquet_path: str | Path = DEFAULT_PARQUET_PATH,
+        add_technical_factors: bool = False,
+    ) -> None:
         self.parquet_path = Path(parquet_path)
+        # Phase 24: when True, ``_df_to_panel`` appends technical / cumulative-
+        # position factors (``tech_*``, ``cmf_*``, ``zt_*``) computed from
+        # close, vol, pct_chg, mf_net_1d. Adds ~30 extra channels.
+        self.add_technical_factors = add_technical_factors
 
     def load_panel(
         self,
@@ -561,16 +569,23 @@ class FactorPanelLoader:
         # Discover factor columns. If `factor_names` is given, use that EXACT
         # list/order — required for OOS eval of models with a fixed input
         # layout. Otherwise prefix-discover.
+        # Phase 24: factor_names may contain tech_/cmf_/zt_ which are computed
+        # at load time, NOT present in the parquet. Split them out, validate
+        # only the parquet-side ones against df.columns.
+        TECH_PREFIXES = ("tech_", "cmf_", "zt_")
+        requested_tech_cols: list[str] = []
         if factor_names is not None:
             df_cols = set(df.columns)
-            missing = [c for c in factor_names if c not in df_cols]
+            requested_tech_cols = [c for c in factor_names if c.startswith(TECH_PREFIXES)]
+            requested_parquet_cols = [c for c in factor_names if not c.startswith(TECH_PREFIXES)]
+            missing = [c for c in requested_parquet_cols if c not in df_cols]
             if missing:
                 raise ValueError(
                     f"factor_names contains columns not in panel: {missing[:8]}"
                     f"{'...' if len(missing) > 8 else ''} "
                     f"(panel has {len(df.columns)} columns)"
                 )
-            factor_cols = list(factor_names)
+            factor_cols = list(requested_parquet_cols)
         else:
             factor_cols = discover_factor_columns(df, n_factors=n_factors)
         if not factor_cols:
@@ -628,7 +643,69 @@ class FactorPanelLoader:
         for t in range(n_dates - forward_period):
             return_array[t] = _safe_log_return(close_array[t], close_array[t + forward_period])
 
-        # Cross-section z-score
+        # Phase 24: optionally compute technical / cumulative-position factors
+        # from the RAW (un-z-scored) close, vol, pct_chg, mf_net_1d arrays.
+        # Appended as additional channels BEFORE cross-section z-scoring.
+        # Triggers either when self.add_technical_factors=True OR when
+        # factor_names explicitly requests tech_/cmf_/zt_ columns.
+        need_tech = self.add_technical_factors or len(requested_tech_cols) > 0
+        if need_tech:
+            from .technical_factors import compute_technical_factors
+
+            # Build raw vol_array from df (not stored alongside close in V1).
+            vol_array = np.zeros_like(close_array)
+            for row in df.iter_rows(named=True):
+                t = date_index.get(row["trade_date"])
+                j = stock_index.get(row["ts_code"])
+                if t is None or j is None:
+                    continue
+                vv = row.get("vol")
+                if vv is not None:
+                    vol_array[t, j] = float(vv)
+
+            # Pull mf_net_1d if present in factor cols (raw values still in array).
+            mf_net_1d_arr: np.ndarray | None = None
+            for fi, col in enumerate(factor_cols):
+                if col == "mf_net_1d":
+                    mf_net_1d_arr = factor_array[:, :, fi].copy()
+                    break
+
+            tech = compute_technical_factors(
+                close=close_array, vol=vol_array, pct_chg=pct_change_array,
+                mf_net_1d=mf_net_1d_arr,
+            )
+            # Decide which tech cols to keep:
+            # - If user requested specific ones in factor_names, keep those (in their order)
+            # - Else (add_technical_factors=True without specific list), keep all
+            if requested_tech_cols:
+                tech_names = [c for c in requested_tech_cols if c in tech]
+                missing_tech = [c for c in requested_tech_cols if c not in tech]
+                if missing_tech:
+                    raise ValueError(
+                        f"requested technical factor names not produced by "
+                        f"compute_technical_factors: {missing_tech}"
+                    )
+            else:
+                tech_names = list(tech.keys())
+            tech_arr = np.stack([tech[k] for k in tech_names], axis=2).astype(np.float32)
+            factor_array = np.concatenate([factor_array, tech_arr], axis=2)
+            factor_cols = list(factor_cols) + tech_names
+            n_factors_actual = factor_array.shape[2]
+
+            # If factor_names was given and listed in a specific order, reorder
+            # factor_array channels to match the original request.
+            if factor_names is not None:
+                name_to_idx = {n: i for i, n in enumerate(factor_cols)}
+                missing_in_panel = [n for n in factor_names if n not in name_to_idx]
+                if missing_in_panel:
+                    raise ValueError(
+                        f"factor_names contains entries not produced: {missing_in_panel[:8]}"
+                    )
+                idx_order = [name_to_idx[n] for n in factor_names]
+                factor_array = factor_array[:, :, idx_order]
+                factor_cols = list(factor_names)
+
+        # Cross-section z-score (now over the enriched factor set)
         factor_array = _cross_section_zscore(factor_array)
 
         # Optional per-prefix scalar weighting AFTER z-score so that a
@@ -755,4 +832,5 @@ __all__ = [
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",
     "filter_universe",
+    "align_panel_to_stock_list",
 ]

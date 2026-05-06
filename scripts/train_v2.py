@@ -228,6 +228,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Phase 22 main-wave: absolute threshold floor (default 0.06).")
     p.add_argument("--mwl-amount-ma-min", type=float, default=1e8,
                    help="Phase 22 main-wave: minimum 20d avg amount in 元 (default 1e8).")
+    # ---- Phase 24: technical factors ----
+    p.add_argument(
+        "--add-technical-factors",
+        action="store_true",
+        default=False,
+        help=(
+            "Phase 24: compute MA5/10/20/60 + crosses + KDJ + MACD + Bollinger "
+            "+ volume + cumulative main-force factors at panel load time and "
+            "append to factor_array. Adds ~30 channels with prefixes "
+            "tech_/cmf_/zt_."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -277,7 +289,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     print(f"[train_v2] loading panel from {args.data_path} ({args.start_date}..{args.end_date})...")
-    loader = FactorPanelLoader(parquet_path=args.data_path)
+    loader = FactorPanelLoader(
+        parquet_path=args.data_path,
+        add_technical_factors=args.add_technical_factors,
+    )
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.start_date),
         end_date=dt.date.fromisoformat(args.end_date),
