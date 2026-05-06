@@ -207,15 +207,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # ---- Phase 22: main-wave reward ----
     p.add_argument(
         "--reward-mode",
-        choices=("forward_n_day", "main_wave_hold"),
+        choices=("forward_n_day", "main_wave_hold", "main_wave_target"),
         default="forward_n_day",
         help=(
             "forward_n_day (default, V1 legacy): reward = mean(N-day forward "
             "log return). main_wave_hold (Phase 22): reward = mean(realized "
             "hold return under min(5d, MA5<MA10 death cross) signal-exit). "
-            "When main_wave_hold, the env's valid_mask is also tightened to "
-            "entry_eligible_mask (basic & liquidity & not below-MA-state) so "
-            "training reward and OOS eval filter on the same criterion."
+            "main_wave_target (Phase 23): reward = mean(target_quality) where "
+            "target_quality is the proximity-weighted episode quality. Strong "
+            "positive only when picked stock is at T-1..T-3 of a real main wave."
         ),
     )
     p.add_argument("--mwl-hold-window", type=int, default=5,
@@ -337,12 +337,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     valid_mask = torch.from_numpy(valid_basic_np).to("cuda")
 
-    # Phase 22: main-wave reward. Compute hold_return + entry_eligible_mask
-    # over the train window and pass them to the env. Re-reads close/vol
-    # from the parquet (panel.factor_array is z-scored, can't recover raw
-    # close from it).
+    # Phase 22/23: main-wave reward. Compute hold_return / target_quality
+    # over the train window and pass to the env. Re-reads close/vol from
+    # parquet because panel.factor_array is z-scored.
     hold_returns_t: torch.Tensor | None = None
-    if args.reward_mode == "main_wave_hold":
+    n_episodes_train = 0  # for metadata
+    if args.reward_mode in ("main_wave_hold", "main_wave_target"):
         from aurumq_rl.main_wave_labels import MainWaveConfig, compute_main_wave_labels
         import polars as pl
 
@@ -381,34 +381,70 @@ def main(argv: list[str] | None = None) -> int:
         vol_arr = _pivot_to_array("vol")
         pct_arr = _pivot_to_array("pct_chg")
 
-        cfg = MainWaveConfig(
-            hold_window=args.mwl_hold_window,
-            vol_window=args.mwl_vol_window,
-            sigma_multiplier=args.mwl_sigma_multiplier,
-            absolute_threshold=args.mwl_absolute_threshold,
-            amount_ma_window=20,
-            amount_ma_min=args.mwl_amount_ma_min,
-        )
-        print("[train_v2] computing main-wave labels for training reward...")
-        labels = compute_main_wave_labels(
-            close=close_arr, pct_chg=pct_arr, vol=vol_arr,
-            valid_mask_basic=valid_basic_np, cfg=cfg,
-        )
-        hold_returns_t = torch.from_numpy(labels.hold_return).to("cuda")
-        # Tighten valid_mask to entry_eligible & label_valid: training will
-        # only top-K from stocks that the new eval would consider tradeable.
-        valid_mask = torch.from_numpy(
-            labels.entry_eligible_mask & labels.label_valid_mask
-        ).to("cuda")
-        n_eligible = int(valid_mask.sum().item())
-        n_total = int(valid_mask.numel())
-        n_hits = int(labels.hit_main_wave.sum())
-        print(
-            f"[train_v2] reward=main_wave_hold: "
-            f"eligible={n_eligible:,}/{n_total:,} ({100.0*n_eligible/n_total:.1f}%), "
-            f"main_wave_hits={n_hits:,} (base rate {100.0*n_hits/max(int(labels.label_valid_mask.sum()),1):.2f}%), "
-            f"hold_window={cfg.hold_window}, amount_ma_min={cfg.amount_ma_min:.0e}"
-        )
+        if args.reward_mode == "main_wave_hold":
+            cfg = MainWaveConfig(
+                hold_window=args.mwl_hold_window,
+                vol_window=args.mwl_vol_window,
+                sigma_multiplier=args.mwl_sigma_multiplier,
+                absolute_threshold=args.mwl_absolute_threshold,
+                amount_ma_window=20,
+                amount_ma_min=args.mwl_amount_ma_min,
+            )
+            print("[train_v2] computing main-wave hold labels for training reward...")
+            labels = compute_main_wave_labels(
+                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=cfg,
+            )
+            hold_returns_t = torch.from_numpy(labels.hold_return).to("cuda")
+            valid_mask = torch.from_numpy(
+                labels.entry_eligible_mask & labels.label_valid_mask
+            ).to("cuda")
+            n_eligible = int(valid_mask.sum().item())
+            n_hits = int(labels.hit_main_wave.sum())
+            print(
+                f"[train_v2] reward=main_wave_hold: "
+                f"eligible={n_eligible:,}/{valid_mask.numel():,}, "
+                f"main_wave_hits={n_hits:,} (base rate "
+                f"{100.0*n_hits/max(int(labels.label_valid_mask.sum()),1):.2f}%)"
+            )
+        else:   # main_wave_target (Phase 23)
+            from aurumq_rl.main_wave_episodes import (
+                EpisodeConfig, find_main_wave_episodes,
+            )
+            from aurumq_rl.main_wave_target_labels import (
+                TargetConfig, build_target_quality,
+            )
+            ep_cfg = EpisodeConfig()
+            print("[train_v2] Phase 23: scanning main-wave episodes for training targets...")
+            episodes = find_main_wave_episodes(close_arr, vol_arr, valid_basic_np, ep_cfg)
+            n_episodes_train = len(episodes)
+            print(f"[train_v2] found {n_episodes_train:,} episodes "
+                  f"in train window")
+            tg_cfg = TargetConfig()
+            targets = build_target_quality(
+                episodes, n_dates=close_arr.shape[0], n_stocks=close_arr.shape[1],
+                cfg=tg_cfg,
+            )
+            # target_quality is the per-stock reward signal at decision day t
+            hold_returns_t = torch.from_numpy(targets.target_quality).to("cuda")
+            # Tighten valid_mask: only allow picks where amount_ma20 > 1e8
+            # AND not in below-MA state (same eligibility as Phase 22).
+            from aurumq_rl.main_wave_labels import MainWaveConfig, compute_main_wave_labels
+            mwl_cfg = MainWaveConfig(
+                hold_window=args.mwl_hold_window,
+                amount_ma_min=args.mwl_amount_ma_min,
+            )
+            mwl_labels = compute_main_wave_labels(
+                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=mwl_cfg,
+            )
+            valid_mask = torch.from_numpy(mwl_labels.entry_eligible_mask).to("cuda")
+            n_t1 = int((targets.proximity == 1).sum())
+            n_t13 = int((targets.proximity > 0).sum())
+            print(f"[train_v2] reward=main_wave_target: "
+                  f"target>0 cells={int((targets.target_quality > 0).sum()):,}, "
+                  f"T-1 hits={n_t1:,}, T-1..T-3 hits={n_t13:,}, "
+                  f"max target={float(targets.target_quality.max()):+.4f}")
 
     env = GPUStockPickingEnv(
         panel_t, returns_t, valid_mask,
@@ -610,7 +646,8 @@ def main(argv: list[str] | None = None) -> int:
             "sigma_multiplier": args.mwl_sigma_multiplier,
             "absolute_threshold": args.mwl_absolute_threshold,
             "amount_ma_min": args.mwl_amount_ma_min,
-        } if args.reward_mode == "main_wave_hold" else None,
+        } if args.reward_mode in ("main_wave_hold", "main_wave_target") else None,
+        "n_episodes_train": n_episodes_train,
     }
     (args.out_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",
