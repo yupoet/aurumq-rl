@@ -27,6 +27,7 @@ Design notes
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
@@ -43,11 +44,61 @@ __all__ = [
     "FactorEntry",
     "ALPHA101_REGISTRY",
     "GTJA191_REGISTRY",
+    "FACTOR_CLIP_LIMIT",
     "list_all_factors",
     "register_alpha101",
     "register_gtja191",
     "resolve_for_aqml",
+    "sanitize_factor_series",
 ]
+
+
+# Clip limit for factor outputs. Any finite value outside this range is treated
+# as overflow / numerical artifact and clipped. ±1e6 leaves plenty of room for
+# legitimate-but-large factor values (e.g. alpha_083 swings to ±30k on real data)
+# while catching overflow cases like gtja_017 reaching 1e+302 from `rank ^ delta`.
+FACTOR_CLIP_LIMIT: float = 1.0e6
+
+
+def sanitize_factor_series(series: "pl.Series") -> "pl.Series":
+    """Replace ±inf with null and clip finite values to ±``FACTOR_CLIP_LIMIT``.
+
+    Defends downstream consumers (``np.percentile``, cross-section z-score,
+    ML training) against factor-library overflow / divide-by-zero artifacts:
+        - ±inf → null (numpy's percentile returns nan + warns on inf input)
+        - |x| > 1e6 → clipped (gtja_017's ``rank ^ delta`` blew up to 1e+302)
+        - finite, in-range → unchanged
+
+    Returns a new Float64 Series of the same length and name.
+    Cheap (one with_columns expression), so safe to apply on every factor.
+    """
+    import polars as pl
+
+    if series.dtype != pl.Float64:
+        series = series.cast(pl.Float64, strict=False)
+    name = series.name
+    return (
+        pl.DataFrame({name: series})
+        .with_columns(
+            pl.when(pl.col(name).is_infinite())
+            .then(None)
+            .otherwise(pl.col(name).clip(-FACTOR_CLIP_LIMIT, FACTOR_CLIP_LIMIT))
+            .alias(name)
+        )[name]
+    )
+
+
+def _wrap_impl_with_sanitizer(impl: FactorImpl) -> FactorImpl:
+    """Wrap a factor ``impl(df) -> pl.Series`` so its output is sanitized."""
+
+    def _sanitized(df):  # type: ignore[no-untyped-def]
+        return sanitize_factor_series(impl(df))
+
+    # Preserve introspection-friendly attributes so debugging / docs still work.
+    _sanitized.__name__ = getattr(impl, "__name__", "_sanitized_impl")
+    _sanitized.__doc__ = getattr(impl, "__doc__", None)
+    _sanitized.__wrapped__ = impl  # type: ignore[attr-defined]
+    return _sanitized
 
 
 @dataclass(frozen=True)
@@ -70,19 +121,38 @@ GTJA191_REGISTRY: dict[str, FactorEntry] = {}
 
 
 def register_alpha101(entry: FactorEntry) -> FactorEntry:
-    """Register a factor in the alpha101 registry (idempotent on identical entry)."""
-    if entry.id in ALPHA101_REGISTRY and ALPHA101_REGISTRY[entry.id] is not entry:
-        raise ValueError(f"alpha101 factor {entry.id!r} already registered with a different entry")
-    ALPHA101_REGISTRY[entry.id] = entry
-    return entry
+    """Register a factor in the alpha101 registry (idempotent on identical entry).
+
+    The entry's ``impl`` is automatically wrapped with :func:`sanitize_factor_series`
+    so every registered factor produces inf-free, clipped output regardless of how
+    the underlying formula handles divide-by-zero / overflow.
+    """
+    sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
+    if entry.id in ALPHA101_REGISTRY and ALPHA101_REGISTRY[entry.id] is not sanitized_entry:
+        # Allow re-registration only if the underlying (unwrapped) impl is identical.
+        existing_impl = getattr(ALPHA101_REGISTRY[entry.id].impl, "__wrapped__", ALPHA101_REGISTRY[entry.id].impl)
+        if existing_impl is not entry.impl:
+            raise ValueError(
+                f"alpha101 factor {entry.id!r} already registered with a different entry"
+            )
+    ALPHA101_REGISTRY[entry.id] = sanitized_entry
+    return sanitized_entry
 
 
 def register_gtja191(entry: FactorEntry) -> FactorEntry:
-    """Register a factor in the gtja191 registry (idempotent on identical entry)."""
-    if entry.id in GTJA191_REGISTRY and GTJA191_REGISTRY[entry.id] is not entry:
-        raise ValueError(f"gtja191 factor {entry.id!r} already registered with a different entry")
-    GTJA191_REGISTRY[entry.id] = entry
-    return entry
+    """Register a factor in the gtja191 registry (idempotent on identical entry).
+
+    See :func:`register_alpha101` for the auto-sanitization contract.
+    """
+    sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
+    if entry.id in GTJA191_REGISTRY and GTJA191_REGISTRY[entry.id] is not sanitized_entry:
+        existing_impl = getattr(GTJA191_REGISTRY[entry.id].impl, "__wrapped__", GTJA191_REGISTRY[entry.id].impl)
+        if existing_impl is not entry.impl:
+            raise ValueError(
+                f"gtja191 factor {entry.id!r} already registered with a different entry"
+            )
+    GTJA191_REGISTRY[entry.id] = sanitized_entry
+    return sanitized_entry
 
 
 def list_all_factors() -> dict[str, FactorEntry]:
