@@ -97,6 +97,20 @@ def main() -> int:
         if p.exists():
             manifest.append((p, f"run_sweeps/{run_name_25a}/{fname}"))
 
+    # Phase 25D — full 300k, importance-weighting paradigm REJECTED
+    run_name_25d = "phase25d_weights_no_tech_seed42"
+    run_dir_25d = ROOT / "runs" / run_name_25d
+    final_zip_25d = run_dir_25d / "ppo_final.zip"
+    if final_zip_25d.exists():
+        manifest.append((final_zip_25d, f"models/{run_name_25d}_final.zip"))
+    for fname in (
+        "episode_eval.md", "episode_eval.json", "episode_picks.jsonl",
+        "training_summary.json", "metadata.json", "train.log",
+    ):
+        p = run_dir_25d / fname
+        if p.exists():
+            manifest.append((p, f"run_sweeps/{run_name_25d}/{fname}"))
+
     # Importance + weights pipeline outputs
     aux_files = [
         "runs/phase23a_episode_seed42/factor_importance_ig_only.json",
