@@ -78,6 +78,7 @@ from typing import Any
 FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "alpha_",
     "mf_",
+    "mfp_",
     "hm_",
     "hk_",
     "inst_",
@@ -89,6 +90,9 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "ind_",
     "mkt_",
     "gtja_",
+    "tech_",
+    "cmf_",
+    "zt_",
 )
 
 REQUIRED_COLUMNS: tuple[str, ...] = ("ts_code", "trade_date", "close", "pct_chg", "vol")

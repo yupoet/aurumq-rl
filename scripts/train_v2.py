@@ -228,6 +228,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Phase 22 main-wave: absolute threshold floor (default 0.06).")
     p.add_argument("--mwl-amount-ma-min", type=float, default=1e8,
                    help="Phase 22 main-wave: minimum 20d avg amount in 元 (default 1e8).")
+    # ---- Phase 26: precise factor pin ----
+    p.add_argument(
+        "--include-columns-file",
+        type=Path,
+        default=None,
+        help=(
+            "Phase 26: explicit factor allowlist file (one column per line). "
+            "Bypasses prefix-based discovery + n_factors. Required when the "
+            "panel has columns we do NOT want (e.g. dead mfp_/senti_ cols, "
+            "redundant cyq_ on quotes_enriched). Each name must exist in the "
+            "parquet or load_panel raises. Order is preserved as the model's "
+            "input layout."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -278,12 +292,23 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[train_v2] loading panel from {args.data_path} ({args.start_date}..{args.end_date})...")
     loader = FactorPanelLoader(parquet_path=args.data_path)
+
+    include_factor_names: list[str] | None = None
+    if args.include_columns_file is not None:
+        include_factor_names = [
+            l.strip() for l in args.include_columns_file.read_text().splitlines()
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        print(f"[train_v2] include-columns-file: {args.include_columns_file} "
+              f"({len(include_factor_names)} cols pinned)")
+
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.start_date),
         end_date=dt.date.fromisoformat(args.end_date),
-        n_factors=args.n_factors,
+        n_factors=args.n_factors if include_factor_names is None else None,
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
+        factor_names=include_factor_names,
     )
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[train_v2] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")

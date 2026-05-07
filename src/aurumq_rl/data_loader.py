@@ -18,6 +18,9 @@ Input Parquet must contain columns prefixed with one of:
 * ``ind_*``     industry relative strength
 * ``mkt_*``     market regime
 * ``gtja_*``    Guotai Junan Alpha191 (GTJA short-period price-volume alphas)
+* ``tech_*``    classical TA (MA / KDJ / MACD / Bollinger / ATR / amplitude)
+* ``cmf_*``     cumulative main-force flow (60d / 120d, amount / active)
+* ``zt_*``      limit-up streaks (count / first-board / max-streak / dt-imbalance)
 
 The loader picks **all** matching columns (sorted alphabetically) up to
 ``n_factors``. Missing prefixes are silently skipped — RL never errors out
@@ -85,6 +88,9 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "ind_",
     "mkt_",
     "gtja_",
+    "tech_",  # Phase 26 — classical TA (MA / KDJ / MACD / Bollinger / ATR)
+    "cmf_",   # Phase 26 — cumulative main-force flow ratios
+    "zt_",    # Phase 26 — limit-up streak metrics
 )
 
 # Required columns in input Parquet
