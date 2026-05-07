@@ -1,7 +1,8 @@
 """Tests for gtja191.batch_141_160 (factors 141..160, 20 total).
 
-Special factors: gtja_143 (stub, all-null), gtja_147 (qlib-dep variant),
-gtja_149 (benchmark — CS-mean proxy), gtja_151 (errata).
+Special factors: gtja_143 (recursive cumprod of up-day ratios; was stub),
+gtja_147 (qlib-dep variant), gtja_149 (benchmark — CS-mean proxy),
+gtja_151 (errata).
 """
 
 from __future__ import annotations
@@ -33,8 +34,10 @@ from aurumq_rl.factors.gtja191.batch_141_160 import (
 )
 from tests.factors.gtja191._parity import parity_check
 
-# gtja_143 is a stub (Daic115 unfinished, recursive SELF reference).
-_STUBS = {"gtja_143"}
+# gtja_143 was a stub (Daic115 unfinished, recursive SELF) — now implemented
+# as cumulative product of (close/prev_close) on up days, 1.0 otherwise.
+# Quality flag bumped from 2 → 0; remove from _STUBS.
+_STUBS: set[str] = set()
 _LONG_LOOKBACK = {"gtja_141", "gtja_148", "gtja_149", "gtja_154"}
 
 
@@ -64,7 +67,7 @@ _FACTORS = [
 
 _STATUS = {
     "gtja_141": "drift",
-    "gtja_143": "stub",
+    "gtja_143": "missing",  # new impl, no Daic115 reference parity expected
     "gtja_147": "missing",  # Daic115 ref uses qlib rolling_slope; we use regbeta
     "gtja_149": "missing",  # benchmark proxy: CS-mean differs from Daic115's mean(axis=1)
     "gtja_156": "drift",

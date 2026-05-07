@@ -295,24 +295,33 @@ def alpha029(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    inner = -1.0 * cs_rank(delta(pl.col("close") - 1.0, 5))
-    staged = panel.with_columns(
-        cs_rank(cs_rank(inner)).alias("__a029_rr"),
-    )
-    staged2 = staged.with_columns(ts_min(pl.col("__a029_rr"), 2).alias("__a029_min2"))
-    staged3 = staged2.with_columns(ts_sum(pl.col("__a029_min2"), 1).alias("__a029_sum1"))
+    # NOTE on materialization: polars 1.40.x has a known limitation where
+    # ``expr.over(STOCK).rank().over(DATE)`` returns all-null due to the
+    # nested partition-key contexts not composing in the optimizer. We
+    # therefore stage every cross-section operator via ``with_columns`` and
+    # re-reference as ``pl.col(...)`` so each ``cs_rank`` sees a plain column,
+    # not a chained ``.over()`` expression. Same pattern as gtja_017.
+    staged = panel.with_columns(delta(pl.col("close") - 1.0, 5).alias("__a029_d"))
+    staged = staged.with_columns(cs_rank(pl.col("__a029_d")).alias("__a029_r1"))
+    staged = staged.with_columns((-1.0 * pl.col("__a029_r1")).alias("__a029_inner"))
+    staged = staged.with_columns(cs_rank(pl.col("__a029_inner")).alias("__a029_r2"))
+    staged = staged.with_columns(cs_rank(pl.col("__a029_r2")).alias("__a029_rr"))
+    staged = staged.with_columns(ts_min(pl.col("__a029_rr"), 2).alias("__a029_min2"))
+    staged = staged.with_columns(ts_sum(pl.col("__a029_min2"), 1).alias("__a029_sum1"))
     # log of strictly-positive sum of (rank-of-rank) values; clip at tiny
     # positive epsilon to avoid log(0).
     eps = 1e-12
-    staged4 = staged3.with_columns(
-        cs_scale(log_(pl.col("__a029_sum1").clip(lower_bound=eps))).alias("__a029_scale")
+    staged = staged.with_columns(
+        log_(pl.col("__a029_sum1").clip(lower_bound=eps)).alias("__a029_log")
     )
-    staged5 = staged4.with_columns(cs_rank(cs_rank(pl.col("__a029_scale"))).alias("__a029_rrs"))
-    staged6 = staged5.with_columns(
+    staged = staged.with_columns(cs_scale(pl.col("__a029_log")).alias("__a029_scale"))
+    staged = staged.with_columns(cs_rank(pl.col("__a029_scale")).alias("__a029_rs1"))
+    staged = staged.with_columns(cs_rank(pl.col("__a029_rs1")).alias("__a029_rrs"))
+    staged = staged.with_columns(
         ts_min(pl.col("__a029_rrs"), 5).alias("__a029_part1"),
         ts_rank(delay(-1.0 * pl.col("returns"), 6), 5).alias("__a029_part2"),
     )
-    return staged6.select(
+    return staged.select(
         (pl.col("__a029_part1") + pl.col("__a029_part2")).alias("alpha029")
     ).to_series()
 
@@ -360,16 +369,30 @@ def alpha031(panel: pl.DataFrame) -> pl.Series:
     Direction: ``reverse``
     Category: ``industry_neutral``
     """
-    inner_neg_rr = -1.0 * cs_rank(cs_rank(delta(pl.col("close"), 10)))
-    staged = panel.with_columns(inner_neg_rr.alias("__a031_inner"))
-    staged2 = staged.with_columns(ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec"))
-    staged3 = staged2.with_columns(
-        cs_rank(cs_rank(cs_rank(pl.col("__a031_dec")))).alias("__a031_p1"),
-        cs_rank(-1.0 * delta(pl.col("close"), 3)).alias("__a031_p2"),
-        ts_corr(pl.col("adv20"), pl.col("low"), 12).alias("__a031_corr"),
+    # NOTE on materialization: same polars 1.40.x limitation as alpha029 —
+    # nested ``.over()`` doesn't compose, so we stage each cs_rank/cs_scale
+    # via with_columns + pl.col reference.
+    staged = panel.with_columns(delta(pl.col("close"), 10).alias("__a031_d10"))
+    staged = staged.with_columns(cs_rank(pl.col("__a031_d10")).alias("__a031_r1"))
+    staged = staged.with_columns(cs_rank(pl.col("__a031_r1")).alias("__a031_rr"))
+    staged = staged.with_columns((-1.0 * pl.col("__a031_rr")).alias("__a031_inner"))
+    staged = staged.with_columns(
+        ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec")
     )
-    staged4 = staged3.with_columns(sign_(cs_scale(pl.col("__a031_corr"))).alias("__a031_p3"))
-    return staged4.select(
+    staged = staged.with_columns(cs_rank(pl.col("__a031_dec")).alias("__a031_pr1"))
+    staged = staged.with_columns(cs_rank(pl.col("__a031_pr1")).alias("__a031_pr2"))
+    staged = staged.with_columns(cs_rank(pl.col("__a031_pr2")).alias("__a031_p1"))
+    # Part 2: cs_rank(-1 * delta(close, 3))
+    staged = staged.with_columns(delta(pl.col("close"), 3).alias("__a031_d3"))
+    staged = staged.with_columns((-1.0 * pl.col("__a031_d3")).alias("__a031_neg_d3"))
+    staged = staged.with_columns(cs_rank(pl.col("__a031_neg_d3")).alias("__a031_p2"))
+    # Part 3: sign(scale(corr(adv20, low, 12)))
+    staged = staged.with_columns(
+        ts_corr(pl.col("adv20"), pl.col("low"), 12).alias("__a031_corr")
+    )
+    staged = staged.with_columns(cs_scale(pl.col("__a031_corr")).alias("__a031_corr_s"))
+    staged = staged.with_columns(sign_(pl.col("__a031_corr_s")).alias("__a031_p3"))
+    return staged.select(
         (pl.col("__a031_p1") + pl.col("__a031_p2") + pl.col("__a031_p3")).alias("alpha031")
     ).to_series()
 

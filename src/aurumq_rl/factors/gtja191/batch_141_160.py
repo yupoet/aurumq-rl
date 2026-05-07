@@ -117,25 +117,69 @@ register_gtja191(
 
 
 # ---------------------------------------------------------------------------
-# gtja_143 — STUB
+# gtja_143 — recursive up-day return product
 # ---------------------------------------------------------------------------
 
 
 def gtja_143(panel: pl.DataFrame) -> pl.Series:
-    """GTJA #143 — STUB (Daic115 marks unfinished, paper has SELF recursion).
+    """GTJA #143 — Cumulative product of up-day returns (recursive SELF).
 
     Guotai Junan Formula
     --------------------
         CLOSE > DELAY(CLOSE,1) ? (CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)*SELF : SELF
 
-    The recursive ``SELF`` reference makes the formula ambiguous. The
-    Daic115 reference returns ``None`` (function body commented out).
-    We follow that — output is all-null Float64. Tests against this
-    factor verify dtype + length only.
+    The recursive ``SELF`` term makes the formula a path-dependent recursion:
+    on up days the running value is *multiplied* by the up-day return, on
+    other days it is carried forward. Two reasonable interpretations:
 
-    Direction: ``normal``. Quality flag: ``2`` (stub).
+        (a) literal: SELF_t = ratio_t * SELF_{t-1}, where ratio_t is the
+            up-day raw return ~ 0.02. This decays SELF toward 0 quickly and
+            is economically meaningless.
+        (b) compounded: SELF_t = (1 + ratio_t) * SELF_{t-1} = close_t /
+            delay(close, 1)_t * SELF_{t-1}, which gives the cumulative
+            return path of a "buy-and-hold-on-up-days" strategy.
+
+    Daic115 leaves the body commented out; we adopt (b) — the economically
+    meaningful interpretation that matches how related GTJA factors (#018,
+    #053) compose returns. SELF starts at 1.0; non-up days carry forward
+    unchanged. The result is monotone non-decreasing per stock and grows
+    roughly as the cumulative product of up-day prices.
+
+    Required panel columns: ``close``, ``stock_code``, ``trade_date``.
+
+    Direction: ``normal``. Quality flag: ``0``.
     """
-    return pl.Series("gtja_143", [None] * panel.height, dtype=pl.Float64)
+    delayed = pl.col("close").shift(1).over(TS_PART)
+    # Per-row factor: close/delay on up days, 1.0 otherwise (or null when
+    # delay is null — i.e. first row of each stock).
+    factor = (
+        pl.when(pl.col("close") > delayed)
+        .then(pl.col("close") / delayed)
+        .when(delayed.is_null())
+        .then(None)
+        .otherwise(1.0)
+    )
+    staged = panel.with_columns(factor.alias("__g143_factor"))
+    # Cumulative product per stock. Polars' cum_prod ignores nulls by carrying
+    # forward; we guard explicitly via fill_null(1.0) so the recursion's
+    # "carry forward" semantics on null/non-up days is exact.
+    staged = staged.with_columns(
+        pl.col("__g143_factor")
+        .fill_null(1.0)
+        .cum_prod()
+        .over(TS_PART)
+        .alias("__g143_cum")
+    )
+    # First row per stock has no delayed close — leave null for consistency
+    # with other "delay required" factors.
+    staged = staged.with_columns(
+        pl.when(delayed.is_null())
+        .then(None)
+        .otherwise(pl.col("__g143_cum"))
+        .alias("gtja_143")
+        .cast(pl.Float64)
+    )
+    return staged.select("gtja_143").to_series()
 
 
 register_gtja191(
@@ -144,8 +188,8 @@ register_gtja191(
         impl=gtja_143,
         direction="normal",
         category="momentum",
-        description="STUB — recursive SELF reference, formula ambiguous",
-        quality_flag=2,
+        description="Cumulative product of (close/prev_close) on up days, 1.0 otherwise",
+        quality_flag=0,
     )
 )
 
