@@ -43,6 +43,71 @@ CS_PART = "trade_date"
 
 
 # ---------------------------------------------------------------------------
+# Numerical safety helpers
+# ---------------------------------------------------------------------------
+#
+# Background — see ``handoffs/2026-05-08-inf-root-cause-audit/INF_ROOT_CAUSE_AUDIT.md``.
+# Many alpha101/gtja191 formulas hit edge cases on real A-share data:
+#   1. limit-up days (一字板) where high=low=close=open=vwap → div-by-zero
+#   2. zero-stddev rolling windows (constant series) → corr/std blow up
+#   3. ``rank ^ delta`` with rank=0 + negative exponent → 0^-x = inf
+#   4. log(0) → -inf
+#
+# The factor sanitizer at the registry boundary catches the survivors, but
+# clipping ±1e6 at the end is lossy. These helpers let formulas fix the
+# problem at the operator level — div-by-near-zero becomes null, exponent
+# is clipped, log floors to a tiny epsilon — preserving more usable signal.
+
+EPS_DIV: float = 1e-9
+"""Default denominator floor for safe_div: |den| < this → null."""
+
+EPS_LOG: float = 1e-12
+"""Default floor for safe_log: input < this is clipped up before taking log."""
+
+SAFE_POW_EXP_LO: float = -3.0
+SAFE_POW_EXP_HI: float = 3.0
+"""Default exponent clip for safe_pow_clip: bounds growth/decay rate."""
+
+
+def safe_div(num: pl.Expr, den: pl.Expr, eps: float = EPS_DIV) -> pl.Expr:
+    """Division that returns NULL when ``|den| < eps`` instead of inf/nan.
+
+    Used wherever the denominator can legitimately be ~0 on real A-share
+    data (limit-up days, suspended stocks, zero-volume bars). Compared to
+    ``num / (den + eps)`` this preserves sign and produces a clean missing
+    indicator instead of a saturated value.
+    """
+    return pl.when(den.abs() > eps).then(num / den).otherwise(None)
+
+
+def safe_log(x: pl.Expr, eps: float = EPS_LOG) -> pl.Expr:
+    """``log`` with a positive floor so log(0) does not return -inf.
+
+    For non-positive inputs returns log(eps) (a large negative number);
+    callers that prefer NULL can chain ``.fill_nan(None)``.
+    """
+    return x.clip(lower_bound=eps).log()
+
+
+def safe_pow_clip(
+    base: pl.Expr,
+    exponent: pl.Expr,
+    exp_lo: float = SAFE_POW_EXP_LO,
+    exp_hi: float = SAFE_POW_EXP_HI,
+) -> pl.Expr:
+    """Power with bounded exponent so ``rank ^ delta`` cannot overflow.
+
+    A-share data sometimes produces ``delta(close, 5)`` values in the
+    range [-50, +50] when adj_factor is glitchy (see audit doc). Combined
+    with ``rank`` ∈ [0, 1] this gives ``0^-50 = inf`` or ``rank^50 ≈ 0``
+    that float32 cast turns into 0/inf. Clipping the exponent to ±3 keeps
+    economically meaningful momentum (3-fold growth/decay max) while
+    eliminating overflow.
+    """
+    return base ** exponent.clip(exp_lo, exp_hi)
+
+
+# ---------------------------------------------------------------------------
 # Rolling / time-series — fast path (native polars rolling)
 # ---------------------------------------------------------------------------
 

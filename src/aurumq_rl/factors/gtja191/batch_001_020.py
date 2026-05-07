@@ -29,6 +29,7 @@ from ._ops import (
     log_,
     mean,
     rank,
+    safe_pow_clip,
     sign_,
     sma,
     std_,
@@ -506,6 +507,17 @@ def gtja_017(panel: pl.DataFrame) -> pl.Series:
     --------------------
         RANK(VWAP - MAX(VWAP, 15)) ^ DELTA(CLOSE, 5)
 
+    Numerical safety
+    ----------------
+    The raw formula has ``rank ∈ [0, 1] ^ delta(close, 5)``. When the
+    exponent gets large in absolute value (delta(close, 5) reaches ±50
+    on adj_factor-glitchy days), the result blows up to 1e+308 and float
+    cast to inf. We use ``safe_pow_clip`` which clips the exponent to
+    [-3, 3] — bounded growth/decay rate, no overflow. Economic intent
+    preserved (a 3-fold price move is the absolute ceiling that matters
+    for momentum). Previous behaviour produced 4621 inf cells/year on
+    real data (max_finite = 1.4e+308); this fix eliminates them.
+
     Required panel columns: ``vwap``, ``close``,
     ``stock_code``, ``trade_date``.
 
@@ -516,7 +528,9 @@ def gtja_017(panel: pl.DataFrame) -> pl.Series:
     staged = panel.with_columns(inner.alias("__g017_inner"))
     staged = staged.with_columns(rank(pl.col("__g017_inner")).alias("__g017_r"))
     return staged.select(
-        (pl.col("__g017_r") ** delta(pl.col("close"), 5)).alias("gtja_017").cast(pl.Float64)
+        safe_pow_clip(
+            pl.col("__g017_r"), delta(pl.col("close"), 5)
+        ).alias("gtja_017").cast(pl.Float64)
     ).to_series()
 
 

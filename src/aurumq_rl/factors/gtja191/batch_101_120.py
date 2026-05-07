@@ -33,6 +33,7 @@ from ._ops import (
     mean,
     rank,
     regbeta,
+    safe_div,
     sma,
     std_,
     sum_,
@@ -494,8 +495,21 @@ register_gtja191(
 
 
 def gtja_114(panel: pl.DataFrame) -> pl.Series:
-    """GTJA #114 — Range-over-MA scaled by VWAP-Close gap."""
-    part = (pl.col("high") - pl.col("low")) / mean(pl.col("close"), 5)
+    """GTJA #114 — Range-over-MA scaled by VWAP-Close gap.
+
+    Numerical safety
+    ----------------
+    Three potential div-by-zero spots, all hit on A-share limit-up days
+    (一字板, high=low=close=vwap):
+      1. ``(high - low) / mean(close, 5)`` — denominator on suspended /
+         IPO bars can be 0
+      2. ``part / (vwap - close)`` — vwap-close=0 on limit-up days
+      3. outer ``(rpd*rrv) / den`` — den ≈ 0 when part = 0
+
+    Original code had ``+ 1e-7`` only for #2, which let ~7000 inf cells
+    through per year. Replaced all three with ``safe_div``.
+    """
+    part = safe_div(pl.col("high") - pl.col("low"), mean(pl.col("close"), 5))
     df = panel.with_columns(
         [
             part.alias("__p"),
@@ -508,8 +522,11 @@ def gtja_114(panel: pl.DataFrame) -> pl.Series:
             rank(rank(pl.col("volume"))).alias("__rrv"),
         ]
     )
-    den = pl.col("__p") / (pl.col("vwap") - pl.col("close") + 1e-7)
-    expr = ((pl.col("__rpd") * pl.col("__rrv")) / den).alias("gtja_114")
+    den = safe_div(pl.col("__p"), pl.col("vwap") - pl.col("close"))
+    df = df.with_columns(den.alias("__den"))
+    expr = safe_div(
+        pl.col("__rpd") * pl.col("__rrv"), pl.col("__den")
+    ).alias("gtja_114")
     return df.select(expr).to_series()
 
 

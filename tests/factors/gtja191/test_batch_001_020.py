@@ -115,7 +115,14 @@ def test_steady_state_has_values(synthetic_panel, name, impl):
 # Factors known to have residual rank-tie-breaking divergence from Daic115
 # (pandas rank vs polars rank on partial-warmup windows produces small but
 # persistent shifts). Reconcile in Phase D.
-_XFAIL_PARITY = {"gtja_010", "gtja_016"}
+#
+# gtja_017: re-implementation uses safe_pow_clip(exp ∈ [-3, 3]) to prevent
+# overflow on real A-share data (rank^delta with |delta| up to 50 → 1e+308
+# inf). Numerical parity with Daic115 is intentionally broken; the fix
+# eliminates 4621 inf cells/year vs the 21% finite-value drift in synthetic
+# tests, an acceptable trade-off documented in
+# handoffs/2026-05-08-inf-root-cause-audit/.
+_XFAIL_PARITY = {"gtja_010", "gtja_016", "gtja_017"}
 
 
 @pytest.mark.parametrize("name,impl", _FACTORS)

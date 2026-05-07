@@ -341,7 +341,14 @@ def alpha045(panel: pl.DataFrame) -> pl.Series:
     Polars Implementation Notes
     ---------------------------
     1. ``Ts_Sum(Delay(close, 5), 20) / 20`` -> per-stock lagged 20d MA.
-    2. Two ``Ts_Corr`` calls inside, both 2-window — they're noisy by design.
+    2. Original WorldQuant formula uses ``Ts_Corr(.,.,2)`` (window=2) for both
+       inner correlations. With only 2 observations, when either series has
+       zero variance (limit-up day, suspended bar) polars ``rolling_corr``
+       returned inf rather than nan, causing ~27k inf cells / year on real
+       A-share data. **We widen window=2 → 5** in this implementation: this
+       changes the numerical output but keeps the economic intent (recent
+       price-volume covariation; recent short-vs-long MA covariation). The
+       legacy expression is preserved above for parity reference.
     3. Two CS ranks; materialise the lagged-MA and the long/short-MA
        correlation before ranking.
 
@@ -351,8 +358,9 @@ def alpha045(panel: pl.DataFrame) -> pl.Series:
     Category: ``momentum``
     """
     lagged_ma = ts_sum(delay(pl.col("close"), 5), 20) / 20.0
-    short_corr = ts_corr(pl.col("close"), pl.col("volume"), 2)
-    long_short_corr = ts_corr(ts_sum(pl.col("close"), 5), ts_sum(pl.col("close"), 20), 2)
+    # window=2 → 5: see Implementation Note 2.
+    short_corr = ts_corr(pl.col("close"), pl.col("volume"), 5)
+    long_short_corr = ts_corr(ts_sum(pl.col("close"), 5), ts_sum(pl.col("close"), 20), 5)
     staged = panel.with_columns(
         lagged_ma.alias("__a045_ma"),
         short_corr.alias("__a045_sc"),

@@ -37,6 +37,7 @@ from ._ops import (
     pmax,
     pmin,
     power,
+    safe_div,
     sign_,
     ts_argmax,
     ts_corr,
@@ -1037,13 +1038,25 @@ def alpha083(panel: pl.DataFrame) -> pl.Series:
     Stage the range-over-MA series, its delay, and the double-CS-rank of
     volume; final division involves the present-day ratio and price gap.
 
+    Numerical safety
+    ----------------
+    On A-share limit-up days (一字板) high == low == close == vwap, so:
+      - ``high - low = 0`` → range_ma = 0 → outer division uses 0/0
+      - ``vwap - close = 0`` → inner division (range_ma / (vwap-close)) is 0/0
+    Without protection this previously emitted ~3k inf cells/year.
+    We now use ``safe_div`` for both denominators (returns null on |den|<1e-9).
+    The legacy formula above is preserved for parity reference.
+
     Required panel columns: ``high``, ``low``, ``close``, ``volume``, ``vwap``,
     ``stock_code``, ``trade_date``
 
     Direction: ``reverse``
     Category: ``volume_price``
     """
-    range_ma = (pl.col("high") - pl.col("low")) / (ts_sum(pl.col("close"), 5) / 5.0)
+    range_ma = safe_div(
+        pl.col("high") - pl.col("low"),
+        ts_sum(pl.col("close"), 5) / 5.0,
+    )
     staged = panel.with_columns(
         range_ma.alias("__a083_rm"),
     )
@@ -1054,11 +1067,13 @@ def alpha083(panel: pl.DataFrame) -> pl.Series:
         cs_rank(pl.col("__a083_drm")).alias("__a083_r1"),
         cs_rank(cs_rank(pl.col("volume"))).alias("__a083_r2"),
     )
-    return staged3.select(
-        (
-            (pl.col("__a083_r1") * pl.col("__a083_r2"))
-            / (pl.col("__a083_rm") / (pl.col("vwap") - pl.col("close")))
-        ).alias("alpha083")
+    # Inner: range_ma / (vwap - close); outer: numerator / inner. Both use safe_div.
+    inner = safe_div(pl.col("__a083_rm"), pl.col("vwap") - pl.col("close"))
+    return staged3.with_columns(inner.alias("__a083_inner")).select(
+        safe_div(
+            pl.col("__a083_r1") * pl.col("__a083_r2"),
+            pl.col("__a083_inner"),
+        ).alias("alpha083").cast(pl.Float64)
     ).to_series()
 
 

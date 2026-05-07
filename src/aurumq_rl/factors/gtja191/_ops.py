@@ -76,6 +76,20 @@ CS_PART = "trade_date"
 """Partition column for cross-sectional operators (rank within day)."""
 
 
+# Re-export safety helpers so gtja factors can use the same primitives.
+# Single source of truth lives in alpha101._ops to keep eps / clip
+# defaults consistent across both libraries.
+from aurumq_rl.factors.alpha101._ops import (  # noqa: E402, F401
+    EPS_DIV,
+    EPS_LOG,
+    SAFE_POW_EXP_LO,
+    SAFE_POW_EXP_HI,
+    safe_div,
+    safe_log,
+    safe_pow_clip,
+)
+
+
 # ---------------------------------------------------------------------------
 # Cross-section operators
 # ---------------------------------------------------------------------------
