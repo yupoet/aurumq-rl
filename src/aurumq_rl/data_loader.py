@@ -288,12 +288,24 @@ def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
     For each (date, factor), normalize across stocks:
         z = (x - mean) / (std + 1e-8)
 
-    NaN cells in the input (suspended days, pre-IPO, factor warm-up) and
-    rows where the entire cross-section is NaN (so mean/std are NaN) are
+    NaN and ±inf cells in the input (suspended days, pre-IPO, factor warm-up,
+    upstream factor-computation overflow such as gtja_005/017/114, alpha_045)
+    and rows where the entire cross-section is NaN (so mean/std are NaN) are
     replaced with 0.0, the neutral signal per the project convention.
     Without this, env reset() returns observations containing NaN, which
     Box.contains() rejects and SB3's check_env asserts on.
+
+    Inf-protection: a single +inf in a (date, factor) cross-section would
+    propagate through nanmean -> std -> z and zero out the ENTIRE cross-
+    section under nan_to_num, silently dropping ~3000 stocks of signal for
+    that day. Replacing inf with nan up-front lets nanmean/nanstd skip it
+    like a regular missing value, so only the offending stock's z is set
+    to 0 rather than the whole column. Phase 26 audit found ~22 factors
+    with inf rates 1e-5..2.5%; gtja_005 alone had 108k inf cells.
     """
+    if not np.all(np.isfinite(arr) | np.isnan(arr)):
+        arr = np.where(np.isinf(arr), np.nan, arr)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         mean = np.nanmean(arr, axis=1, keepdims=True)
