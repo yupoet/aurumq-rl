@@ -75,6 +75,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--panel-dtype",
+        choices=("fp32", "fp16"),
+        default="fp32",
+        help=(
+            "cuda dtype for the (T,S,F) panel tensor. fp16 saves ~50% panel "
+            "VRAM (~1.5 GB on main-board) at cost of ~3-4 mantissa bits on "
+            "factor values. Encoder MLP runs fp32 regardless (PerStockExtractor "
+            "casts obs back inside forward). Default fp32 = no behavior change."
+        ),
+    )
+    p.add_argument(
         "--tf32",
         action="store_true",
         default=False,
@@ -354,6 +365,13 @@ def main(argv: list[str] | None = None) -> int:
               f"{before} -> {n_stocks} stocks (zero-padded missing, dropped extras)")
 
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
+    if args.panel_dtype == "fp16":
+        panel_t = panel_t.half()
+        _gb = panel_t.element_size() * panel_t.numel() / 1e9
+        print(f"[train_v2] panel cast to fp16 ({_gb:.2f} GB on cuda)")
+    else:
+        _gb = panel_t.element_size() * panel_t.numel() / 1e9
+        print(f"[train_v2] panel kept as fp32 ({_gb:.2f} GB on cuda)")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
     valid_basic_np = (
         (~panel.is_st_array)
@@ -673,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
             "amount_ma_min": args.mwl_amount_ma_min,
         } if args.reward_mode in ("main_wave_hold", "main_wave_target") else None,
         "n_episodes_train": n_episodes_train,
+        "panel_dtype": args.panel_dtype,
     }
     (args.out_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",
@@ -699,6 +718,7 @@ def main(argv: list[str] | None = None) -> int:
         "onnx_path": "",
         "framework": "gpu_v2",
         "policy_class": "PerStockEncoderPolicy",
+        "panel_dtype": args.panel_dtype,
         "metrics_summary": {},
     }
     (args.out_dir / "training_summary.json").write_text(

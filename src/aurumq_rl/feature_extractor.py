@@ -66,6 +66,13 @@ class PerStockExtractor(BaseFeaturesExtractor):
 
     def forward(self, obs: torch.Tensor) -> dict[str, torch.Tensor]:
         # obs: (B, n_stocks, n_factors)
+        # Phase 26G: panel may be stored as fp16 to save VRAM. Encoder weights
+        # / LayerNorm / optimizer / GAE arithmetic all stay fp32, so cast obs
+        # back here. Numerical impact: ~3-4 mantissa bits lost on factor values
+        # (range typically [-3, +3] post cross-section z-score) — well below
+        # cross-section z's own noise. No-op when obs is already fp32.
+        if obs.dtype != torch.float32:
+            obs = obs.float()
         b, s, f = obs.shape
 
         if self.unique_date and b > 1:
