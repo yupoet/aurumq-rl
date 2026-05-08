@@ -193,6 +193,21 @@ df = panel.with_columns([fn(panel).alias(name) for name, fn in ALPHA101_REGISTRY
 | Alpha101+GTJA191 短窗 | 2023-01 ~ 2025-12 | 2026-01 ~ 2026-04 | 296 |
 | 仅 Alpha101 长历史 | 2017-01 ~ 2025-12 | 2026-01 ~ 2026-04 | 105 |
 
+### 当前生产基线（Phase 26）
+
+截至 2026-05，生产候选配置在 `docs/phase26/` 下逐轮迭代：
+
+| 阶段 | 候选 | 因子数 | OOS T-1 lift (top5) | 文档 |
+|---|---|---:|---:|---|
+| 23A baseline | 23A 单 seed | 353 | 2.38× | (历史) |
+| 26C2 (3-seed) | 23A + v1.2 cyq | 353 | median 1.70 / max 2.15 | [PHASE26_FINAL_SCOREBOARD](docs/phase26/PHASE26_FINAL_SCOREBOARD.md) |
+| **26F (3-seed)** ⭐ | + 6 事件衰减 + 2 curated tech | 361 | **median 2.15 / max 2.72** | [PHASE26EF_RESULTS](docs/phase26/PHASE26EF_RESULTS.md) |
+| 26FG-v3 (in flight) | v3 panel + sanitizer + 主板 only | 336 / 344 | TBD | `phase26fg_v3/` |
+
+事件衰减信号（KDJ 金叉 / MACD 零轴 / 布林挤压突破 / MA5×MA10 / 量能 3σ / KDJ-J 反转）以 τ=10 指数衰减形式提供，避免 0/1 二值因子在 cross-section z-score 后产生频率条件性伪信号。详见 [docs/phase26/PHASE26EF_RESULTS.md](docs/phase26/PHASE26EF_RESULTS.md)。
+
+**数据质量审计**：[PHASE26_DATA_QUALITY_AUDIT](docs/phase26/PHASE26_DATA_QUALITY_AUDIT.md) 列出 94 个有问题的因子列（100% null / 数值溢出 / 量纲未归一化 / 死方差），上游修复方案在 [PHASE26_HANDOFF_REPLY](docs/phase26/PHASE26_HANDOFF_REPLY.md)。
+
 ### 项目结构
 
 ```
