@@ -1,0 +1,2 @@
+tech_boll_percent
+cmf_120d_pct_amt

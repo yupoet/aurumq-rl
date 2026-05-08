@@ -204,6 +204,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "training against an existing model on the same stock universe."
         ),
     )
+    # ---- Phase 22: main-wave reward ----
+    p.add_argument(
+        "--reward-mode",
+        choices=("forward_n_day", "main_wave_hold", "main_wave_target"),
+        default="forward_n_day",
+        help=(
+            "forward_n_day (default, V1 legacy): reward = mean(N-day forward "
+            "log return). main_wave_hold (Phase 22): reward = mean(realized "
+            "hold return under min(5d, MA5<MA10 death cross) signal-exit). "
+            "main_wave_target (Phase 23): reward = mean(target_quality) where "
+            "target_quality is the proximity-weighted episode quality. Strong "
+            "positive only when picked stock is at T-1..T-3 of a real main wave."
+        ),
+    )
+    p.add_argument("--mwl-hold-window", type=int, default=5,
+                   help="Phase 22 main-wave: max hold days (default 5).")
+    p.add_argument("--mwl-vol-window", type=int, default=20,
+                   help="Phase 22 main-wave: past-vol window for threshold (default 20).")
+    p.add_argument("--mwl-sigma-multiplier", type=float, default=2.0,
+                   help="Phase 22 main-wave: sigma multiplier (default 2.0).")
+    p.add_argument("--mwl-absolute-threshold", type=float, default=0.06,
+                   help="Phase 22 main-wave: absolute threshold floor (default 0.06).")
+    p.add_argument("--mwl-amount-ma-min", type=float, default=1e8,
+                   help="Phase 22 main-wave: minimum 20d avg amount in 元 (default 1e8).")
+    # ---- Phase 26: precise factor pin ----
+    p.add_argument(
+        "--include-columns-file",
+        type=Path,
+        default=None,
+        help=(
+            "Phase 26: explicit factor allowlist file (one column per line). "
+            "Bypasses prefix-based discovery + n_factors. Required when the "
+            "panel has columns we do NOT want (e.g. dead mfp_/senti_ cols, "
+            "redundant cyq_ on quotes_enriched). Each name must exist in the "
+            "parquet or load_panel raises. Order is preserved as the model's "
+            "input layout."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -254,12 +292,23 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[train_v2] loading panel from {args.data_path} ({args.start_date}..{args.end_date})...")
     loader = FactorPanelLoader(parquet_path=args.data_path)
+
+    include_factor_names: list[str] | None = None
+    if args.include_columns_file is not None:
+        include_factor_names = [
+            l.strip() for l in args.include_columns_file.read_text().splitlines()
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        print(f"[train_v2] include-columns-file: {args.include_columns_file} "
+              f"({len(include_factor_names)} cols pinned)")
+
     panel = loader.load_panel(
         start_date=dt.date.fromisoformat(args.start_date),
         end_date=dt.date.fromisoformat(args.end_date),
-        n_factors=args.n_factors,
+        n_factors=args.n_factors if include_factor_names is None else None,
         forward_period=args.forward_period,
         universe_filter=UniverseFilter(args.universe_filter),
+        factor_names=include_factor_names,
     )
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[train_v2] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
@@ -306,11 +355,121 @@ def main(argv: list[str] | None = None) -> int:
 
     panel_t = torch.from_numpy(panel.factor_array).to("cuda")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
-    valid_mask = (
-        ~torch.from_numpy(panel.is_st_array).to("cuda")
-        & ~torch.from_numpy(panel.is_suspended_array).to("cuda")
-        & (torch.from_numpy(panel.days_since_ipo_array).to("cuda") >= 60)
+    valid_basic_np = (
+        (~panel.is_st_array)
+        & (~panel.is_suspended_array)
+        & (panel.days_since_ipo_array >= 60)
     )
+    valid_mask = torch.from_numpy(valid_basic_np).to("cuda")
+
+    # Phase 22/23: main-wave reward. Compute hold_return / target_quality
+    # over the train window and pass to the env. Re-reads close/vol from
+    # parquet because panel.factor_array is z-scored.
+    hold_returns_t: torch.Tensor | None = None
+    n_episodes_train = 0  # for metadata
+    if args.reward_mode in ("main_wave_hold", "main_wave_target"):
+        from aurumq_rl.main_wave_labels import MainWaveConfig, compute_main_wave_labels
+        import polars as pl
+
+        print("[train_v2] Phase 22: re-reading close/vol/pct_chg for main-wave labels...")
+        df_raw = pl.read_parquet(args.data_path)
+        df_raw = df_raw.filter(
+            (pl.col("trade_date") >= dt.date.fromisoformat(args.start_date))
+            & (pl.col("trade_date") <= dt.date.fromisoformat(args.end_date))
+        )
+        # Pivot per panel.dates × panel.stock_codes order
+        train_codes = list(panel.stock_codes)
+        date_set = set(panel.dates)
+
+        def _pivot_to_array(field: str) -> np.ndarray:
+            piv = (
+                df_raw.select(["trade_date", "ts_code", field])
+                .pivot(values=field, index="trade_date", on="ts_code")
+                .sort("trade_date")
+            )
+            existing = {c for c in piv.columns if c != "trade_date"}
+            arrs: list[np.ndarray] = []
+            for code in train_codes:
+                if code in existing:
+                    col = piv.get_column(code).fill_null(0.0).to_numpy()
+                else:
+                    col = np.zeros(piv.height, dtype=np.float32)
+                arrs.append(col.astype(np.float32, copy=False))
+            stacked = np.stack(arrs, axis=1)
+            # Re-align rows to panel.dates
+            piv_dates = piv.get_column("trade_date").to_list()
+            d2r = {d: i for i, d in enumerate(piv_dates)}
+            idx = [d2r[d] for d in panel.dates if d in d2r]
+            return stacked[idx]
+
+        close_arr = _pivot_to_array("close")
+        vol_arr = _pivot_to_array("vol")
+        pct_arr = _pivot_to_array("pct_chg")
+
+        if args.reward_mode == "main_wave_hold":
+            cfg = MainWaveConfig(
+                hold_window=args.mwl_hold_window,
+                vol_window=args.mwl_vol_window,
+                sigma_multiplier=args.mwl_sigma_multiplier,
+                absolute_threshold=args.mwl_absolute_threshold,
+                amount_ma_window=20,
+                amount_ma_min=args.mwl_amount_ma_min,
+            )
+            print("[train_v2] computing main-wave hold labels for training reward...")
+            labels = compute_main_wave_labels(
+                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=cfg,
+            )
+            hold_returns_t = torch.from_numpy(labels.hold_return).to("cuda")
+            valid_mask = torch.from_numpy(
+                labels.entry_eligible_mask & labels.label_valid_mask
+            ).to("cuda")
+            n_eligible = int(valid_mask.sum().item())
+            n_hits = int(labels.hit_main_wave.sum())
+            print(
+                f"[train_v2] reward=main_wave_hold: "
+                f"eligible={n_eligible:,}/{valid_mask.numel():,}, "
+                f"main_wave_hits={n_hits:,} (base rate "
+                f"{100.0*n_hits/max(int(labels.label_valid_mask.sum()),1):.2f}%)"
+            )
+        else:   # main_wave_target (Phase 23)
+            from aurumq_rl.main_wave_episodes import (
+                EpisodeConfig, find_main_wave_episodes,
+            )
+            from aurumq_rl.main_wave_target_labels import (
+                TargetConfig, build_target_quality,
+            )
+            ep_cfg = EpisodeConfig()
+            print("[train_v2] Phase 23: scanning main-wave episodes for training targets...")
+            episodes = find_main_wave_episodes(close_arr, vol_arr, valid_basic_np, ep_cfg)
+            n_episodes_train = len(episodes)
+            print(f"[train_v2] found {n_episodes_train:,} episodes "
+                  f"in train window")
+            tg_cfg = TargetConfig()
+            targets = build_target_quality(
+                episodes, n_dates=close_arr.shape[0], n_stocks=close_arr.shape[1],
+                cfg=tg_cfg,
+            )
+            # target_quality is the per-stock reward signal at decision day t
+            hold_returns_t = torch.from_numpy(targets.target_quality).to("cuda")
+            # Tighten valid_mask: only allow picks where amount_ma20 > 1e8
+            # AND not in below-MA state (same eligibility as Phase 22).
+            from aurumq_rl.main_wave_labels import MainWaveConfig, compute_main_wave_labels
+            mwl_cfg = MainWaveConfig(
+                hold_window=args.mwl_hold_window,
+                amount_ma_min=args.mwl_amount_ma_min,
+            )
+            mwl_labels = compute_main_wave_labels(
+                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=mwl_cfg,
+            )
+            valid_mask = torch.from_numpy(mwl_labels.entry_eligible_mask).to("cuda")
+            n_t1 = int((targets.proximity == 1).sum())
+            n_t13 = int((targets.proximity > 0).sum())
+            print(f"[train_v2] reward=main_wave_target: "
+                  f"target>0 cells={int((targets.target_quality > 0).sum()):,}, "
+                  f"T-1 hits={n_t1:,}, T-1..T-3 hits={n_t13:,}, "
+                  f"max target={float(targets.target_quality.max()):+.4f}")
 
     env = GPUStockPickingEnv(
         panel_t, returns_t, valid_mask,
@@ -320,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         cost_bps=args.cost_bps,
         seed=args.seed,
+        hold_returns=hold_returns_t,
     )
 
     encoder_hidden = tuple(int(x) for x in args.encoder_hidden.split(","))
@@ -503,6 +663,16 @@ def main(argv: list[str] | None = None) -> int:
         "resume_from": str(args.resume_from) if args.resume_from else None,
         "dropped_factor_prefixes": list(args.drop_factor_prefix) if args.drop_factor_prefix else [],
         "dropped_factor_names": dropped_factors,
+        # Phase 22
+        "reward_mode": args.reward_mode,
+        "main_wave_config": {
+            "hold_window": args.mwl_hold_window,
+            "vol_window": args.mwl_vol_window,
+            "sigma_multiplier": args.mwl_sigma_multiplier,
+            "absolute_threshold": args.mwl_absolute_threshold,
+            "amount_ma_min": args.mwl_amount_ma_min,
+        } if args.reward_mode in ("main_wave_hold", "main_wave_target") else None,
+        "n_episodes_train": n_episodes_train,
     }
     (args.out_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8",
