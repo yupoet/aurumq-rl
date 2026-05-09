@@ -201,8 +201,10 @@ df = panel.with_columns([fn(panel).alias(name) for name, fn in ALPHA101_REGISTRY
 |---|---|---:|---:|---|
 | 23A baseline | 23A 单 seed | 353 | 2.38× | (历史) |
 | 26C2 (3-seed) | 23A + v1.2 cyq | 353 | median 1.70 / max 2.15 | [PHASE26_FINAL_SCOREBOARD](docs/phase26/PHASE26_FINAL_SCOREBOARD.md) |
-| **26F (3-seed)** ⭐ | + 6 事件衰减 + 2 curated tech | 361 | **median 2.15 / max 2.72** | [PHASE26EF_RESULTS](docs/phase26/PHASE26EF_RESULTS.md) |
-| 26FG-v3 (in flight) | v3 panel + sanitizer + 主板 only | 336 / 344 | TBD | `phase26fg_v3/` |
+| 26F (3-seed) | + 6 事件衰减 + 2 curated tech | 361 | median 2.15 / max 2.72 | [PHASE26EF_RESULTS](docs/phase26/PHASE26EF_RESULTS.md) |
+| 26C2-v3 (3-seed) | v3 panel + sanitizer + 主板 only | 336 | median 1.70 / max 2.04 | `phase26fg_v3/` |
+| **26F-v3 (3-seed)** ⭐ | v3 + 6 事件衰减 + 2 curated tech | 344 | **median 2.27 / max 2.38** | `phase26fg_v3/` |
+| 26G-v3 (3-seed) | 26F-v3 + 192/96 encoder (fp16) | 344 | median 1.82 / max 1.93（REJECT，capacity 未带来增益） | `phase26fg_v3/` |
 
 事件衰减信号（KDJ 金叉 / MACD 零轴 / 布林挤压突破 / MA5×MA10 / 量能 3σ / KDJ-J 反转）以 τ=10 指数衰减形式提供，避免 0/1 二值因子在 cross-section z-score 后产生频率条件性伪信号。详见 [docs/phase26/PHASE26EF_RESULTS.md](docs/phase26/PHASE26EF_RESULTS.md)。
 
