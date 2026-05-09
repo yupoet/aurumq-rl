@@ -67,6 +67,12 @@ data/*.parquet
 data/*.duckdb
 data/*.db
 data/cache/
+# OSS-pulled bundles (multi-GB factor panels — route via your own object storage)
+data/tech_panel_v1/
+data/tech_panel_v1_2/
+data/tech_panel_v2/
+data/panels_v3/
+panels_v3_src/
 queries/
 
 # DO commit synthetic demo (small)
