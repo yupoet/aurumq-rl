@@ -38,6 +38,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", default="data/p3_4070", type=Path)
+    ap.add_argument("--feature-panel", default=None,
+                    help="Filename within --bundle for feature parquet. "
+                         "Defaults to path1_train.py's default (feature_panel_v3_344.parquet).")
     ap.add_argument("--out-root", default=Path("runs/sl_path1"), type=Path)
     ap.add_argument("--num-iterations", type=int, default=2000)
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
@@ -74,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             "--num-iterations", str(args.num_iterations),
             "--early-stopping-rounds", str(args.early_stopping_rounds),
         ]
+        if args.feature_panel:
+            cmd += ["--feature-panel", args.feature_panel]
         rc = subprocess.run(cmd, cwd=Path.cwd()).returncode
         if rc == 0:
             n_ok += 1
