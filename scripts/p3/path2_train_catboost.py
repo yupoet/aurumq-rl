@@ -1,0 +1,129 @@
+"""Path 2 — train ONE CatBoost regression config on proximity-weighted target.
+
+Mirrors path1_train.py's interface so path1_grid.py-style orchestration
+works trivially. Key differences:
+  - CatBoost native API (CatBoostRegressor)
+  - Saves model.cbm instead of lgb_model.txt
+  - Same target_y, same train/val splits, same eval pipeline (path1_eval)
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import logging
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+from catboost import CatBoostRegressor
+
+# Self-contained import path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from p3.path1_eval import H1, H2, evaluate
+from p3.path1_train import FEATURE_PANEL_FNAME, _load_features_universe, TRAIN_EFF, VAL_EFF
+
+
+logger = logging.getLogger(__name__)
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bundle", default="data/p3_4070", type=Path)
+    ap.add_argument("--feature-panel", default=FEATURE_PANEL_FNAME)
+    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--depth", type=int, default=6)
+    ap.add_argument("--learning-rate", type=float, default=0.05)
+    ap.add_argument("--num-iterations", type=int, default=2000)
+    ap.add_argument("--early-stopping-rounds", type=int, default=50)
+    ap.add_argument("--l2-leaf-reg", type=float, default=3.0)
+    args = ap.parse_args(argv)
+
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    # 1. Load features + target
+    t0 = time.time()
+    feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
+    logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
+    target_y = pl.read_parquet(args.bundle / "target_y.parquet")
+    df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
+    logger.info("joined: %d rows", len(df))
+
+    train_df = df.filter((pl.col("trade_date") >= TRAIN_EFF[0]) & (pl.col("trade_date") <= TRAIN_EFF[1]))
+    val_df = df.filter((pl.col("trade_date") >= VAL_EFF[0]) & (pl.col("trade_date") <= VAL_EFF[1]))
+    logger.info("splits: train=%d val=%d", len(train_df), len(val_df))
+
+    X_train = train_df.select(feature_cols).to_numpy()
+    y_train = train_df["y"].to_numpy().astype(np.float32)
+    X_val = val_df.select(feature_cols).to_numpy()
+    y_val = val_df["y"].to_numpy().astype(np.float32)
+
+    # 2. Train CatBoost
+    params = {
+        "loss_function": "RMSE",
+        "iterations": args.num_iterations,
+        "depth": args.depth,
+        "learning_rate": args.learning_rate,
+        "l2_leaf_reg": args.l2_leaf_reg,
+        "random_seed": args.seed,
+        "early_stopping_rounds": args.early_stopping_rounds,
+        "verbose": 200,
+        "thread_count": -1,
+        "allow_writing_files": False,  # don't pollute cwd with catboost_info/
+    }
+    logger.info("training catboost: depth=%d lr=%.3f iters=%d",
+                args.depth, args.learning_rate, args.num_iterations)
+    t1 = time.time()
+    model = CatBoostRegressor(**params)
+    model.fit(X_train, y_train, eval_set=(X_val, y_val))
+    train_time = time.time() - t1
+    best_iter = model.best_iteration_
+    logger.info("trained in %.1fs (best_iter=%d)", train_time, best_iter)
+
+    # 3. Predict on full eval frame
+    X_all = df.select(feature_cols).to_numpy()
+    score_all = model.predict(X_all).astype(np.float32)
+    pred_df = df.select(["trade_date", "ts_code"]).with_columns(pl.Series("score", score_all))
+
+    # 4. Save artifacts
+    pred_df.write_parquet(args.out / "predictions.parquet", compression="zstd", compression_level=9)
+    model.save_model(str(args.out / "catboost_model.cbm"))
+    np.savez(args.out / "predictions.npz", score=score_all)
+
+    # 5. Eval
+    realized = pl.read_parquet(args.bundle / "realized_returns.parquet").select(
+        ["trade_date", "ts_code", "pct_chg_t_plus_1"]
+    )
+    market = pl.read_parquet(args.bundle / "market_returns.parquet").select(
+        ["trade_date", "eq_weight_pct_chg_t_plus_1"]
+    )
+    val_eval = evaluate(pred_df, target_y, realized, market, VAL_EFF)
+    h1_eval = evaluate(pred_df, target_y, realized, market, H1)
+    h2_eval = evaluate(pred_df, target_y, realized, market, H2)
+
+    summary = {
+        "model_class": "catboost",
+        "params": params,
+        "best_iteration": best_iter,
+        "train_time_s": train_time,
+        "n_train_rows": len(train_df),
+        "n_val_rows": len(val_df),
+        "VAL_EFF": val_eval,
+        "H1": h1_eval,
+        "H2": h2_eval,
+    }
+    (args.out / "results.json").write_text(json.dumps(summary, indent=2, default=str))
+    logger.info("VAL primary=%.6f  H1 primary=%.6f  H2 primary=%.6f",
+                val_eval["primary_mean_top50_proximity_excess"],
+                h1_eval["primary_mean_top50_proximity_excess"],
+                h2_eval["primary_mean_top50_proximity_excess"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
