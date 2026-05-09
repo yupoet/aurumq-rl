@@ -1,0 +1,26 @@
+{
+  "A": {
+    "threshold": 1.2327284626104107,
+    "achieved_pos_rate": 0.00799966541871694,
+    "n_train_events": 13082,
+    "n_above_thr": 11094
+  },
+  "B": {
+    "threshold": 4.314417283070143,
+    "achieved_pos_rate": 0.00799966541871694,
+    "n_train_events": 26872,
+    "n_above_thr": 11094
+  },
+  "C": {
+    "threshold": 2.9014696112211515,
+    "achieved_pos_rate": 0.00799966541871694,
+    "n_train_events": 40959,
+    "n_above_thr": 11094
+  },
+  "D": {
+    "threshold": 2.7183600713012495,
+    "achieved_pos_rate": 0.00799966541871694,
+    "n_train_events": 23662,
+    "n_above_thr": 11094
+  }
+}

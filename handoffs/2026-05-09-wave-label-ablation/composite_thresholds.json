@@ -1,0 +1,20 @@
+{
+  "composite_mean": {
+    "tau": -4.16575622078887,
+    "achieved_train_pos_rate": 0.00800065995185199,
+    "path": "data/duckdb/labeling/labels/labels_composite_mean_t3_year=composite.parquet"
+  },
+  "composite_min": {
+    "tau": -10.0,
+    "achieved_train_pos_rate": 1.0,
+    "path": "data/duckdb/labeling/labels/labels_composite_min_t3_year=composite.parquet"
+  },
+  "hard_and_independence_estimate": {
+    "method1": "A",
+    "method1_pos": 33566,
+    "method2": "C",
+    "method2_pos": 33243,
+    "expected_and_under_independence": 467,
+    "expected_and_pos_rate": 0.0001956644278948263
+  }
+}

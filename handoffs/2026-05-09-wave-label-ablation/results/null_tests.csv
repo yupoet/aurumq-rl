@@ -1,0 +1,2 @@
+method,horizon,label,test_pos_rate,acceptance_threshold,label_shuffle_PR_AUC,label_shuffle_lift,label_shuffle_PASS,date_shuffle_PR_AUC,date_shuffle_lift,date_shuffle_PASS,schema_hash
+A,t3,A_t3,0.04066,0.06099,0.04021,0.9891,True,0.0606,1.4906,True,5e71e158e331
