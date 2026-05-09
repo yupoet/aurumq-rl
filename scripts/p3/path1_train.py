@@ -35,8 +35,11 @@ TRAIN_EFF = (dt.date(2023, 1, 3),  dt.date(2024, 12, 4))
 VAL_EFF   = (dt.date(2025, 1, 1),  dt.date(2025, 6, 4))
 
 
-def _load_features_universe(bundle: Path) -> tuple[pl.DataFrame, list[str]]:
-    df = pl.read_parquet(bundle / "feature_panel_v3_344.parquet")
+FEATURE_PANEL_FNAME = "feature_panel_v3_344.parquet"
+
+
+def _load_features_universe(bundle: Path, feature_panel: str = FEATURE_PANEL_FNAME) -> tuple[pl.DataFrame, list[str]]:
+    df = pl.read_parquet(bundle / feature_panel)
     feature_cols = [c for c in df.columns if c not in ("ts_code", "trade_date")]
     uni_parts = []
     for year in (2023, 2024, 2025, 2026):
@@ -54,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", default="data/p3_4070", type=Path)
+    ap.add_argument("--feature-panel", default=FEATURE_PANEL_FNAME,
+                    help="Filename within --bundle for the feature parquet")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--num-leaves", type=int, default=63)
@@ -67,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 1. Load features (in-universe only) and target_y
     t0 = time.time()
-    feat_df, feature_cols = _load_features_universe(args.bundle)
+    feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
     logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
     target_y = pl.read_parquet(args.bundle / "target_y.parquet")
     logger.info("target_y: %d rows", len(target_y))

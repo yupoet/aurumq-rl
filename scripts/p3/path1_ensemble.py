@@ -176,7 +176,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out_root.mkdir(parents=True, exist_ok=True)
     (args.out_root / "ensemble.json").write_text(json.dumps(summary, indent=2, default=str))
-    ens_cal.write_parquet(args.out_root / "predictions.parquet", compression="zstd", compression_level=10)
+    # Rename `score` → `score_raw` on the persisted artifact so downstream
+    # consumers can distinguish raw ensemble output from calibrated.
+    ens_out = ens_cal.rename({"score": "score_raw"}).select(
+        ["trade_date", "ts_code", "score_raw", "score_calibrated"]
+    )
+    ens_out.write_parquet(args.out_root / "predictions.parquet", compression="zstd", compression_level=10)
 
     logger.info("== Path 1 ensemble vs paris baseline ==")
     logger.info("Window | Metric                       | Path1 raw | Path1 cal | Paris    | Δ vs Paris")
