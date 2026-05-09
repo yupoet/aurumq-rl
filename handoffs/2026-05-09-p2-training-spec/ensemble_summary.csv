@@ -1,0 +1,4 @@
+Brier_null,Brier_ratio,Brier_test,ECE_10bin,PR_AUC,PR_AUC_lift,all_gates_passed,anchor,daily_precision_at5,horizon,n_seeds,n_test,per_seed_PR_AUC_mean,per_seed_PR_AUC_std,test_pos_rate,top1pct_lift,top5pct_lift
+0.01331,0.9662,0.01286,0.00243,0.07211,5.343,False,2025-07,0.1032,t1,5,379140,0.06733,0.00211,0.013496,9.2838,6.3084
+0.039,0.9772,0.03811,0.01004,0.12241,3.011,False,2025-07,0.2095,t3,5,379140,0.12013,0.00076,0.040658,3.3348,4.1635
+0.19477,0.917,0.17861,0.04772,0.41361,1.561,False,2025-07,0.5476,e20,5,379140,0.40746,0.00228,0.265,1.961,1.8909
