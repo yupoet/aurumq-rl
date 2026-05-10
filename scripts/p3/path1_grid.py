@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-root", default=Path("runs/sl_path1"), type=Path)
     ap.add_argument("--num-iterations", type=int, default=2000)
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
+    ap.add_argument("--train-start", default=None, help="ISO date; passes through to path1_train")
+    ap.add_argument("--train-end", default=None, help="ISO date; passes through to path1_train")
     ap.add_argument("--limit", type=int, default=0,
                     help="If > 0, only run the first N (config, seed) combos. For testing.")
     args = ap.parse_args(argv)
@@ -79,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.feature_panel:
             cmd += ["--feature-panel", args.feature_panel]
+        if args.train_start:
+            cmd += ["--train-start", args.train_start]
+        if args.train_end:
+            cmd += ["--train-end", args.train_end]
         rc = subprocess.run(cmd, cwd=Path.cwd()).returncode
         if rc == 0:
             n_ok += 1

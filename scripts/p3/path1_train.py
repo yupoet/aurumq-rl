@@ -42,10 +42,11 @@ def _load_features_universe(bundle: Path, feature_panel: str = FEATURE_PANEL_FNA
     df = pl.read_parquet(bundle / feature_panel)
     feature_cols = [c for c in df.columns if c not in ("ts_code", "trade_date")]
     uni_parts = []
-    for year in (2023, 2024, 2025, 2026):
-        p = bundle / "universe_mask" / f"year={year}.parquet"
-        if p.exists():
-            uni_parts.append(pl.read_parquet(p).select(["trade_date", "ts_code", "in_universe"]))
+    # Glob universe_mask shards instead of fixed year list — supports long panel (2018+).
+    for p in sorted((bundle / "universe_mask").glob("year=*.parquet")):
+        uni_parts.append(pl.read_parquet(p).select(["trade_date", "ts_code", "in_universe"]))
+    if not uni_parts:
+        raise SystemExit(f"no universe_mask shards in {bundle}/universe_mask/")
     uni = pl.concat(uni_parts)
     df = df.join(uni, on=["trade_date", "ts_code"], how="left").filter(
         pl.col("in_universe") == True  # noqa: E712
@@ -71,7 +72,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bagging-fraction", type=float, default=0.8)
     ap.add_argument("--lambda-l1", type=float, default=0.0)
     ap.add_argument("--lambda-l2", type=float, default=0.0)
+    # Optional train-window override (used by Path D long-panel retrain).
+    # Defaults preserve original 2023-2024 short-panel TRAIN_EFF.
+    ap.add_argument("--train-start", default=None, help="ISO date; overrides TRAIN_EFF[0]")
+    ap.add_argument("--train-end", default=None, help="ISO date; overrides TRAIN_EFF[1]")
     args = ap.parse_args(argv)
+
+    # Apply window overrides
+    train_eff_lo, train_eff_hi = TRAIN_EFF
+    if args.train_start:
+        train_eff_lo = dt.date.fromisoformat(args.train_start)
+    if args.train_end:
+        train_eff_hi = dt.date.fromisoformat(args.train_end)
 
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -85,9 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
     logger.info("joined: %d rows", len(df))
 
-    # 2. Split by trade_date
+    # 2. Split by trade_date (using overridable window for Path D long panel)
+    logger.info("TRAIN window: [%s, %s]", train_eff_lo, train_eff_hi)
     train_df = df.filter(
-        (pl.col("trade_date") >= TRAIN_EFF[0]) & (pl.col("trade_date") <= TRAIN_EFF[1])
+        (pl.col("trade_date") >= train_eff_lo) & (pl.col("trade_date") <= train_eff_hi)
     )
     val_df = df.filter(
         (pl.col("trade_date") >= VAL_EFF[0]) & (pl.col("trade_date") <= VAL_EFF[1])
