@@ -66,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-data-in-leaf", type=int, default=100)
     ap.add_argument("--num-iterations", type=int, default=2000)
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
+    # Optional regularization (used by path6 Bayesian opt)
+    ap.add_argument("--feature-fraction", type=float, default=0.8)
+    ap.add_argument("--bagging-fraction", type=float, default=0.8)
+    ap.add_argument("--lambda-l1", type=float, default=0.0)
+    ap.add_argument("--lambda-l2", type=float, default=0.0)
     args = ap.parse_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -102,10 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         "metric": ["l2", "l1"],
         "num_leaves": args.num_leaves,
         "learning_rate": args.learning_rate,
-        "feature_fraction": 0.8,
-        "bagging_fraction": 0.8,
+        "feature_fraction": args.feature_fraction,
+        "bagging_fraction": args.bagging_fraction,
         "bagging_freq": 5,
         "min_data_in_leaf": args.min_data_in_leaf,
+        "lambda_l1": args.lambda_l1,
+        "lambda_l2": args.lambda_l2,
         "verbosity": -1,
         "seed": args.seed,
         "n_jobs": -1,
