@@ -78,6 +78,27 @@ def main() -> int:
         if f.exists():
             manifest.append((f, f"regime_stacking/{fname}"))
 
+    # Path 7 conformal + sizing
+    p7 = ROOT / "runs" / "sl_conformal"
+    for fname in ("RESULTS.md", "ensemble.json"):
+        f = p7 / fname
+        if f.exists():
+            manifest.append((f, f"conformal_sizing/{fname}"))
+
+    # Path 6 Bayesian opt (when complete)
+    p6 = ROOT / "runs" / "sl_path6"
+    if (p6 / "trials.json").exists():
+        manifest.append((p6 / "trials.json", "bayesian_opt/trials.json"))
+    if (p6 / "ensemble.json").exists():
+        manifest.append((p6 / "ensemble.json", "bayesian_opt/ensemble.json"))
+    if (p6 / "RESULTS.md").exists():
+        manifest.append((p6 / "RESULTS.md", "bayesian_opt/RESULTS.md"))
+    for run_dir in sorted(p6.glob("*_seed*/")):
+        for fname in ("results.json", "lgb_model.txt"):
+            f = run_dir / fname
+            if f.exists():
+                manifest.append((f, f"bayesian_opt/runs/{run_dir.name}/{fname}"))
+
     total = sum(p.stat().st_size for p, _ in manifest)
     print(f"[oss-upload] manifest: {len(manifest)} files, {_fmt(total)}")
 
