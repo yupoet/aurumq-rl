@@ -1,8 +1,12 @@
-"""Path 1 — run the 12-config × 3-seed grid sequentially.
+"""Path D safe grid: drop nl127 configs (crash on long panel), keep nl31+nl63.
 
-Each config is a separate subprocess launch of path1_train.py so a single-config
-crash doesn't take down the rest of the grid. Total expected wall time: 1-2h
-on 36-core CPU.
+Long-panel LightGBM at nl127 + n_jobs=8 hits Windows access violation due to
+per-thread buffer × tree size = too much memory. Restrict grid to:
+  num_leaves ∈ {31, 63}    (2)
+  learning_rate ∈ {0.03, 0.05}  (2)
+  min_data_in_leaf ∈ {50, 100}  (2)
+  seeds ∈ {42, 43, 44}  (3)
+→ 24 runs total. ~6 min/run on long panel × 24 = ~2.4h wall.
 """
 from __future__ import annotations
 
@@ -17,9 +21,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# 12 hyperparam configs (3 num_leaves × 2 lr × 2 min_data_in_leaf)
 CONFIGS = []
-for nl in (31, 63, 127):
+for nl in (31, 63):
     for lr in (0.03, 0.05):
         for mdl in (50, 100):
             CONFIGS.append({"num_leaves": nl, "learning_rate": lr, "min_data_in_leaf": mdl})
@@ -37,27 +40,22 @@ def _config_name(c: dict, seed: int) -> str:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bundle", default="data/p3_4070", type=Path)
-    ap.add_argument("--feature-panel", default=None,
-                    help="Filename within --bundle for feature parquet. "
-                         "Defaults to path1_train.py's default (feature_panel_v3_344.parquet).")
-    ap.add_argument("--out-root", default=Path("runs/sl_path1"), type=Path)
+    ap.add_argument("--bundle", default="data/p3_4070_long", type=Path)
+    ap.add_argument("--feature-panel", default="feature_target_long.parquet")
+    ap.add_argument("--out-root", default=Path("runs/sl_path_d"), type=Path)
+    ap.add_argument("--train-start", default="2018-01-02")
+    ap.add_argument("--train-end", default="2024-12-04")
     ap.add_argument("--num-iterations", type=int, default=2000)
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
-    ap.add_argument("--train-start", default=None, help="ISO date; passes through to path1_train")
-    ap.add_argument("--train-end", default=None, help="ISO date; passes through to path1_train")
-    ap.add_argument("--n-jobs", type=int, default=-1, help="LightGBM threads. -1 = all cores.")
-    ap.add_argument("--limit", type=int, default=0,
-                    help="If > 0, only run the first N (config, seed) combos. For testing.")
+    ap.add_argument("--n-jobs", type=int, default=8)
     args = ap.parse_args(argv)
 
     py = sys.executable
     train_script = Path(__file__).resolve().parent / "path1_train.py"
 
     combos = [(c, s) for c in CONFIGS for s in SEEDS]
-    if args.limit > 0:
-        combos = combos[: args.limit]
-    logger.info("grid: %d configs × %d seeds = %d combos", len(CONFIGS), len(SEEDS), len(combos))
+    logger.info("path D safe grid: %d configs × %d seeds = %d combos",
+                len(CONFIGS), len(SEEDS), len(combos))
 
     t_start = time.time()
     n_ok = n_skip = n_fail = 0
@@ -72,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd = [
             py, str(train_script),
             "--bundle", str(args.bundle),
+            "--feature-panel", args.feature_panel,
             "--out", str(out),
             "--seed", str(s),
             "--num-leaves", str(c["num_leaves"]),
@@ -79,15 +78,10 @@ def main(argv: list[str] | None = None) -> int:
             "--min-data-in-leaf", str(c["min_data_in_leaf"]),
             "--num-iterations", str(args.num_iterations),
             "--early-stopping-rounds", str(args.early_stopping_rounds),
+            "--train-start", args.train_start,
+            "--train-end", args.train_end,
+            "--n-jobs", str(args.n_jobs),
         ]
-        if args.feature_panel:
-            cmd += ["--feature-panel", args.feature_panel]
-        if args.train_start:
-            cmd += ["--train-start", args.train_start]
-        if args.train_end:
-            cmd += ["--train-end", args.train_end]
-        if args.n_jobs != -1:
-            cmd += ["--n-jobs", str(args.n_jobs)]
         rc = subprocess.run(cmd, cwd=Path.cwd()).returncode
         if rc == 0:
             n_ok += 1
@@ -96,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("[%d/%d] FAIL %s (rc=%d)", i + 1, len(combos), name, rc)
 
     elapsed = time.time() - t_start
-    logger.info("grid done in %.0fs: ok=%d skip=%d fail=%d", elapsed, n_ok, n_skip, n_fail)
+    logger.info("path D grid done in %.0fs: ok=%d skip=%d fail=%d", elapsed, n_ok, n_skip, n_fail)
     return 0 if n_fail == 0 else 1
 
 

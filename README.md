@@ -210,6 +210,28 @@ df = panel.with_columns([fn(panel).alias(name) for name, fn in ALPHA101_REGISTRY
 
 **数据质量审计**：[PHASE26_DATA_QUALITY_AUDIT](docs/phase26/PHASE26_DATA_QUALITY_AUDIT.md) 列出 94 个有问题的因子列（100% null / 数值溢出 / 量纲未归一化 / 死方差），上游修复方案在 [PHASE26_HANDOFF_REPLY](docs/phase26/PHASE26_HANDOFF_REPLY.md)。
 
+### Phase 27 — SL pivot 与多 path ensemble
+
+2026-05 起，主流程从 RL/PPO 切换到**监督学习 + ensemble**。RL 在选股这类「每日 5000+ 决策、回报信号低 SNR」的设定下，受困于 ~5500× 信号密度劣势（每个 episode 提供约 1 个 trade-day 的 reward 信号，而 SL 一天就在 5000+ 股票上各自获得一份 next-day excess return 监督）。SL pivot 后单 baseline 即超过 RL 3.1×，进而沿多个建模路径展开：
+
+| Path | 内核 | 输入预处理 | 备注 |
+|---|---|---|---|
+| Path 1 | LightGBM β-regression | **raw 345-col** | 无 cross-sectional 归一化 |
+| Path 2 | CatBoost + XGBoost 混合 | rank-z 345-col | 学习器多样性 |
+| Path 3 | TabNet (deep tabular) | rank-z | **已弃**：H1 比 GBDT 差 30-40%，stacking 加入反降 T1_hit |
+| **Path 4 ⭐** | LightGBM | **rank-z 345-col** | 当前生产基线 |
+| Path 5 | LGB meta-stacking | 3 path 预测 + 11 regime 特征 | T1_hit 最高 |
+| Path 6 | Bayesian-opt LGB | rank-z **pruned 226-col** | 砍 119 个 SHAP-zero 列 |
+| Path 7 | post-processing | — | top-50 score-weighted 仓位（+8-9% lift） |
+
+**关键科学发现** (2026-05-11 overnight sweep):
+
+1. **rank-z 在长 panel 上是反指**。Path 4 + 长 panel (2018-2024) 的增量 ≈ 0；同一 hyperparam 改 raw 输入立刻拿到 +6 bps。**per-day cross-sectional rank-z 会抹掉跨年因子绝对幅度信号**，短数据无所谓，长数据致命。这是 GBDT 信号「饱和」假象的真凶。
+2. **训练窗口 5 年是甜点**：H1 在 2y → 3y → **5y → 7y plateau**。2018-2019（含 COVID/贸易战 regime shift）数据零边际贡献。
+3. **多路径 stacking 优于单路径调参**：Path 6 (Bayesian opt) 跟 Path 4 grid baseline 差 0 bps；Path 5 stacking 跟单路径差 +3-5 bps。**信号瓶颈不在 hyperparam，在 representation diversity**。
+
+详细参考实现：`scripts/p3/path{1,2}_train.py`, `scripts/p3/path5_regime_stacking.py`, `scripts/p3/path_d_grid_parallel.py`, `scripts/p3/supplement_*.py`。
+
 ### 项目结构
 
 ```

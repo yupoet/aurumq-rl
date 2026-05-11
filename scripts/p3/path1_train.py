@@ -72,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bagging-fraction", type=float, default=0.8)
     ap.add_argument("--lambda-l1", type=float, default=0.0)
     ap.add_argument("--lambda-l2", type=float, default=0.0)
+    ap.add_argument("--n-jobs", type=int, default=-1,
+                    help="LightGBM thread count. -1 = all cores. Use 8 for long panel "
+                         "to avoid Windows access violation from 36-thread allocation.")
     # Optional train-window override (used by Path D long-panel retrain).
     # Defaults preserve original 2023-2024 short-panel TRAIN_EFF.
     ap.add_argument("--train-start", default=None, help="ISO date; overrides TRAIN_EFF[0]")
@@ -87,15 +90,27 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load features (in-universe only) and target_y
+    # 1. Load features. If panel already has "y" column (pre-joined via DuckDB
+    # for the long-panel pipeline — saves polars OOM on Windows), skip both
+    # universe filter and target_y join.
     t0 = time.time()
-    feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
-    logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
-    target_y = pl.read_parquet(args.bundle / "target_y.parquet")
-    logger.info("target_y: %d rows", len(target_y))
-
-    df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
-    logger.info("joined: %d rows", len(df))
+    panel_path = args.bundle / args.feature_panel
+    panel_cols = pl.read_parquet_schema(panel_path) if hasattr(pl, "read_parquet_schema") else \
+                 pl.scan_parquet(panel_path).collect_schema()
+    has_y = "y" in panel_cols
+    if has_y:
+        df = pl.read_parquet(panel_path)
+        feature_cols = [c for c in df.columns if c not in ("ts_code", "trade_date", "y")]
+        target_y = df.select(["trade_date", "ts_code", "y"])  # for downstream evaluate()
+        logger.info("features (pre-joined): %d rows × %d feature cols (%.1fs)",
+                    len(df), len(feature_cols), time.time() - t0)
+    else:
+        feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
+        logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
+        target_y = pl.read_parquet(args.bundle / "target_y.parquet")
+        logger.info("target_y: %d rows", len(target_y))
+        df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
+        logger.info("joined: %d rows", len(df))
 
     # 2. Split by trade_date (using overridable window for Path D long panel)
     logger.info("TRAIN window: [%s, %s]", train_eff_lo, train_eff_hi)
@@ -128,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         "lambda_l2": args.lambda_l2,
         "verbosity": -1,
         "seed": args.seed,
-        "n_jobs": -1,
+        "n_jobs": args.n_jobs,
     }
     logger.info("training: %s", {k: v for k, v in params.items() if k != "metric"})
     t1 = time.time()
@@ -145,10 +160,28 @@ def main(argv: list[str] | None = None) -> int:
     train_time = time.time() - t1
     logger.info("trained in %.1fs (best_iter=%d)", train_time, model.best_iteration)
 
-    # 4. Predict on full eval frame
+    n_train_rows = len(train_df)
+    n_val_rows = len(val_df)
+
+    # Free training-only frames before allocating the prediction-time numpy.
+    # On 5M-row × 345-col panels each (X_train, X_val, train_df, val_df, train_ds, val_ds)
+    # is 1-7 GB; releasing them lets workers=3 fit comfortably in 64 GB.
+    import gc
+    del X_train, y_train, X_val, y_val, train_df, val_df, train_ds, val_ds
+    gc.collect()
+
+    # 4. Build prediction-time slice. Persist the (trade_date, ts_code) columns
+    # AS NUMPY first so we can drop the polars frame before allocating X_all.
+    pred_meta = df.select(["trade_date", "ts_code"])
     X_all = df.select(feature_cols).to_numpy()
+    del df
+    gc.collect()
+
     score_all = model.predict(X_all, num_iteration=model.best_iteration).astype(np.float32)
-    pred_df = df.select(["trade_date", "ts_code"]).with_columns(pl.Series("score", score_all))
+    del X_all
+    gc.collect()
+
+    pred_df = pred_meta.with_columns(pl.Series("score", score_all))
 
     # 5. Save artifacts
     pred_df.write_parquet(args.out / "predictions.parquet", compression="zstd", compression_level=9)
@@ -170,8 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         "params": params,
         "best_iteration": model.best_iteration,
         "train_time_s": train_time,
-        "n_train_rows": len(train_df),
-        "n_val_rows": len(val_df),
+        "n_train_rows": n_train_rows,
+        "n_val_rows": n_val_rows,
         "VAL_EFF": val_eval,
         "H1": h1_eval,
         "H2": h2_eval,

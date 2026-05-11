@@ -33,8 +33,14 @@ def cross_sectional_rank_z(
     panel: pl.DataFrame,
     universe: pl.DataFrame,
     feature_cols: list[str],
+    chunk_size: int = 30,
 ) -> pl.DataFrame:
     """Per-day rank-z transform on each feature column over in-universe stocks.
+
+    Processes ``feature_cols`` in chunks (default 30 columns per pass) so peak
+    memory stays bounded for large panels (8M+ rows × 345 features OOMs polars
+    if all .with_columns() exprs evaluate at once). Output is identical
+    regardless of chunk_size.
 
     Args
     ----
@@ -43,7 +49,10 @@ def cross_sectional_rank_z(
     universe : pl.DataFrame
         (trade_date, ts_code, in_universe).
     feature_cols : list[str]
-        Columns to transform. Other columns are passed through unchanged.
+        Columns to transform.
+    chunk_size : int
+        Number of feature columns to rank per polars pass. Smaller = less peak
+        memory, slightly more wall time. 30 fits 8M rows in <8 GB.
 
     Returns
     -------
@@ -55,26 +64,25 @@ def cross_sectional_rank_z(
     """
     df = panel.join(universe, on=["trade_date", "ts_code"], how="left")
 
-    rank_exprs = []
-    for col in feature_cols:
-        # Among in-universe rows per day, compute rank in [0, 1]; out-of-universe → null.
-        # Use rank with method="ordinal" so ties get distinct ranks (deterministic).
-        masked = pl.when(pl.col("in_universe") == True).then(pl.col(col)).otherwise(None)  # noqa: E712
-        rank = masked.rank(method="ordinal").over("trade_date")
-        # Count of in-universe rows per day (NaN values still count if not nulled,
-        # but masked above means out-of-universe is null and excluded by rank).
-        n_in_uni = (pl.col("in_universe") == True).cast(pl.Int64).sum().over("trade_date")  # noqa: E712
-        # rank/N centered to [-1, +1] (when rank ∈ [1, N], (rank - 0.5) / N ∈ (0, 1] then * 2 - 1).
-        # Use (rank - 1) / (N - 1) * 2 - 1 so first rank → -1, last → +1, exact middle → 0.
-        # Guard against N == 1 (rare degenerate day) by clamping denominator.
-        denom = pl.when(n_in_uni > 1).then(n_in_uni - 1).otherwise(1)
-        rank_z = (rank.cast(pl.Float32) - 1.0) / denom.cast(pl.Float32) * 2.0 - 1.0
-        # Out-of-universe rows: rank_z is null due to masked → fill with 0.0 (neutral).
-        rank_z = rank_z.fill_null(0.0).cast(pl.Float32)
-        rank_exprs.append(rank_z.alias(col))
+    n_in_uni = (pl.col("in_universe") == True).cast(pl.Int64).sum().over("trade_date")  # noqa: E712
+    denom = pl.when(n_in_uni > 1).then(n_in_uni - 1).otherwise(1)
 
-    out = df.with_columns(rank_exprs).drop("in_universe")
-    return out
+    # Process in chunks to bound peak memory
+    n = len(feature_cols)
+    for i in range(0, n, chunk_size):
+        batch = feature_cols[i : i + chunk_size]
+        rank_exprs = []
+        for col in batch:
+            masked = pl.when(pl.col("in_universe") == True).then(pl.col(col)).otherwise(None)  # noqa: E712
+            rank = masked.rank(method="ordinal").over("trade_date")
+            rank_z = (rank.cast(pl.Float32) - 1.0) / denom.cast(pl.Float32) * 2.0 - 1.0
+            rank_z = rank_z.fill_null(0.0).cast(pl.Float32)
+            rank_exprs.append(rank_z.alias(col))
+        df = df.with_columns(rank_exprs)
+        logger.info("  rank-z chunk %d/%d: cols [%s..%s]", i // chunk_size + 1,
+                    (n + chunk_size - 1) // chunk_size, batch[0], batch[-1])
+
+    return df.drop("in_universe")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,10 +103,11 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("panel: %d rows × %d features (%.1fs)", len(panel), len(feature_cols), time.time() - t0)
 
     uni_parts = []
-    for year in (2023, 2024, 2025, 2026):
-        p = args.bundle / "universe_mask" / f"year={year}.parquet"
-        if p.exists():
-            uni_parts.append(pl.read_parquet(p).select(["trade_date", "ts_code", "in_universe"]))
+    # Glob all year shards — supports both short (2023-2026) and long (2018+) bundles.
+    for p in sorted((args.bundle / "universe_mask").glob("year=*.parquet")):
+        uni_parts.append(pl.read_parquet(p).select(["trade_date", "ts_code", "in_universe"]))
+    if not uni_parts:
+        raise SystemExit(f"no universe_mask shards in {args.bundle}/universe_mask/")
     universe = pl.concat(uni_parts)
     logger.info("universe: %d rows", len(universe))
 

@@ -39,20 +39,38 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--num-iterations", type=int, default=2000)
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
     ap.add_argument("--reg-lambda", type=float, default=1.0)
+    ap.add_argument("--n-jobs", type=int, default=-1)
+    ap.add_argument("--train-start", default=None, help="ISO date; overrides TRAIN_EFF[0]")
+    ap.add_argument("--train-end", default=None, help="ISO date; overrides TRAIN_EFF[1]")
     args = ap.parse_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load features + target
-    t0 = time.time()
-    feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
-    logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
-    target_y = pl.read_parquet(args.bundle / "target_y.parquet")
-    df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
-    logger.info("joined: %d rows", len(df))
+    import datetime as _dt
+    train_lo, train_hi = TRAIN_EFF
+    if args.train_start: train_lo = _dt.date.fromisoformat(args.train_start)
+    if args.train_end:   train_hi = _dt.date.fromisoformat(args.train_end)
 
-    train_df = df.filter((pl.col("trade_date") >= TRAIN_EFF[0]) & (pl.col("trade_date") <= TRAIN_EFF[1]))
+    # 1. Load features + target. Auto-detect pre-joined panel.
+    t0 = time.time()
+    panel_path = args.bundle / args.feature_panel
+    schema = pl.read_parquet_schema(panel_path)
+    if "y" in schema:
+        df = pl.read_parquet(panel_path)
+        feature_cols = [c for c in df.columns if c not in ("ts_code", "trade_date", "y")]
+        target_y = df.select(["trade_date", "ts_code", "y"])
+        logger.info("features (pre-joined): %d rows × %d cols (%.1fs)",
+                    len(df), len(feature_cols), time.time() - t0)
+    else:
+        feat_df, feature_cols = _load_features_universe(args.bundle, args.feature_panel)
+        logger.info("features: %d rows × %d cols (%.1fs)", len(feat_df), len(feature_cols), time.time() - t0)
+        target_y = pl.read_parquet(args.bundle / "target_y.parquet")
+        df = feat_df.join(target_y, on=["trade_date", "ts_code"], how="inner")
+        logger.info("joined: %d rows", len(df))
+
+    train_df = df.filter((pl.col("trade_date") >= train_lo) & (pl.col("trade_date") <= train_hi))
     val_df = df.filter((pl.col("trade_date") >= VAL_EFF[0]) & (pl.col("trade_date") <= VAL_EFF[1]))
+    logger.info("TRAIN window: [%s, %s]", train_lo, train_hi)
     logger.info("splits: train=%d val=%d", len(train_df), len(val_df))
 
     X_train = train_df.select(feature_cols).to_numpy()
@@ -70,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "random_state": args.seed,
-        "n_jobs": -1,
+        "n_jobs": args.n_jobs,
         "early_stopping_rounds": args.early_stopping_rounds,
         "verbosity": 1,
         "tree_method": "hist",

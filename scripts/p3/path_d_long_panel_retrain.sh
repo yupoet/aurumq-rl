@@ -107,20 +107,50 @@ if [ ! -f "$LONG_BUNDLE/target_y.parquet" ]; then
     step "recompute_target_y" $PY scripts/p3/path1_target.py --bundle "$LONG_BUNDLE"
 fi
 
-# 4. Rank-z on long panel
+# 4. Rank-z on PRUNED long panel (226 cols, drops 119 SHAP-zero features)
+#    to keep peak memory under ~10 GB for 5.6M-row joins on Windows.
 if [ ! -f "$LONG_BUNDLE/feature_panel_clean.parquet" ]; then
-    step "rank_z_long" $PY scripts/p3/path4_features.py --bundle "$LONG_BUNDLE"
+    step "rank_z_long" $PY scripts/p3/path4_features.py \
+        --bundle "$LONG_BUNDLE" \
+        --feature-panel-in feature_panel_v3_344_pruned.parquet
 fi
 
-# 5. Run Path 4 grid on long bundle, --train-start 2018-01-02
+# 4b. Pre-join feature_panel + universe (in_uni) + target_y via DuckDB
+#     (polars eager join OOMs on Windows for 5.6M-row × 226-col joins).
+#     Output: feature_target_long.parquet (~4 GB, 5.3M rows × 229 cols).
+if [ ! -f "$LONG_BUNDLE/feature_target_long.parquet" ]; then
+    step "duckdb_prejoin" $PY -c "
+import duckdb
+con = duckdb.connect()
+con.execute('PRAGMA memory_limit=\"30GB\"')
+con.execute('PRAGMA threads=8')
+con.execute('''
+    COPY (
+      SELECT f.*, t.y FROM \"$LONG_BUNDLE/feature_panel_clean.parquet\" f
+      JOIN (SELECT trade_date, ts_code FROM read_parquet([\"$LONG_BUNDLE/universe_mask/year=*.parquet\"]) WHERE in_universe = true) u
+        ON u.trade_date = f.trade_date AND u.ts_code = f.ts_code
+      JOIN \"$LONG_BUNDLE/target_y.parquet\" t
+        ON t.trade_date = f.trade_date AND t.ts_code = f.ts_code
+    )
+    TO \"$LONG_BUNDLE/feature_target_long.parquet\"
+    (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 9)
+''')
+print('duckdb pre-join done')
+"
+fi
+
+# 5. Run Path 4 grid on the pre-joined long bundle. n_jobs=8 to bound thread
+#    memory; --feature-panel points at the joined file (path1_train auto-detects
+#    'y' column and skips re-joining).
 if [ "$(ls runs/sl_path_d/*/results.json 2>/dev/null | wc -l)" -lt 36 ]; then
     step "path_d_grid" $PY scripts/p3/path1_grid.py \
         --bundle "$LONG_BUNDLE" \
-        --feature-panel feature_panel_clean.parquet \
+        --feature-panel feature_target_long.parquet \
         --out-root runs/sl_path_d \
         --train-start 2018-01-02 \
         --train-end 2024-12-04 \
-        --num-iterations 2000
+        --num-iterations 2000 \
+        --n-jobs 8
 fi
 
 # 7. Ensemble

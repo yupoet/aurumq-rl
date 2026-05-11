@@ -200,14 +200,20 @@ def test_y_full_proximity_pattern():
 
 
 def test_y_at_panel_boundary_drops_when_t_plus_3_missing():
-    """For trade_date near the end of the panel, T+3 doesn't exist → drop the row.
+    """For trade_dates near the end of the panel, T+3 doesn't exist → drop them.
 
-    The function should not produce a y for the last 2 trade_dates (no full T+3 view).
+    With a 3-date fixture (Jan2, Jan3, Jan4) and the convention that
+    T+1 == anchor's own row, T+2 == anchor+1's row, T+3 == anchor+2's row:
+      - Jan2: T+1=Jan2 ✓  T+2=Jan3 ✓  T+3=Jan4 ✓  → keep
+      - Jan3: T+1=Jan3 ✓  T+2=Jan4 ✓  T+3=Jan5 (missing) → drop
+      - Jan4: T+2=Jan5 (missing) → drop
+
+    Output should contain ONLY Jan2.
     """
     realized = _mk_realized([
         ("2024-01-02", "600001.SH", 0.01),
         ("2024-01-03", "600001.SH", 0.01),
-        ("2024-01-04", "600001.SH", 0.01),  # last date — no T+3 from here
+        ("2024-01-04", "600001.SH", 0.01),
     ])
     market = _mk_market([
         ("2024-01-02", 0.0),
@@ -216,10 +222,7 @@ def test_y_at_panel_boundary_drops_when_t_plus_3_missing():
     ])
     out = compute_target_y(realized, market)
     out_dates = sorted(out["trade_date"].unique().to_list())
-    # Anchor 2024-01-02 has T+1=01-03, T+2=01-04, T+3 missing → dropped
-    # Anchor 2024-01-03 also missing T+3 → dropped
-    # Anchor 2024-01-04 missing T+1 → dropped
-    assert out_dates == []
+    assert out_dates == [dt.date(2024, 1, 2)]
 
 
 def test_y_max_zero_clipping_per_horizon():
@@ -674,14 +677,20 @@ def test_ece_perfect_calibration():
     assert ece < 1e-9
 
 
-def test_ece_constant_prediction_high_error():
-    """Constant prediction = mean(actual) → ECE high if any variance in actual."""
+def test_ece_constant_prediction_far_from_actual_mean_high_error():
+    """Constant prediction far from actual.mean() → all rows in one bin, large |pred-actual|.
+
+    Standard ECE bins by PREDICTION quantile. With a constant prediction, all
+    rows fall in one bin and bin's |mean(pred) - mean(actual)| is the gap
+    between the constant and the actual mean. Use pred = 0.5 vs actual ~ 0.05
+    → ECE ≈ 0.45.
+    """
     rng = np.random.default_rng(4)
     n = 5000
-    actual = rng.uniform(0, 0.1, size=n)
-    pred = np.full(n, actual.mean())
+    actual = rng.uniform(0, 0.1, size=n)  # mean ≈ 0.05
+    pred = np.full(n, 0.5)  # constant, far from actual mean
     ece = compute_ece_10bin(pred, actual)
-    assert ece > 0.005  # significantly miscalibrated
+    assert ece > 0.4  # single bin, |0.5 - 0.05| ≈ 0.45
 ```
 
 - [ ] **Step 2: Run test, expect failure**
