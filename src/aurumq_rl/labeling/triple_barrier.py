@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._common import ewm_std_1d, rolling_mean_1d
 from .events import Event
 from .panels import MarketPanel
-from ._common import ewm_std_1d, rolling_mean_1d
-
 
 __all__ = ["detect_events_triple_barrier"]
 
@@ -89,13 +88,15 @@ def _detect_events_one_stock(
         # event only if upper first
         if upper_idx > 0 and (lower_idx < 0 or upper_idx < lower_idx):
             event_quality = float((adj_close[t + upper_idx] - c0) / (c0 * sig))
-            events.append(Event(
-                ts_code=ts_code,
-                event_start_idx=t,
-                event_peak_idx=t + upper_idx,
-                event_quality=event_quality,
-                event_method="C",
-            ))
+            events.append(
+                Event(
+                    ts_code=ts_code,
+                    event_start_idx=t,
+                    event_peak_idx=t + upper_idx,
+                    event_quality=event_quality,
+                    event_method="C",
+                )
+            )
             last_peak = t + upper_idx
             t = last_peak + 1
         else:

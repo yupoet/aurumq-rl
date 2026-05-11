@@ -3,6 +3,7 @@
 Hand-built panels with known closed-form expectations. Tests the label
 preprocessor independently of model / env / SB3.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,7 +14,6 @@ from aurumq_rl.main_wave_labels import (
     aggregate_eval_metrics,
     compute_main_wave_labels,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,24 +32,82 @@ def _hand_built_panel():
     Stock 5: ST flag, gets basic-mask-filtered
     """
     T, S = 30, 6
-    rng = np.random.default_rng(42)
+    np.random.default_rng(42)
 
     # Build close paths.
     close = np.ones((T, S), dtype=np.float32)
 
     # Stock 0: 10 → 11 → 12 → 13 → 14 → 15 → 15.2 → 15.4 ... slow rise
     close[:, 0] = np.array(
-        [10, 10, 10, 10, 10, 10, 10, 10, 10, 10,    # warmup (vol stable)
-         10, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2, 11.4, 11.6, 11.8,   # ramp
-         12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5],
+        [
+            10,
+            10,
+            10,
+            10,
+            10,
+            10,
+            10,
+            10,
+            10,
+            10,  # warmup (vol stable)
+            10,
+            10.2,
+            10.4,
+            10.6,
+            10.8,
+            11.0,
+            11.2,
+            11.4,
+            11.6,
+            11.8,  # ramp
+            12.0,
+            12.5,
+            13.0,
+            13.5,
+            14.0,
+            14.5,
+            15.0,
+            15.5,
+            16.0,
+            16.5,
+        ],
         dtype=np.float32,
     )
 
     # Stock 1: rally 3 days then crash
     close[:, 1] = np.array(
-        [20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-         20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-         20, 20.5, 21.5, 23.0, 22.5, 21.5, 20.0, 19.5, 19.0, 18.5],
+        [
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20.5,
+            21.5,
+            23.0,
+            22.5,
+            21.5,
+            20.0,
+            19.5,
+            19.0,
+            18.5,
+        ],
         dtype=np.float32,
     )
 
@@ -77,7 +135,7 @@ def _hand_built_panel():
 
     # vol: large enough so amount > 1e8 for stocks 0..3, tiny for stock 4
     vol = np.full((T, S), 1e7, dtype=np.float32)
-    vol[:, 4] = 1e3   # close[stock4] = 1.0, amount = 1e3 → fail liquidity
+    vol[:, 4] = 1e3  # close[stock4] = 1.0, amount = 1e3 → fail liquidity
     # Stock 5 has high vol but ST mask kills it.
 
     # valid_mask_basic: stock 5 marked invalid (ST)
@@ -98,12 +156,27 @@ def test_shapes_and_dtypes():
     L = compute_main_wave_labels(close, pct, vol, vmask, cfg)
     T, S = close.shape
     for arr_name in (
-        "amount_ma20", "liquid_mask", "below_ma_state", "death_cross_event",
-        "entry_eligible_mask", "entry_day_idx", "exit_day_idx", "holding_days",
-        "entry_price", "exit_price", "hold_return", "max_cum_return_5d",
-        "peak_day_offset", "max_drawdown_during_hold", "max_adverse_excursion",
-        "rise_duration", "past_vol", "threshold", "hit_main_wave",
-        "main_wave_score", "label_valid_mask",
+        "amount_ma20",
+        "liquid_mask",
+        "below_ma_state",
+        "death_cross_event",
+        "entry_eligible_mask",
+        "entry_day_idx",
+        "exit_day_idx",
+        "holding_days",
+        "entry_price",
+        "exit_price",
+        "hold_return",
+        "max_cum_return_5d",
+        "peak_day_offset",
+        "max_drawdown_during_hold",
+        "max_adverse_excursion",
+        "rise_duration",
+        "past_vol",
+        "threshold",
+        "hit_main_wave",
+        "main_wave_score",
+        "label_valid_mask",
     ):
         arr = getattr(L, arr_name)
         assert arr.shape == (T, S), f"{arr_name} shape {arr.shape} != {(T, S)}"
@@ -118,8 +191,12 @@ def test_shapes_and_dtypes():
     assert (x_idx >= e_idx).all()
     # No NaN / inf in the output arrays
     for arr_name in (
-        "hold_return", "max_cum_return_5d", "max_drawdown_during_hold",
-        "max_adverse_excursion", "main_wave_score", "threshold",
+        "hold_return",
+        "max_cum_return_5d",
+        "max_drawdown_during_hold",
+        "max_adverse_excursion",
+        "main_wave_score",
+        "threshold",
     ):
         arr = getattr(L, arr_name)
         finite_in_valid = np.isfinite(arr[valid])
@@ -162,13 +239,9 @@ def test_hit_main_wave_logic():
     close = np.zeros((T, S), dtype=np.float32)
     # Stock 0: warmup 20 days flat at 10, then 10 → 12 → 12 → 12 → 12 → 12
     # over 5 days. max_cum = +20%, drawdown=0, threshold ~ max(2*0.something, 0.06).
-    close[:, 0] = (
-        [10.0] * 20 + [10.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
-    )
+    close[:, 0] = [10.0] * 20 + [10.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
     # Stock 1: warmup flat, then -5% over 5 days
-    close[:, 1] = (
-        [10.0] * 20 + [10.0, 9.95, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3, 9.2]
-    )
+    close[:, 1] = [10.0] * 20 + [10.0, 9.95, 9.9, 9.8, 9.7, 9.6, 9.5, 9.4, 9.3, 9.2]
 
     pct = np.zeros((T, S), dtype=np.float32)
     pct[1:] = (close[1:] / close[:-1]) - 1.0
@@ -201,8 +274,9 @@ def test_aggregate_eval_metrics_basic():
     cfg = MainWaveConfig()
     L = compute_main_wave_labels(close, pct, vol, vmask, cfg)
     # Pretend we picked stock 0 every day from day 15 onward
-    selected = [np.array([0]) if t >= 15 else np.array([], dtype=np.int64)
-                for t in range(close.shape[0])]
+    selected = [
+        np.array([0]) if t >= 15 else np.array([], dtype=np.int64) for t in range(close.shape[0])
+    ]
     metrics = aggregate_eval_metrics(L, selected, cfg)
     # Stock 0 trends up, so basic_win_rate > 0.5, avg_hold_return > 0
     assert metrics["n_picks"] > 0

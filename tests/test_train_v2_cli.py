@@ -4,6 +4,7 @@ These tests do not run training; they exercise the schedule helper and the
 new argparse flags so a typo or missing wiring is caught before a long
 unattended run kicks off.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -61,13 +62,20 @@ def test_make_lr_callable_unknown_mode_raises():
 def test_parse_args_default_no_phase15_flags():
     from train_v2 import parse_args
 
-    args = parse_args([
-        "--total-timesteps", "1000",
-        "--data-path", "x.parquet",
-        "--start-date", "2023-01-01",
-        "--end-date", "2023-01-31",
-        "--out-dir", "/tmp/x",
-    ])
+    args = parse_args(
+        [
+            "--total-timesteps",
+            "1000",
+            "--data-path",
+            "x.parquet",
+            "--start-date",
+            "2023-01-01",
+            "--end-date",
+            "2023-01-31",
+            "--out-dir",
+            "/tmp/x",
+        ]
+    )
     assert args.resume_from is None
     assert args.lr_schedule == "constant"
     assert args.lr_final_frac == 0.1
@@ -79,15 +87,24 @@ def test_parse_args_resume_from():
 
     from train_v2 import parse_args
 
-    args = parse_args([
-        "--total-timesteps", "300000",
-        "--data-path", "x.parquet",
-        "--start-date", "2023-01-01",
-        "--end-date", "2023-01-31",
-        "--out-dir", "/tmp/x",
-        "--resume-from", "/tmp/600k.zip",
-        "--learning-rate", "3e-5",
-    ])
+    args = parse_args(
+        [
+            "--total-timesteps",
+            "300000",
+            "--data-path",
+            "x.parquet",
+            "--start-date",
+            "2023-01-01",
+            "--end-date",
+            "2023-01-31",
+            "--out-dir",
+            "/tmp/x",
+            "--resume-from",
+            "/tmp/600k.zip",
+            "--learning-rate",
+            "3e-5",
+        ]
+    )
     assert args.resume_from == Path("/tmp/600k.zip")
     assert args.learning_rate == 3e-5
 
@@ -96,15 +113,24 @@ def test_parse_args_lr_schedule_choices():
     from train_v2 import parse_args
 
     for mode in ("constant", "linear", "cosine"):
-        args = parse_args([
-            "--total-timesteps", "1000",
-            "--data-path", "x.parquet",
-            "--start-date", "2023-01-01",
-            "--end-date", "2023-01-31",
-            "--out-dir", "/tmp/x",
-            "--lr-schedule", mode,
-            "--lr-final-frac", "0.05",
-        ])
+        args = parse_args(
+            [
+                "--total-timesteps",
+                "1000",
+                "--data-path",
+                "x.parquet",
+                "--start-date",
+                "2023-01-01",
+                "--end-date",
+                "2023-01-31",
+                "--out-dir",
+                "/tmp/x",
+                "--lr-schedule",
+                mode,
+                "--lr-final-frac",
+                "0.05",
+            ]
+        )
         assert args.lr_schedule == mode
         assert args.lr_final_frac == 0.05
 
@@ -112,12 +138,21 @@ def test_parse_args_lr_schedule_choices():
 def test_parse_args_drop_factor_prefix_multi():
     from train_v2 import parse_args
 
-    args = parse_args([
-        "--total-timesteps", "1000",
-        "--data-path", "x.parquet",
-        "--start-date", "2023-01-01",
-        "--end-date", "2023-01-31",
-        "--out-dir", "/tmp/x",
-        "--drop-factor-prefix", "mkt_", "ind_",
-    ])
+    args = parse_args(
+        [
+            "--total-timesteps",
+            "1000",
+            "--data-path",
+            "x.parquet",
+            "--start-date",
+            "2023-01-01",
+            "--end-date",
+            "2023-01-31",
+            "--out-dir",
+            "/tmp/x",
+            "--drop-factor-prefix",
+            "mkt_",
+            "ind_",
+        ]
+    )
     assert args.drop_factor_prefix == ["mkt_", "ind_"]

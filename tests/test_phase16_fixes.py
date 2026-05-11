@@ -14,6 +14,7 @@ Five concrete claims this file pins down:
 5. ``backtest.compute_top_k_sharpes`` returns ``adjusted ≈ legacy /
    sqrt(forward_period)`` on the same return series.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -124,9 +125,7 @@ def test_load_panel_factor_names_missing_column_raises(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not __import__("torch").cuda.is_available(), reason="cuda required"
-)
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="cuda required")
 def test_gpu_env_step_uses_returns_at_t():
     """If reward = mean of returns[t] for top-K, then setting returns[t]
     deterministically (and zeroing forward rows) guarantees a known reward.
@@ -145,9 +144,7 @@ def test_gpu_env_step_uses_returns_at_t():
     panel = torch.zeros((n_dates, n_stocks, n_factors), device="cuda")
     returns = torch.zeros((n_dates, n_stocks), device="cuda")
     # Make t=0 row carry a unique signal: stock j has return 0.01*(j+1).
-    returns[0] = torch.tensor(
-        [0.01 * (j + 1) for j in range(n_stocks)], device="cuda"
-    )
+    returns[0] = torch.tensor([0.01 * (j + 1) for j in range(n_stocks)], device="cuda")
     valid = torch.ones((n_dates, n_stocks), dtype=torch.bool, device="cuda")
 
     env = GPUStockPickingEnv(
@@ -183,9 +180,7 @@ def test_gpu_env_step_uses_returns_at_t():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not __import__("torch").cuda.is_available(), reason="cuda required"
-)
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="cuda required")
 def test_factor_importance_eval_metrics_use_returns_at_t():
     import torch
 
@@ -200,16 +195,20 @@ def test_factor_importance_eval_metrics_use_returns_at_t():
 
     # Make returns[t] non-trivial for t in [0, n_dates - fp).
     rng = torch.Generator(device="cuda").manual_seed(0)
-    returns[: n_dates - forward_period] = torch.randn(
-        (n_dates - forward_period, n_stocks), generator=rng, device="cuda"
-    ) * 0.01
+    returns[: n_dates - forward_period] = (
+        torch.randn((n_dates - forward_period, n_stocks), generator=rng, device="cuda") * 0.01
+    )
 
     # Score = first feature value per stock (deterministic per-date).
     def score_fn(obs: torch.Tensor) -> torch.Tensor:
         return obs[..., 0].mean(dim=0).reshape(1, -1)  # (1, S)
 
     out = _eval_top_k_metrics(
-        score_fn, panel, returns, forward_period=forward_period, top_k=3,
+        score_fn,
+        panel,
+        returns,
+        forward_period=forward_period,
+        top_k=3,
     )
     # New keys exist
     for k in ("ic", "sharpe", "sharpe_legacy", "sharpe_adjusted", "sharpe_non_overlap"):
@@ -255,8 +254,12 @@ def test_run_backtest_emits_sharpe_trio():
 
     fp = 10
     res = run_backtest(
-        predictions=preds, returns=rets, top_k=5, n_random_simulations=10,
-        random_seed=0, forward_period=fp,
+        predictions=preds,
+        returns=rets,
+        top_k=5,
+        n_random_simulations=10,
+        random_seed=0,
+        forward_period=fp,
     )
     # The dataclass exposes the trio + fp.
     assert res.forward_period == fp

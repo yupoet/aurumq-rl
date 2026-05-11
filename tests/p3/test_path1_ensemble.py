@@ -1,4 +1,5 @@
 """Tests for Path 1 ensemble + calibration utilities."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -6,7 +7,6 @@ import datetime as dt
 import numpy as np
 import polars as pl
 import pytest
-
 from p3.path1_ensemble import (
     calibrate_isotonic,
     pick_top_configs_by_val,
@@ -16,21 +16,25 @@ from p3.path1_ensemble import (
 
 def test_seed_mean_three_identical_predictions():
     """Three identical predictions averaged → unchanged."""
-    df_a = pl.DataFrame({
-        "trade_date": [dt.date(2025, 1, 1), dt.date(2025, 1, 2)],
-        "ts_code": ["S1.SH", "S2.SH"],
-        "score": [0.5, 0.7],
-    })
+    df_a = pl.DataFrame(
+        {
+            "trade_date": [dt.date(2025, 1, 1), dt.date(2025, 1, 2)],
+            "ts_code": ["S1.SH", "S2.SH"],
+            "score": [0.5, 0.7],
+        }
+    )
     out = seed_mean_ensemble([df_a, df_a.clone(), df_a.clone()])
     assert out["score"].to_list() == pytest.approx([0.5, 0.7])
 
 
 def test_seed_mean_averages_correctly():
     """Mean of [0.0, 0.5, 1.0] → 0.5 per row."""
-    base_keys = pl.DataFrame({
-        "trade_date": [dt.date(2025, 1, 1), dt.date(2025, 1, 2)],
-        "ts_code": ["S1.SH", "S2.SH"],
-    })
+    base_keys = pl.DataFrame(
+        {
+            "trade_date": [dt.date(2025, 1, 1), dt.date(2025, 1, 2)],
+            "ts_code": ["S1.SH", "S2.SH"],
+        }
+    )
     df_a = base_keys.with_columns(pl.lit(0.0).alias("score"))
     df_b = base_keys.with_columns(pl.lit(0.5).alias("score"))
     df_c = base_keys.with_columns(pl.lit(1.0).alias("score"))

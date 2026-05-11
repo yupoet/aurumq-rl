@@ -82,13 +82,12 @@ CS_PART = "trade_date"
 from aurumq_rl.factors.alpha101._ops import (  # noqa: E402, F401
     EPS_DIV,
     EPS_LOG,
-    SAFE_POW_EXP_LO,
     SAFE_POW_EXP_HI,
+    SAFE_POW_EXP_LO,
     safe_div,
     safe_log,
     safe_pow_clip,
 )
-
 
 # ---------------------------------------------------------------------------
 # Cross-section operators

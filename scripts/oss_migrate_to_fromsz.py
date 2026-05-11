@@ -22,6 +22,7 @@ Usage
 -----
     python scripts/oss_migrate_to_fromsz.py [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,12 +38,9 @@ BUCKET = "ledashi-oss"
 # Source prefixes (where I mistakenly put SZ outputs earlier today).
 # Map: srcprefix -> destprefix
 PREFIX_MAP = {
-    "aurumq-rl/from-sz/handoffs/2026-05-03-nightly-phase14-report/":
-        "fromsz/handoffs/2026-05-03-nightly-phase14-report/",
-    "aurumq-rl/from-sz/handoffs/2026-05-03-phase15-grand-champion/":
-        "fromsz/handoffs/2026-05-03-phase15-grand-champion/",
-    "aurumq-rl/from-sz/models/2026-05-03-phase14c-600k/":
-        "fromsz/models/2026-05-03-phase14c-600k/",
+    "aurumq-rl/from-sz/handoffs/2026-05-03-nightly-phase14-report/": "fromsz/handoffs/2026-05-03-nightly-phase14-report/",
+    "aurumq-rl/from-sz/handoffs/2026-05-03-phase15-grand-champion/": "fromsz/handoffs/2026-05-03-phase15-grand-champion/",
+    "aurumq-rl/from-sz/models/2026-05-03-phase14c-600k/": "fromsz/models/2026-05-03-phase14c-600k/",
 }
 
 
@@ -65,8 +63,9 @@ def _read_env() -> dict[str, str]:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--dry-run", action="store_true",
-                   help="list what would happen but don't copy/delete")
+    p.add_argument(
+        "--dry-run", action="store_true", help="list what would happen but don't copy/delete"
+    )
     args = p.parse_args()
 
     env = _read_env()
@@ -78,7 +77,9 @@ def main() -> int:
     for src_prefix in PREFIX_MAP:
         marker = ""
         while True:
-            res = bucket.list_objects_v2(prefix=src_prefix, max_keys=1000, continuation_token=marker)
+            res = bucket.list_objects_v2(
+                prefix=src_prefix, max_keys=1000, continuation_token=marker
+            )
             for o in res.object_list:
                 if o.key.endswith("/"):
                     continue
@@ -95,7 +96,7 @@ def main() -> int:
     if args.dry_run:
         for k, src_prefix in keys[:30]:
             dest_prefix = PREFIX_MAP[src_prefix]
-            dest_key = dest_prefix + k[len(src_prefix):]
+            dest_key = dest_prefix + k[len(src_prefix) :]
             print(f"  [dry] {k} -> {dest_key}")
         print(f"  ... (total {len(keys)})")
         return 0
@@ -106,7 +107,7 @@ def main() -> int:
     copy_failed: list[str] = []
     for k, src_prefix in keys:
         dest_prefix = PREFIX_MAP[src_prefix]
-        dest_key = dest_prefix + k[len(src_prefix):]
+        dest_key = dest_prefix + k[len(src_prefix) :]
 
         try:
             res = bucket.copy_object(BUCKET, k, dest_key)

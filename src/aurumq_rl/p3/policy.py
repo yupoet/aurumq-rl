@@ -16,21 +16,19 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
 
 import torch
 import torch.nn as nn
 
 from aurumq_rl.policy import PerStockEncoderPolicy
 
-
 logger = logging.getLogger(__name__)
 
 
 # ALGORITHM_SPEC v2 §5
-ACTION_RANGE = 0.2                # ± clip in logit space
-LOG_STD_INIT = math.log(0.3)      # ln(0.3) ≈ -1.20397
-LOG_STD_FINAL = math.log(0.1)     # ln(0.1) ≈ -2.30259
+ACTION_RANGE = 0.2  # ± clip in logit space
+LOG_STD_INIT = math.log(0.3)  # ln(0.3) ≈ -1.20397
+LOG_STD_FINAL = math.log(0.1)  # ln(0.1) ≈ -2.30259
 LOG_STD_FREEZE_STEPS = 100_000
 LOG_STD_ANNEAL_STEPS = 200_000
 
@@ -51,7 +49,9 @@ class ResidualPerStockPolicy(PerStockEncoderPolicy):
                 self.log_std.data.fill_(LOG_STD_INIT)
         logger.info(
             "ResidualPerStockPolicy built: action_range=±%.2f, log_std_init=%.4f (std=%.3f)",
-            ACTION_RANGE, LOG_STD_INIT, math.exp(LOG_STD_INIT),
+            ACTION_RANGE,
+            LOG_STD_INIT,
+            math.exp(LOG_STD_INIT),
         )
 
     def self_test_zero_init(self, sample_obs) -> None:

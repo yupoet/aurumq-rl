@@ -1,7 +1,7 @@
 """Tests for src/aurumq_rl/factor_importance.py."""
+
 from __future__ import annotations
 
-import numpy as np
 import pytest
 import torch
 
@@ -16,9 +16,11 @@ from aurumq_rl.factor_importance import (
 
 def _linear_score_fn(weights: torch.Tensor):
     """Closure: scores = obs @ weights, where weights is (n_factors,)."""
+
     def _fn(obs: torch.Tensor) -> torch.Tensor:
         # obs: (B, n_stocks, n_factors)
         return (obs * weights).sum(dim=-1)
+
     return _fn
 
 
@@ -71,8 +73,14 @@ def test_permutation_importance_identifies_planted_group():
     factor_names = [f"alpha_{i:03d}" if i < 4 else f"gtja_{i:03d}" for i in range(n_factors)]
     score_fn = _linear_score_fn(weights)
     out = permutation_importance(
-        score_fn, panel, returns, factor_names=factor_names,
-        forward_period=2, top_k=5, n_seeds=3, base_seed=0,
+        score_fn,
+        panel,
+        returns,
+        factor_names=factor_names,
+        forward_period=2,
+        top_k=5,
+        n_seeds=3,
+        base_seed=0,
     )
     assert "alpha" in out
     assert "gtja" in out

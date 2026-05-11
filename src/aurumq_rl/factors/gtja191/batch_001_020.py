@@ -528,9 +528,9 @@ def gtja_017(panel: pl.DataFrame) -> pl.Series:
     staged = panel.with_columns(inner.alias("__g017_inner"))
     staged = staged.with_columns(rank(pl.col("__g017_inner")).alias("__g017_r"))
     return staged.select(
-        safe_pow_clip(
-            pl.col("__g017_r"), delta(pl.col("close"), 5)
-        ).alias("gtja_017").cast(pl.Float64)
+        safe_pow_clip(pl.col("__g017_r"), delta(pl.col("close"), 5))
+        .alias("gtja_017")
+        .cast(pl.Float64)
     ).to_series()
 
 

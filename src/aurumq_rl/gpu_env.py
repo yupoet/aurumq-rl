@@ -7,6 +7,7 @@ cuda. step_wait() is a single batched tensor op.
 
 See docs/superpowers/specs/2026-05-01-gpu-rl-framework-design.md §5.
 """
+
 from __future__ import annotations
 
 import gymnasium as gym
@@ -20,9 +21,9 @@ class GPUStockPickingEnv(VecEnv):
 
     def __init__(
         self,
-        panel: torch.Tensor,        # (T, S, F) fp32 cuda
-        returns: torch.Tensor,      # (T, S)    fp32 cuda
-        valid_mask: torch.Tensor,   # (T, S)    bool cuda
+        panel: torch.Tensor,  # (T, S, F) fp32 cuda
+        returns: torch.Tensor,  # (T, S)    fp32 cuda
+        valid_mask: torch.Tensor,  # (T, S)    bool cuda
         n_envs: int,
         episode_length: int = 240,
         forward_period: int = 10,
@@ -36,7 +37,7 @@ class GPUStockPickingEnv(VecEnv):
         # hold return under signal-exit). When None, falls back to V1 behaviour
         # (mean of N-day forward log return). Indexing is the same: row t is
         # the reward for action taken at t.
-        hold_returns: torch.Tensor | None = None,   # (T, S) fp32 cuda
+        hold_returns: torch.Tensor | None = None,  # (T, S) fp32 cuda
     ) -> None:
         if panel.device.type != "cuda":
             raise ValueError("panel must be a cuda tensor")
@@ -84,16 +85,20 @@ class GPUStockPickingEnv(VecEnv):
         self._pending_action: torch.Tensor | None = None
 
         observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf,
+            low=-np.inf,
+            high=np.inf,
             shape=(self.n_stocks, self.n_factors),
             dtype=np.float32,
         )
         action_space = gym.spaces.Box(
-            low=0.0, high=1.0,
+            low=0.0,
+            high=1.0,
             shape=(self.n_stocks,),
             dtype=np.float32,
         )
-        super().__init__(num_envs=n_envs, observation_space=observation_space, action_space=action_space)
+        super().__init__(
+            num_envs=n_envs, observation_space=observation_space, action_space=action_space
+        )
 
     # SB3 VecEnv abstract methods --------------------------------------
 
@@ -132,7 +137,7 @@ class GPUStockPickingEnv(VecEnv):
         #    provided; else fall back to V1's 10d forward mean. Both use the
         #    same indexing: row t is the realized return for action at t.
         return_source = self.hold_returns if self.hold_returns is not None else self.returns
-        fwd_rets = return_source[self.t].gather(1, top_idx)          # (n_envs, K)
+        fwd_rets = return_source[self.t].gather(1, top_idx)  # (n_envs, K)
         rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
         # 4. turnover penalty (Jaccard-style)
         if self.turnover_coef > 0.0:
@@ -166,7 +171,12 @@ class GPUStockPickingEnv(VecEnv):
         # Re-setting it post-advance would re-introduce the off-by-one bug
         # that PPO update sees inconsistent log_probs across rollout vs eval.
         obs = self._obs_for_sb3()
-        return obs, rewards.detach().cpu().numpy().astype(np.float32), dones.detach().cpu().numpy(), infos
+        return (
+            obs,
+            rewards.detach().cpu().numpy().astype(np.float32),
+            dones.detach().cpu().numpy(),
+            infos,
+        )
 
     def _reset_done_envs(self, dones: torch.Tensor) -> None:
         self._sample_starts(dones)
@@ -236,9 +246,11 @@ class GPUStockPickingEnv(VecEnv):
                 f"{self.episode_length} forward_period={self.forward_period}"
             )
         new_starts = torch.randint(
-            low=0, high=max_start + 1,
+            low=0,
+            high=max_start + 1,
             size=(int(mask.sum().item()),),
-            generator=self._rng, device=self.device,
+            generator=self._rng,
+            device=self.device,
         )
         self.t[mask] = new_starts
 

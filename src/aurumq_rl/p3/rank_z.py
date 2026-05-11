@@ -12,6 +12,7 @@ Critical invariant for inference correctness:
   - Rank is computed PER trade_date over in-universe stocks ONLY
   - Inference for "today" uses today's universe (cannot leak future data)
 """
+
 from __future__ import annotations
 
 import polars as pl

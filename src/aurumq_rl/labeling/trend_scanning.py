@@ -17,7 +17,6 @@ import numpy as np
 from .events import Event
 from .panels import MarketPanel
 
-
 __all__ = ["detect_events_trend_scanning"]
 
 
@@ -46,17 +45,17 @@ def _vectorized_ols_tstat(y: np.ndarray, L: int) -> tuple[np.ndarray, np.ndarray
     k = np.arange(L, dtype=np.float64)
     k_bar = (L - 1) / 2.0
     k_dev = k - k_bar
-    sk2 = (k_dev * k_dev).sum()         # constant
+    sk2 = (k_dev * k_dev).sum()  # constant
     # Slide windows
     for t in range(n - L + 1):
-        seg = y[t:t + L]
+        seg = y[t : t + L]
         if not np.isfinite(seg).all():
             continue
         y_bar = seg.mean()
         y_dev = seg - y_bar
         beta = (k_dev * y_dev).sum() / sk2
         # residuals
-        pred = beta * k_dev   # centered
+        pred = beta * k_dev  # centered
         ss_res = ((y_dev - pred) ** 2).sum()
         if L <= 2:
             continue
@@ -105,6 +104,7 @@ def _detect_events_one_stock(
     # event_peak = t + best_L[t]
     # event_quality = best_t[t] (continuous)
     from ._common import rolling_mean_1d
+
     amt_ma = rolling_mean_1d(amount, window=amt_ma_window)
 
     events: list[Event] = []
@@ -114,7 +114,12 @@ def _detect_events_one_stock(
             continue
         if not universe[t]:
             continue
-        if not (np.isfinite(best_t[t]) and best_t[t] > 0 and np.isfinite(best_slope[t]) and best_slope[t] > 0):
+        if not (
+            np.isfinite(best_t[t])
+            and best_t[t] > 0
+            and np.isfinite(best_slope[t])
+            and best_slope[t] > 0
+        ):
             continue
         if not (np.isfinite(amt_ma[t]) and amt_ma[t] >= amt_min):
             continue
@@ -122,18 +127,22 @@ def _detect_events_one_stock(
         if L_used <= 0:
             continue
         peak_idx = min(n - 1, t + L_used)
-        events.append(Event(
-            ts_code=ts_code,
-            event_start_idx=t,
-            event_peak_idx=peak_idx,
-            event_quality=float(best_t[t]),
-            event_method="B",
-        ))
+        events.append(
+            Event(
+                ts_code=ts_code,
+                event_start_idx=t,
+                event_peak_idx=peak_idx,
+                event_quality=float(best_t[t]),
+                event_method="B",
+            )
+        )
         last_peak = peak_idx
     return events
 
 
-def detect_events_trend_scanning(panel: MarketPanel, L_grid: tuple[int, ...] = L_GRID) -> list[Event]:
+def detect_events_trend_scanning(
+    panel: MarketPanel, L_grid: tuple[int, ...] = L_GRID
+) -> list[Event]:
     events: list[Event] = []
     for j, ts_code in enumerate(panel.ts_codes):
         evs = _detect_events_one_stock(

@@ -1,4 +1,5 @@
 """Tests for src/aurumq_rl/policy.py and feature_extractor.py."""
+
 from __future__ import annotations
 
 import gymnasium as gym
@@ -58,8 +59,12 @@ def _make_policy(n_stocks=50, n_factors=20, lr=1e-3):
     obs_space = _obs_space(n_stocks, n_factors)
     act_space = gym.spaces.Box(0.0, 1.0, (n_stocks,), dtype=np.float32)
     policy = PerStockEncoderPolicy(
-        obs_space, act_space, lr_schedule=lambda _: lr,
-        encoder_hidden=(64,), encoder_out_dim=16, value_hidden=(32,),
+        obs_space,
+        act_space,
+        lr_schedule=lambda _: lr,
+        encoder_hidden=(64,),
+        encoder_out_dim=16,
+        value_hidden=(32,),
     )
     return policy
 
@@ -119,12 +124,9 @@ def test_policy_optimizer_tracks_all_trainable_params():
     policy = _make_policy(n_stocks=50, n_factors=20)
     opt_ids = {id(p) for g in policy.optimizer.param_groups for p in g["params"]}
     missing = [
-        name for name, p in policy.named_parameters()
-        if p.requires_grad and id(p) not in opt_ids
+        name for name, p in policy.named_parameters() if p.requires_grad and id(p) not in opt_ids
     ]
-    assert missing == [], (
-        f"optimizer is missing {len(missing)} trainable parameters: {missing}"
-    )
+    assert missing == [], f"optimizer is missing {len(missing)} trainable parameters: {missing}"
 
 
 def test_extractor_dual_pooling_shape_and_mean_zero():

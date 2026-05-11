@@ -25,7 +25,6 @@ from pathlib import Path
 import duckdb
 import numpy as np
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +52,7 @@ def _bundle_cache_path(bundle_dir: Path) -> Path:
     return bundle_dir / "_bundle_cache.npz"
 
 
-def _try_load_cache(bundle_dir: Path) -> "P3Bundle | None":
+def _try_load_cache(bundle_dir: Path) -> P3Bundle | None:
     cache_path = _bundle_cache_path(bundle_dir)
     if not cache_path.exists():
         return None
@@ -77,15 +76,16 @@ def _try_load_cache(bundle_dir: Path) -> "P3Bundle | None":
             label_t3=z["label_t3"],
             schema_hash=str(z["schema_hash"]),
         )
-        logger.info("bundle loaded from cache in %.1fs (cache=%s)",
-                    time.time() - t0, cache_path.name)
+        logger.info(
+            "bundle loaded from cache in %.1fs (cache=%s)", time.time() - t0, cache_path.name
+        )
         return b
     except Exception as e:
         logger.warning("bundle cache load failed: %s; falling back to slow path", e)
         return None
 
 
-def _save_cache(bundle_dir: Path, b: "P3Bundle") -> None:
+def _save_cache(bundle_dir: Path, b: P3Bundle) -> None:
     cache_path = _bundle_cache_path(bundle_dir)
     try:
         t0 = time.time()
@@ -114,8 +114,12 @@ def _save_cache(bundle_dir: Path, b: "P3Bundle") -> None:
         )
         tmp.replace(cache_path)
         size_gb = cache_path.stat().st_size / (1 << 30)
-        logger.info("bundle cache saved in %.1fs (%.2f GB at %s)",
-                    time.time() - t0, size_gb, cache_path.name)
+        logger.info(
+            "bundle cache saved in %.1fs (%.2f GB at %s)",
+            time.time() - t0,
+            size_gb,
+            cache_path.name,
+        )
     except Exception as e:
         logger.warning("bundle cache save failed: %s (training proceeds without cache)", e)
 
@@ -124,24 +128,24 @@ def _save_cache(bundle_dir: Path, b: "P3Bundle") -> None:
 class P3Bundle:
     """Aligned (T, S) arrays for residual PPO training."""
 
-    trade_dates: list[date]                # length T
-    ts_codes: list[str]                    # length S, stable order
+    trade_dates: list[date]  # length T
+    ts_codes: list[str]  # length S, stable order
 
     # Features (P0 schema_hash 5e71e158e331)
-    feature_panel: np.ndarray              # (T, S, F=345) float32
+    feature_panel: np.ndarray  # (T, S, F=345) float32
     feature_cols: list[str]
 
     # Baseline (P2 v2 ensemble)
-    p_baseline: np.ndarray                 # (T, S) float32 ∈ [0, 1]
-    rank_pct_baseline: np.ndarray          # (T, S) float32 ∈ [0, 1]
+    p_baseline: np.ndarray  # (T, S) float32 ∈ [0, 1]
+    rank_pct_baseline: np.ndarray  # (T, S) float32 ∈ [0, 1]
 
     # Reward inputs (option β: realized excess return)
-    realized_pct_t_plus_1: np.ndarray      # (T, S) float32
-    market_pct_t_plus_1: np.ndarray        # (T,) float32
+    realized_pct_t_plus_1: np.ndarray  # (T, S) float32
+    market_pct_t_plus_1: np.ndarray  # (T,) float32
 
     # Universe + labels
-    in_universe: np.ndarray                # (T, S) bool
-    label_t3: np.ndarray                   # (T, S) int8
+    in_universe: np.ndarray  # (T, S) bool
+    label_t3: np.ndarray  # (T, S) int8
 
     # Schema sanity
     schema_hash: str = "5e71e158e331"
@@ -174,8 +178,11 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
             raise FileNotFoundError(f"MANIFEST.json missing in {bundle_dir}")
         with manifest_path.open() as f:
             manifest = json.load(f)
-        logger.info("Loading P3 bundle: schema_hash=%s, total %.2f GB",
-                    manifest.get("feature_schema_hash"), manifest.get("total_gb", 0.0))
+        logger.info(
+            "Loading P3 bundle: schema_hash=%s, total %.2f GB",
+            manifest.get("feature_schema_hash"),
+            manifest.get("total_gb", 0.0),
+        )
 
     # Fast path: try cache first (sha-keyed against MANIFEST.sha256.txt).
     # Slow path below runs only on first call after a fresh OSS pull.
@@ -190,10 +197,14 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     # 1. Universe mask: discover (T, S) coordinates
     logger.info("  fetching universe mask...")
     uni_glob = str(bundle_dir / "universe_mask" / "year=*.parquet")
-    uni_df = con.execute(f"""
+    uni_df = (
+        con.execute(f"""
         SELECT trade_date, ts_code, in_universe FROM '{uni_glob}'
         ORDER BY trade_date, ts_code
-    """).fetch_arrow_table().to_pandas()
+    """)
+        .fetch_arrow_table()
+        .to_pandas()
+    )
     trade_dates = sorted(uni_df["trade_date"].unique())
     ts_codes = sorted(uni_df["ts_code"].unique())
     T, S = len(trade_dates), len(ts_codes)
@@ -202,7 +213,12 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     logger.info("  T=%d S=%d (universe shape)", T, S)
 
     in_universe = np.zeros((T, S), dtype=bool)
-    for d, c, u in zip(uni_df["trade_date"].values, uni_df["ts_code"].values, uni_df["in_universe"].values):
+    for d, c, u in zip(
+        uni_df["trade_date"].values,
+        uni_df["ts_code"].values,
+        uni_df["in_universe"].values,
+        strict=False,
+    ):
         in_universe[date_idx[d], code_idx[c]] = bool(u)
 
     # 2. Feature panel
@@ -226,8 +242,10 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     # get datetime.date objects throughout.
     dates_a = arr.column("trade_date").to_pylist()
     codes_a = arr.column("ts_code").to_pylist()
-    feat_arrays = [arr.column(c).to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
-                   for c in feature_cols]
+    feat_arrays = [
+        arr.column(c).to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
+        for c in feature_cols
+    ]
     for k in range(arr.num_rows):
         d = dates_a[k]
         i = date_idx.get(d)
@@ -248,17 +266,27 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     rank_pct = np.full((T, S), np.nan, dtype=np.float32)
     base_arr = con.execute(f"""
         SELECT trade_date, ts_code, p_t3_baseline, rank_pct_baseline
-        FROM '{bundle_dir / 'baseline_predictions.parquet'}'
+        FROM '{bundle_dir / "baseline_predictions.parquet"}'
     """).fetch_arrow_table()
     bd = base_arr.column("trade_date").to_pylist()
     bc = base_arr.column("ts_code").to_pylist()
-    bp = base_arr.column("p_t3_baseline").to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
-    br = base_arr.column("rank_pct_baseline").to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
+    bp = (
+        base_arr.column("p_t3_baseline")
+        .to_numpy(zero_copy_only=False)
+        .astype(np.float32, copy=False)
+    )
+    br = (
+        base_arr.column("rank_pct_baseline")
+        .to_numpy(zero_copy_only=False)
+        .astype(np.float32, copy=False)
+    )
     for k in range(base_arr.num_rows):
         i = date_idx.get(bd[k])
-        if i is None: continue
+        if i is None:
+            continue
         j = code_idx.get(bc[k])
-        if j is None: continue
+        if j is None:
+            continue
         p_baseline[i, j] = bp[k]
         rank_pct[i, j] = br[k]
 
@@ -267,16 +295,22 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     realized = np.full((T, S), np.nan, dtype=np.float32)
     r_arr = con.execute(f"""
         SELECT trade_date, ts_code, pct_chg_t_plus_1
-        FROM '{bundle_dir / 'realized_returns.parquet'}'
+        FROM '{bundle_dir / "realized_returns.parquet"}'
     """).fetch_arrow_table()
     rd = r_arr.column("trade_date").to_pylist()
     rc = r_arr.column("ts_code").to_pylist()
-    rp = r_arr.column("pct_chg_t_plus_1").to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
+    rp = (
+        r_arr.column("pct_chg_t_plus_1")
+        .to_numpy(zero_copy_only=False)
+        .astype(np.float32, copy=False)
+    )
     for k in range(r_arr.num_rows):
         i = date_idx.get(rd[k])
-        if i is None: continue
+        if i is None:
+            continue
         j = code_idx.get(rc[k])
-        if j is None: continue
+        if j is None:
+            continue
         realized[i, j] = rp[k]
 
     # 5. Market returns
@@ -284,13 +318,18 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     market = np.full(T, np.nan, dtype=np.float32)
     m_arr = con.execute(f"""
         SELECT trade_date, eq_weight_pct_chg_t_plus_1
-        FROM '{bundle_dir / 'market_returns.parquet'}'
+        FROM '{bundle_dir / "market_returns.parquet"}'
     """).fetch_arrow_table()
     md = m_arr.column("trade_date").to_pylist()
-    mp = m_arr.column("eq_weight_pct_chg_t_plus_1").to_numpy(zero_copy_only=False).astype(np.float32, copy=False)
+    mp = (
+        m_arr.column("eq_weight_pct_chg_t_plus_1")
+        .to_numpy(zero_copy_only=False)
+        .astype(np.float32, copy=False)
+    )
     for k in range(m_arr.num_rows):
         i = date_idx.get(md[k])
-        if i is None: continue
+        if i is None:
+            continue
         market[i] = mp[k]
 
     # 6. Labels (A_t3 only, others available but not used for training)
@@ -305,9 +344,11 @@ def load_bundle(bundle_dir: Path | str, verify_manifest: bool = True) -> P3Bundl
     ly = l_arr.column("y").to_numpy().astype(np.int8)
     for k in range(l_arr.num_rows):
         i = date_idx.get(ld[k])
-        if i is None: continue
+        if i is None:
+            continue
         j = code_idx.get(lc[k])
-        if j is None: continue
+        if j is None:
+            continue
         label_t3[i, j] = ly[k]
 
     bundle = P3Bundle(

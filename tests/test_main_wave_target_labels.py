@@ -1,12 +1,9 @@
 """Tests for src/aurumq_rl/main_wave_target_labels.py."""
-from __future__ import annotations
 
-import numpy as np
-import pytest
+from __future__ import annotations
 
 from aurumq_rl.main_wave_episodes import MainWaveEpisode
 from aurumq_rl.main_wave_target_labels import (
-    TargetConfig,
     build_target_quality,
     quality_of_episode,
 )
@@ -32,7 +29,6 @@ def test_quality_decreases_with_drawdown():
 
 def test_target_at_t_minus_1():
     eps = [MainWaveEpisode(0, 10, 15, 0.30, 5, 0.0)]
-    T = MainWaveEpisode  # not used
     targets = build_target_quality(eps, n_dates=20, n_stocks=2)
     # T-1 = day 9; should have full credit
     assert targets.proximity[9, 0] == 1
@@ -52,8 +48,11 @@ def test_target_at_t_minus_1():
 
 
 def test_target_other_stocks_zero():
-    eps = [MainWaveEpisode(stock_idx=2, t_start=10, t_peak=15,
-                           peak_return=0.20, duration=5, max_dd_during=0.0)]
+    eps = [
+        MainWaveEpisode(
+            stock_idx=2, t_start=10, t_peak=15, peak_return=0.20, duration=5, max_dd_during=0.0
+        )
+    ]
     targets = build_target_quality(eps, n_dates=20, n_stocks=5)
     # Only stock 2 should have credit at T-1=9, T-2=8, T-3=7
     for j in range(5):
@@ -85,10 +84,10 @@ def test_overlapping_episodes_max_wins():
 
 def test_panel_edge_dates():
     """Episodes near panel start: T-3 may be < 0, gracefully handled."""
-    eps = [MainWaveEpisode(0, 2, 5, 0.20, 3, 0.0)]   # t_start=2, T-3 = -1 (invalid)
+    eps = [MainWaveEpisode(0, 2, 5, 0.20, 3, 0.0)]  # t_start=2, T-3 = -1 (invalid)
     targets = build_target_quality(eps, n_dates=10, n_stocks=1)
-    assert targets.proximity[1, 0] == 1   # T-1 valid
-    assert targets.proximity[0, 0] == 2   # T-2 valid
+    assert targets.proximity[1, 0] == 1  # T-1 valid
+    assert targets.proximity[0, 0] == 2  # T-2 valid
     # T-3 = -1, skipped
 
 

@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._common import rolling_mean_1d
 from .events import Event
 from .panels import MarketPanel
-from ._common import rolling_mean_1d
-
 
 __all__ = ["detect_events_directional_change"]
 
@@ -56,10 +55,9 @@ def _dc_events_at_theta(
             break
     if start_t < 0:
         return []
-    direction = "down"   # initially track for first up-move (look for low first)
+    direction = "down"  # initially track for first up-move (look for low first)
     extreme_low_idx = start_t
     extreme_low_val = adj_close[start_t]
-    extreme_high_idx = start_t
     extreme_high_val = adj_close[start_t]
 
     for t in range(start_t + 1, n):
@@ -78,11 +76,9 @@ def _dc_events_at_theta(
                 # Flip to up direction; current point is new high anchor
                 direction = "up"
                 extreme_high_val = c
-                extreme_high_idx = t
         else:  # direction == "up"
             if c > extreme_high_val:
                 extreme_high_val = c
-                extreme_high_idx = t
             # check for down-reversal
             if c <= extreme_high_val * (1.0 - theta):
                 # Flip to down direction; this becomes the new low anchor
@@ -118,7 +114,7 @@ def _detect_events_one_stock(
 
     # Filter: liquidity + duration + universe at start
     filtered: list[Event] = []
-    for low_idx, peak_idx, quality, magnitude in raw_events:
+    for low_idx, peak_idx, quality, _magnitude in raw_events:
         dur = peak_idx - low_idx
         if dur < min_duration or dur > max_duration:
             continue
@@ -126,13 +122,15 @@ def _detect_events_one_stock(
             continue
         if not (np.isfinite(amt_ma[low_idx]) and amt_ma[low_idx] >= amt_min):
             continue
-        filtered.append(Event(
-            ts_code=ts_code,
-            event_start_idx=low_idx,
-            event_peak_idx=peak_idx,
-            event_quality=float(quality),
-            event_method="D",
-        ))
+        filtered.append(
+            Event(
+                ts_code=ts_code,
+                event_start_idx=low_idx,
+                event_peak_idx=peak_idx,
+                event_quality=float(quality),
+                event_method="D",
+            )
+        )
     return filtered
 
 

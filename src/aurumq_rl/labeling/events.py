@@ -8,12 +8,12 @@ Decision day t = event_start - 1.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, Literal
+from typing import Literal
 
 import polars as pl
-
 
 __all__ = ["Event", "dedupe_events", "derive_labels", "events_to_dataframe"]
 
@@ -31,10 +31,10 @@ class Event:
     """
 
     ts_code: str
-    event_start_idx: int       # index into the per-stock trading day array
-    event_peak_idx: int        # index of peak (>= event_start_idx)
-    event_quality: float       # method-specific continuous score
-    event_method: str          # 'A' | 'B' | 'C' | 'D'
+    event_start_idx: int  # index into the per-stock trading day array
+    event_peak_idx: int  # index of peak (>= event_start_idx)
+    event_quality: float  # method-specific continuous score
+    event_method: str  # 'A' | 'B' | 'C' | 'D'
 
     @property
     def duration(self) -> int:
@@ -53,7 +53,7 @@ def dedupe_events(events: Iterable[Event]) -> list[Event]:
         by_stock.setdefault(e.ts_code, []).append(e)
 
     out: list[Event] = []
-    for ts_code, evs in by_stock.items():
+    for _ts_code, evs in by_stock.items():
         evs.sort(key=lambda e: (e.event_start_idx, -e.event_quality))
         accepted: list[Event] = []
         for e in evs:
@@ -80,27 +80,31 @@ def events_to_dataframe(
     """Convert events to long-form parquet-friendly DataFrame."""
     rows = []
     for e in events:
-        rows.append({
-            "ts_code": e.ts_code,
-            "event_start_date": trade_dates[e.event_start_idx],
-            "event_peak_date": trade_dates[e.event_peak_idx],
-            "event_start_idx": e.event_start_idx,
-            "event_peak_idx": e.event_peak_idx,
-            "event_quality": float(e.event_quality),
-            "event_method": e.event_method,
-            "duration": int(e.duration),
-        })
+        rows.append(
+            {
+                "ts_code": e.ts_code,
+                "event_start_date": trade_dates[e.event_start_idx],
+                "event_peak_date": trade_dates[e.event_peak_idx],
+                "event_start_idx": e.event_start_idx,
+                "event_peak_idx": e.event_peak_idx,
+                "event_quality": float(e.event_quality),
+                "event_method": e.event_method,
+                "duration": int(e.duration),
+            }
+        )
     if not rows:
-        return pl.DataFrame(schema={
-            "ts_code": pl.Utf8,
-            "event_start_date": pl.Date,
-            "event_peak_date": pl.Date,
-            "event_start_idx": pl.Int32,
-            "event_peak_idx": pl.Int32,
-            "event_quality": pl.Float64,
-            "event_method": pl.Utf8,
-            "duration": pl.Int32,
-        })
+        return pl.DataFrame(
+            schema={
+                "ts_code": pl.Utf8,
+                "event_start_date": pl.Date,
+                "event_peak_date": pl.Date,
+                "event_start_idx": pl.Int32,
+                "event_peak_idx": pl.Int32,
+                "event_quality": pl.Float64,
+                "event_method": pl.Utf8,
+                "duration": pl.Int32,
+            }
+        )
     return pl.DataFrame(rows)
 
 

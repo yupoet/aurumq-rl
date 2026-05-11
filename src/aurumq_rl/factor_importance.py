@@ -5,6 +5,7 @@ Both functions are pure and torch-only; they take a callable
 internals — the caller (eval_factor_importance.py) wraps a trained
 policy into the right closure.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -16,7 +17,7 @@ import torch
 
 def integrated_gradients(
     score_fn: Callable[[torch.Tensor], torch.Tensor],
-    panel_batch: torch.Tensor,                  # (B, n_stocks, n_factors)
+    panel_batch: torch.Tensor,  # (B, n_stocks, n_factors)
     n_alpha_steps: int = 50,
     baseline: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -31,7 +32,7 @@ def integrated_gradients(
     for k in range(n_alpha_steps):
         alpha = (k + 0.5) / n_alpha_steps
         x = (baseline + alpha * (panel_batch - baseline)).detach().requires_grad_(True)
-        scores = score_fn(x)               # (B, n_stocks)
+        scores = score_fn(x)  # (B, n_stocks)
         scores.sum().backward()
         # |grad| × Δ, averaged over batch and stocks
         attribution = (x.grad * delta).abs().mean(dim=(0, 1))
@@ -40,7 +41,7 @@ def integrated_gradients(
 
 
 def per_date_cross_section_shuffle(
-    panel: torch.Tensor,                        # (T, S, F)
+    panel: torch.Tensor,  # (T, S, F)
     cols: list[int],
     seed: int,
 ) -> torch.Tensor:
@@ -61,8 +62,8 @@ def per_date_cross_section_shuffle(
 
 def permutation_importance(
     score_fn: Callable[[torch.Tensor], torch.Tensor],
-    val_panel: torch.Tensor,                    # (T, S, F) cuda fp32
-    val_returns: torch.Tensor,                  # (T, S)    cuda fp32
+    val_panel: torch.Tensor,  # (T, S, F) cuda fp32
+    val_returns: torch.Tensor,  # (T, S)    cuda fp32
     factor_names: list[str],
     forward_period: int = 10,
     top_k: int = 30,
@@ -80,7 +81,11 @@ def permutation_importance(
         cols_by_prefix[prefix].append(i)
 
     baseline_metrics = _eval_top_k_metrics(
-        score_fn, val_panel, val_returns, forward_period, top_k,
+        score_fn,
+        val_panel,
+        val_returns,
+        forward_period,
+        top_k,
     )
     out: dict[str, dict[str, float]] = {}
     for prefix, cols in cols_by_prefix.items():
@@ -88,7 +93,11 @@ def permutation_importance(
         for seed in range(base_seed, base_seed + n_seeds):
             shuffled = per_date_cross_section_shuffle(val_panel, cols, seed)
             m = _eval_top_k_metrics(
-                score_fn, shuffled, val_returns, forward_period, top_k,
+                score_fn,
+                shuffled,
+                val_returns,
+                forward_period,
+                top_k,
             )
             ic_drops.append(baseline_metrics["ic"] - m["ic"])
             sharpe_drops.append(baseline_metrics["sharpe"] - m["sharpe"])
@@ -98,7 +107,9 @@ def permutation_importance(
             "ic_drop_mean": float(np.mean(ic_drops)),
             "ic_drop_std": float(np.std(ic_drops, ddof=1) if len(ic_drops) > 1 else 0.0),
             "sharpe_drop_mean": float(np.mean(sharpe_drops)),
-            "sharpe_drop_std": float(np.std(sharpe_drops, ddof=1) if len(sharpe_drops) > 1 else 0.0),
+            "sharpe_drop_std": float(
+                np.std(sharpe_drops, ddof=1) if len(sharpe_drops) > 1 else 0.0
+            ),
         }
     return out
 
@@ -151,8 +162,8 @@ def _eval_top_k_metrics(
     ics = []
     with torch.no_grad():
         for t in range(valid_T):
-            obs = panel[t : t + 1]                         # (1, S, F)
-            scores = score_fn(obs)[0]                       # (S,)
+            obs = panel[t : t + 1]  # (1, S, F)
+            scores = score_fn(obs)[0]  # (S,)
             top_idx = torch.topk(scores, top_k).indices
             r = returns[t][top_idx].mean()
             portfolio_returns.append(r.item())

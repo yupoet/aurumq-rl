@@ -18,6 +18,7 @@ Numerical equivalence with Phase 8's GPURolloutBuffer is asserted in
 the test suite — the GAE math is unchanged; only the obs storage
 strategy differs.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
@@ -121,7 +122,8 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
         # produced the obs we *would* have stored.
         self.t_buffer = th.zeros(
             (self.buffer_size, self.n_envs),
-            dtype=th.long, device=device,
+            dtype=th.long,
+            device=device,
         )
         # ``observations`` deliberately not allocated. Some external
         # tooling may probe ``hasattr(buf, 'observations')`` — set it to
@@ -131,20 +133,17 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
 
         self.actions = th.zeros(
             (self.buffer_size, self.n_envs, self.action_dim),
-            dtype=act_dtype, device=device,
+            dtype=act_dtype,
+            device=device,
         )
-        self.rewards = th.zeros((self.buffer_size, self.n_envs),
-                                dtype=th.float32, device=device)
-        self.returns = th.zeros((self.buffer_size, self.n_envs),
-                                dtype=th.float32, device=device)
-        self.episode_starts = th.zeros((self.buffer_size, self.n_envs),
-                                       dtype=th.float32, device=device)
-        self.values = th.zeros((self.buffer_size, self.n_envs),
-                               dtype=th.float32, device=device)
-        self.log_probs = th.zeros((self.buffer_size, self.n_envs),
-                                  dtype=th.float32, device=device)
-        self.advantages = th.zeros((self.buffer_size, self.n_envs),
-                                   dtype=th.float32, device=device)
+        self.rewards = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.returns = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.episode_starts = th.zeros(
+            (self.buffer_size, self.n_envs), dtype=th.float32, device=device
+        )
+        self.values = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.log_probs = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.advantages = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
         self.generator_ready = False
         # BaseBuffer.reset() body, inlined (matches GPURolloutBuffer.reset).
         self.pos = 0
@@ -194,9 +193,7 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
         action_t = self._as_tensor(action, device, self.actions.dtype)
         action_t = action_t.reshape((self.n_envs, self.action_dim))
         self.actions[self.pos].copy_(action_t)
-        self.rewards[self.pos].copy_(
-            self._as_tensor(reward, device, self.rewards.dtype)
-        )
+        self.rewards[self.pos].copy_(self._as_tensor(reward, device, self.rewards.dtype))
         self.episode_starts[self.pos].copy_(
             self._as_tensor(episode_start, device, self.episode_starts.dtype)
         )
@@ -212,7 +209,8 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
     # ------------------------------------------------------------------
 
     def get(  # type: ignore[override]
-        self, batch_size: int | None = None,
+        self,
+        batch_size: int | None = None,
     ) -> Generator[RolloutBufferSamples, None, None]:
         assert self.full, ""
         total = self.buffer_size * self.n_envs
@@ -227,9 +225,7 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
             # compute_returns_and_advantage() (inherited).
             self.t_buffer = self.swap_and_flatten_torch(self.t_buffer)
             for name in ("actions", "log_probs"):
-                self.__dict__[name] = self.swap_and_flatten_torch(
-                    self.__dict__[name]
-                )
+                self.__dict__[name] = self.swap_and_flatten_torch(self.__dict__[name])
             self._values_cuda = self.swap_and_flatten_torch(self._values_cuda)
             self._returns_cuda = self.swap_and_flatten_torch(self._returns_cuda)
             self._advantages_cuda = self.swap_and_flatten_torch(self._advantages_cuda)
@@ -251,8 +247,7 @@ class IndexOnlyRolloutBuffer(GPURolloutBuffer):
     ) -> RolloutBufferSamples:
         # Accept numpy or torch indices; our get() always passes torch.
         if isinstance(batch_inds, np.ndarray):
-            batch_inds = th.as_tensor(batch_inds, dtype=th.long,
-                                      device=self.device)
+            batch_inds = th.as_tensor(batch_inds, dtype=th.long, device=self.device)
         else:
             batch_inds = batch_inds.to(self.device, dtype=th.long)
 

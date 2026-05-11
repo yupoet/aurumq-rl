@@ -89,8 +89,8 @@ FACTOR_COL_PREFIXES: tuple[str, ...] = (
     "mkt_",
     "gtja_",
     "tech_",  # Phase 26 — classical TA (MA / KDJ / MACD / Bollinger / ATR)
-    "cmf_",   # Phase 26 — cumulative main-force flow ratios
-    "zt_",    # Phase 26 — limit-up streak metrics
+    "cmf_",  # Phase 26 — cumulative main-force flow ratios
+    "zt_",  # Phase 26 — limit-up streak metrics
 )
 
 # Required columns in input Parquet
@@ -151,9 +151,7 @@ class FactorPanel(NamedTuple):
     factor_names: list[str]
 
 
-def align_panel_to_stock_list(
-    panel: FactorPanel, target_stock_codes: list[str]
-) -> FactorPanel:
+def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str]) -> FactorPanel:
     """Realign a FactorPanel to a fixed stock universe (order + count).
 
     For OOS backtest where the panel's stock universe differs from the one
@@ -174,17 +172,15 @@ def align_panel_to_stock_list(
     if list(panel.stock_codes) == list(target_stock_codes):
         return panel
 
-    n_dates = panel.factor_array.shape[0]
-    n_factors = panel.factor_array.shape[2]
+    panel.factor_array.shape[0]
+    panel.factor_array.shape[2]
     n_target = len(target_stock_codes)
 
     # Build idx map: target_idx -> source_idx (or -1 for missing)
     src_idx_by_code = {c: i for i, c in enumerate(panel.stock_codes)}
-    idx_map = np.array(
-        [src_idx_by_code.get(c, -1) for c in target_stock_codes], dtype=np.int64
-    )
+    idx_map = np.array([src_idx_by_code.get(c, -1) for c in target_stock_codes], dtype=np.int64)
     present = idx_map >= 0
-    missing_count = int((~present).sum())
+    int((~present).sum())
 
     # Helper: gather along axis=1 with -1 → zero/default
     def _gather(arr: np.ndarray, default) -> np.ndarray:
@@ -197,7 +193,7 @@ def align_panel_to_stock_list(
     factor_array = _gather(panel.factor_array, 0.0)
     return_array = _gather(panel.return_array, 0.0)
     pct_change_array = _gather(panel.pct_change_array, 0.0)
-    is_st_array = _gather(panel.is_st_array, True)         # missing → ST (un-tradeable)
+    is_st_array = _gather(panel.is_st_array, True)  # missing → ST (un-tradeable)
     is_suspended_array = _gather(panel.is_suspended_array, True)  # missing → suspended
     days_since_ipo_array = _gather(panel.days_since_ipo_array, 0)
 

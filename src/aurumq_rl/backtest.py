@@ -129,9 +129,7 @@ def compute_ic_ir(predictions: np.ndarray, returns: np.ndarray) -> float:
     return float(arr.mean() / std)
 
 
-def _top_k_returns_series(
-    predictions: np.ndarray, returns: np.ndarray, top_k: int
-) -> list[float]:
+def _top_k_returns_series(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> list[float]:
     """Per-date top-K equal-weight portfolio return; degenerate days skipped."""
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
@@ -230,7 +228,10 @@ def random_baseline(
     for _ in range(n_simulations):
         preds = rng.normal(size=returns.shape)
         d = compute_top_k_sharpes(
-            preds, returns, top_k=top_k, forward_period=forward_period,
+            preds,
+            returns,
+            top_k=top_k,
+            forward_period=forward_period,
         )
         legacy.append(d["legacy"])
         adjusted.append(d["adjusted"])
@@ -288,7 +289,10 @@ def run_backtest(
         predictions = predictions[: predictions.shape[0] - forward_period]
         returns = returns[: returns.shape[0] - forward_period]
     sharpes = compute_top_k_sharpes(
-        predictions, returns, top_k=top_k, forward_period=forward_period,
+        predictions,
+        returns,
+        top_k=top_k,
+        forward_period=forward_period,
     )
     return BacktestResult(
         ic=compute_ic(predictions, returns),
@@ -296,8 +300,11 @@ def run_backtest(
         top_k_sharpe=sharpes["adjusted"],  # primary metric for Phase 16
         top_k_cumret=compute_top_k_cumret(predictions, returns, top_k),
         random_baseline=random_baseline(
-            returns, top_k=top_k, n_simulations=n_random_simulations,
-            seed=random_seed, forward_period=forward_period,
+            returns,
+            top_k=top_k,
+            n_simulations=n_random_simulations,
+            seed=random_seed,
+            forward_period=forward_period,
         ),
         n_dates=predictions.shape[0],
         n_stocks=predictions.shape[1],

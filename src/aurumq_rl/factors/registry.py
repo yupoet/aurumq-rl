@@ -60,7 +60,7 @@ __all__ = [
 FACTOR_CLIP_LIMIT: float = 1.0e6
 
 
-def sanitize_factor_series(series: "pl.Series") -> "pl.Series":
+def sanitize_factor_series(series: pl.Series) -> pl.Series:
     """Replace ±inf with null and clip finite values to ±``FACTOR_CLIP_LIMIT``.
 
     Defends downstream consumers (``np.percentile``, cross-section z-score,
@@ -77,15 +77,12 @@ def sanitize_factor_series(series: "pl.Series") -> "pl.Series":
     if series.dtype != pl.Float64:
         series = series.cast(pl.Float64, strict=False)
     name = series.name
-    return (
-        pl.DataFrame({name: series})
-        .with_columns(
-            pl.when(pl.col(name).is_infinite())
-            .then(None)
-            .otherwise(pl.col(name).clip(-FACTOR_CLIP_LIMIT, FACTOR_CLIP_LIMIT))
-            .alias(name)
-        )[name]
-    )
+    return pl.DataFrame({name: series}).with_columns(
+        pl.when(pl.col(name).is_infinite())
+        .then(None)
+        .otherwise(pl.col(name).clip(-FACTOR_CLIP_LIMIT, FACTOR_CLIP_LIMIT))
+        .alias(name)
+    )[name]
 
 
 def _wrap_impl_with_sanitizer(impl: FactorImpl) -> FactorImpl:
@@ -130,7 +127,9 @@ def register_alpha101(entry: FactorEntry) -> FactorEntry:
     sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
     if entry.id in ALPHA101_REGISTRY and ALPHA101_REGISTRY[entry.id] is not sanitized_entry:
         # Allow re-registration only if the underlying (unwrapped) impl is identical.
-        existing_impl = getattr(ALPHA101_REGISTRY[entry.id].impl, "__wrapped__", ALPHA101_REGISTRY[entry.id].impl)
+        existing_impl = getattr(
+            ALPHA101_REGISTRY[entry.id].impl, "__wrapped__", ALPHA101_REGISTRY[entry.id].impl
+        )
         if existing_impl is not entry.impl:
             raise ValueError(
                 f"alpha101 factor {entry.id!r} already registered with a different entry"
@@ -146,7 +145,9 @@ def register_gtja191(entry: FactorEntry) -> FactorEntry:
     """
     sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
     if entry.id in GTJA191_REGISTRY and GTJA191_REGISTRY[entry.id] is not sanitized_entry:
-        existing_impl = getattr(GTJA191_REGISTRY[entry.id].impl, "__wrapped__", GTJA191_REGISTRY[entry.id].impl)
+        existing_impl = getattr(
+            GTJA191_REGISTRY[entry.id].impl, "__wrapped__", GTJA191_REGISTRY[entry.id].impl
+        )
         if existing_impl is not entry.impl:
             raise ValueError(
                 f"gtja191 factor {entry.id!r} already registered with a different entry"

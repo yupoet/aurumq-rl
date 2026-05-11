@@ -1,4 +1,5 @@
 """Per-stock features extractor with shared MLP across stocks (Deep Sets)."""
+
 from __future__ import annotations
 
 import gymnasium as gym
@@ -81,17 +82,13 @@ class PerStockExtractor(BaseFeaturesExtractor):
             # obs[i, 0, :] uniquely identifies the date for batch slot i
             # (env obs is purely panel[t] — see gpu_env._current_obs).
             first_rows = obs[:, 0, :]  # (B, F)
-            unique_first, inverse = torch.unique(
-                first_rows, dim=0, return_inverse=True
-            )
+            unique_first, inverse = torch.unique(first_rows, dim=0, return_inverse=True)
             u = unique_first.shape[0]
             if u < b:
                 # Pick one representative batch slot per unique date (the
                 # lowest index). scatter_reduce_(amin) is the GPU-friendly
                 # way to materialize first_occurrence[u] = min{i: inverse[i] == u}.
-                first_occurrence = torch.full(
-                    (u,), b, dtype=torch.long, device=obs.device
-                )
+                first_occurrence = torch.full((u,), b, dtype=torch.long, device=obs.device)
                 batch_idx = torch.arange(b, device=obs.device)
                 first_occurrence.scatter_reduce_(
                     0, inverse, batch_idx, reduce="amin", include_self=True

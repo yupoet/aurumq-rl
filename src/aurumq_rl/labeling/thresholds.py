@@ -13,13 +13,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 __all__ = ["search_threshold", "ThresholdResult"]
 
 
 @dataclass(frozen=True)
 class ThresholdResult:
     """Result of a threshold search."""
+
     threshold: float
     achieved_positive_rate: float
     target_positive_rate: float

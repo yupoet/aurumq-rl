@@ -164,11 +164,7 @@ def gtja_143(panel: pl.DataFrame) -> pl.Series:
     # forward; we guard explicitly via fill_null(1.0) so the recursion's
     # "carry forward" semantics on null/non-up days is exact.
     staged = staged.with_columns(
-        pl.col("__g143_factor")
-        .fill_null(1.0)
-        .cum_prod()
-        .over(TS_PART)
-        .alias("__g143_cum")
+        pl.col("__g143_factor").fill_null(1.0).cum_prod().over(TS_PART).alias("__g143_cum")
     )
     # First row per stock has no delayed close — leave null for consistency
     # with other "delay required" factors.

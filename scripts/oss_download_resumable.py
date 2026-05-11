@@ -30,6 +30,7 @@ Credentials are read from D:/dev/aurumq-handoffs/.secrets/credentials.env
 (``OSS_ACCESS_KEY_ID`` / ``OSS_ACCESS_KEY_SECRET``) or from the
 ``OSS_ACCESS_KEY_ID`` / ``OSS_ACCESS_KEY_SECRET`` env vars.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -115,8 +116,7 @@ def download_resumable(
             return existing
         if existing > total:
             print(
-                f"[oss] local file ({existing}) larger than remote ({total}) — "
-                f"truncating",
+                f"[oss] local file ({existing}) larger than remote ({total}) — truncating",
                 flush=True,
             )
             out_path.unlink()
@@ -167,8 +167,7 @@ def download_resumable(
         ) as exc:
             if attempt >= max_retries:
                 raise SystemExit(
-                    f"[oss] gave up after {attempt} attempts at "
-                    f"{_format_bytes(existing)}: {exc}"
+                    f"[oss] gave up after {attempt} attempts at {_format_bytes(existing)}: {exc}"
                 ) from exc
             existing = out_path.stat().st_size if out_path.exists() else 0
             print(
@@ -183,9 +182,7 @@ def download_resumable(
 
     final_size = out_path.stat().st_size
     if final_size != total:
-        raise SystemExit(
-            f"[oss] final size mismatch: expected {total}, got {final_size}"
-        )
+        raise SystemExit(f"[oss] final size mismatch: expected {total}, got {final_size}")
     print(f"[oss] DONE    {out_path} ({_format_bytes(final_size)})", flush=True)
     return final_size
 

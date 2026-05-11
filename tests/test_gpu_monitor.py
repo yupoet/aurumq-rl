@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 
-
 # Make src/ importable.
 _SRC = Path(__file__).resolve().parent.parent / "src"
 if str(_SRC) not in sys.path:

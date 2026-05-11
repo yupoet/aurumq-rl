@@ -15,12 +15,10 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ class ResidualPPOEnv(gym.Env):
 
     def __init__(
         self,
-        bundle,                                # P3Bundle
+        bundle,  # P3Bundle
         start_date: date,
         end_date: date,
         top_k: int = 50,
@@ -62,8 +60,13 @@ class ResidualPPOEnv(gym.Env):
         self.start_idx = start_idx
         self.end_idx = end_idx
         self.t = start_idx
-        logger.debug("ResidualPPOEnv window [%s, %s] = idx [%d, %d)",
-                     start_date, end_date, start_idx, end_idx)
+        logger.debug(
+            "ResidualPPOEnv window [%s, %s] = idx [%d, %d)",
+            start_date,
+            end_date,
+            start_idx,
+            end_idx,
+        )
 
         self.n_stocks = bundle.n_stocks
         # obs = features (F) + p_baseline (1) + rank_pct (1) per stock
@@ -74,12 +77,14 @@ class ResidualPPOEnv(gym.Env):
         # SB3 default expects flat obs; PerStockEncoderPolicy will reshape.
         # We follow gpu_env convention: action shape (n_stocks,), obs shape (n_stocks, obs_dim_per_stock).
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf,
+            low=-np.inf,
+            high=np.inf,
             shape=(self.n_stocks, obs_dim_per_stock),
             dtype=np.float32,
         )
         self.action_space = spaces.Box(
-            low=-self.action_range, high=self.action_range,
+            low=-self.action_range,
+            high=self.action_range,
             shape=(self.n_stocks,),
             dtype=np.float32,
         )
@@ -87,9 +92,9 @@ class ResidualPPOEnv(gym.Env):
     def _build_obs(self, t: int) -> np.ndarray:
         if t >= self.bundle.n_dates:
             return np.zeros((self.n_stocks, self.obs_dim_per_stock), dtype=np.float32)
-        feats = self.bundle.feature_panel[t]                     # (S, F)
-        p = self.bundle.p_baseline[t][:, None]                   # (S, 1)
-        r = self.bundle.rank_pct_baseline[t][:, None]            # (S, 1)
+        feats = self.bundle.feature_panel[t]  # (S, F)
+        p = self.bundle.p_baseline[t][:, None]  # (S, 1)
+        r = self.bundle.rank_pct_baseline[t][:, None]  # (S, 1)
         # Replace NaN with 0 (out-of-universe / missing)
         obs = np.concatenate([feats, p, r], axis=1).astype(np.float32, copy=False)
         np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
@@ -103,14 +108,16 @@ class ResidualPPOEnv(gym.Env):
         return self._build_obs(self.t), {}
 
     def step(self, action: np.ndarray):
-        delta = np.clip(action, -self.action_range, self.action_range).astype(np.float32, copy=False)
+        delta = np.clip(action, -self.action_range, self.action_range).astype(
+            np.float32, copy=False
+        )
 
         # 1. Build score on logit space, mask out-of-universe.
-        p = self.bundle.p_baseline[self.t]                       # (S,)
-        in_uni = self.bundle.in_universe[self.t]                 # (S,)
-        score = _logit(np.where(np.isnan(p), 0.5, p))            # (S,) in real
-        score = score + self.lambda_logit * delta                # apply residual
-        score = np.where(in_uni, score, -np.inf)                 # block oou
+        p = self.bundle.p_baseline[self.t]  # (S,)
+        in_uni = self.bundle.in_universe[self.t]  # (S,)
+        score = _logit(np.where(np.isnan(p), 0.5, p))  # (S,) in real
+        score = score + self.lambda_logit * delta  # apply residual
+        score = np.where(in_uni, score, -np.inf)  # block oou
 
         # 2. Top-k selection (k = min(top_k, n_in_universe))
         n_uni = int(in_uni.sum())
@@ -119,10 +126,10 @@ class ResidualPPOEnv(gym.Env):
             reward = 0.0
         else:
             topk_idx = np.argpartition(-score, k - 1)[:k]
-            r = self.bundle.realized_pct_t_plus_1[self.t]        # (S,)
+            r = self.bundle.realized_pct_t_plus_1[self.t]  # (S,)
             m = self.bundle.market_pct_t_plus_1[self.t]
             r_vals = r[topk_idx]
-            r_vals = np.where(np.isnan(r_vals), 0.0, r_vals)     # mask suspended
+            r_vals = np.where(np.isnan(r_vals), 0.0, r_vals)  # mask suspended
             m = 0.0 if (m is None or np.isnan(m)) else float(m)
             reward = float((r_vals - m).mean())
 

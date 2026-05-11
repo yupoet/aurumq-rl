@@ -7,6 +7,7 @@ Covers:
 - GAE numerical equivalence with Phase 8's GPURolloutBuffer.
 - ``get(batch_size)`` yields the same obs we'd get from direct indexing.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,16 +23,16 @@ cuda = pytest.mark.skipif(not th.cuda.is_available(), reason="cuda required")
 
 # --- helpers --------------------------------------------------------------
 
+
 def _build_spaces(n_stocks: int = 50, n_factors: int = 20):
-    obs_space = spaces.Box(low=-np.inf, high=np.inf,
-                           shape=(n_stocks, n_factors), dtype=np.float32)
-    act_space = spaces.Box(low=0.0, high=1.0,
-                           shape=(n_stocks,), dtype=np.float32)
+    obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(n_stocks, n_factors), dtype=np.float32)
+    act_space = spaces.Box(low=0.0, high=1.0, shape=(n_stocks,), dtype=np.float32)
     return obs_space, act_space
 
 
-def _make_panel(n_dates: int, n_stocks: int, n_factors: int,
-                seed: int = 0, device: str = "cuda") -> th.Tensor:
+def _make_panel(
+    n_dates: int, n_stocks: int, n_factors: int, seed: int = 0, device: str = "cuda"
+) -> th.Tensor:
     rng = np.random.default_rng(seed)
     panel = rng.standard_normal((n_dates, n_stocks, n_factors)).astype(np.float32)
     return th.as_tensor(panel, device=device)
@@ -64,6 +65,7 @@ def _make_index_buf(
 
 # --- tests ----------------------------------------------------------------
 
+
 @cuda
 def test_buffer_residency_on_cuda():
     """All allocated storage tensors must live on cuda after reset."""
@@ -71,12 +73,23 @@ def test_buffer_residency_on_cuda():
     panel = _make_panel(40, n_stocks, n_factors)
     last_obs_t = th.zeros(n_envs, dtype=th.long, device="cuda")
     buf = _make_index_buf(
-        buffer_size=16, n_envs=n_envs,
-        n_stocks=n_stocks, n_factors=n_factors,
-        panel=panel, last_obs_t=last_obs_t,
+        buffer_size=16,
+        n_envs=n_envs,
+        n_stocks=n_stocks,
+        n_factors=n_factors,
+        panel=panel,
+        last_obs_t=last_obs_t,
     )
-    for name in ("t_buffer", "actions", "rewards", "returns",
-                 "episode_starts", "values", "log_probs", "advantages"):
+    for name in (
+        "t_buffer",
+        "actions",
+        "rewards",
+        "returns",
+        "episode_starts",
+        "values",
+        "log_probs",
+        "advantages",
+    ):
         t = getattr(buf, name)
         assert isinstance(t, th.Tensor), f"{name} should be torch.Tensor"
         assert t.device.type == "cuda", f"{name} on {t.device}, expected cuda"
@@ -112,8 +125,7 @@ def test_t_buffer_replaces_observations():
         gae_lambda=0.95,
         gamma=0.99,
         n_envs=n_envs,
-        obs_provider=lambda t: th.zeros(
-            (t.shape[0], n_stocks, n_factors), device="cuda"),
+        obs_provider=lambda t: th.zeros((t.shape[0], n_stocks, n_factors), device="cuda"),
         obs_index_provider=lambda: last_obs_t,
     )
     assert buf.t_buffer.shape == (buffer_size, n_envs)
@@ -141,35 +153,35 @@ def test_gather_matches_direct_indexing():
     # Here we tick it manually for each add().
     last_obs_t = th.zeros(n_envs, dtype=th.long, device="cuda")
     buf = _make_index_buf(
-        buffer_size=buffer_size, n_envs=n_envs,
-        n_stocks=n_stocks, n_factors=n_factors,
-        panel=panel, last_obs_t=last_obs_t,
+        buffer_size=buffer_size,
+        n_envs=n_envs,
+        n_stocks=n_stocks,
+        n_factors=n_factors,
+        panel=panel,
+        last_obs_t=last_obs_t,
     )
 
     # Plant a deterministic schedule of t-indices into the buffer via add().
     # planted_t[step, env] is what the buffer should record at that slot.
     rng = np.random.default_rng(7)
-    planted_t = rng.integers(low=0, high=n_dates,
-                             size=(buffer_size, n_envs)).astype(np.int64)
+    planted_t = rng.integers(low=0, high=n_dates, size=(buffer_size, n_envs)).astype(np.int64)
 
     for step in range(buffer_size):
         # Mutate the closure-bound tensor in place so the provider sees
         # the new values without rebinding the lambda.
-        last_obs_t.copy_(th.as_tensor(planted_t[step], device="cuda",
-                                      dtype=th.long))
+        last_obs_t.copy_(th.as_tensor(planted_t[step], device="cuda", dtype=th.long))
         dummy_obs = np.zeros((n_envs, n_stocks, n_factors), dtype=np.float32)
         action = rng.uniform(0, 1, size=(n_envs, n_stocks)).astype(np.float32)
         reward = rng.standard_normal(n_envs).astype(np.float32) * 0.01
         episode_start = np.zeros(n_envs, dtype=np.float32)
-        value = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                             device="cuda")
-        log_prob = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                                device="cuda")
+        value = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda")
+        log_prob = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda")
         buf.add(dummy_obs, action, reward, episode_start, value, log_prob)
 
     # Confirm t_buffer matches what we planted.
     np.testing.assert_array_equal(
-        buf.t_buffer.cpu().numpy(), planted_t,
+        buf.t_buffer.cpu().numpy(),
+        planted_t,
     )
 
     # Run GAE so get() doesn't trip on missing _values_cuda mirrors.
@@ -206,14 +218,22 @@ def test_gae_matches_phase8_buffer():
 
     obs_space, act_space = _build_spaces(n_stocks, n_factors)
     gpu_buf = GPURolloutBuffer(
-        buffer_size=buffer_size, observation_space=obs_space,
-        action_space=act_space, device="cuda", n_envs=n_envs,
-        gae_lambda=gae_lambda, gamma=gamma,
+        buffer_size=buffer_size,
+        observation_space=obs_space,
+        action_space=act_space,
+        device="cuda",
+        n_envs=n_envs,
+        gae_lambda=gae_lambda,
+        gamma=gamma,
     )
     idx_buf = IndexOnlyRolloutBuffer(
-        buffer_size=buffer_size, observation_space=obs_space,
-        action_space=act_space, device="cuda", n_envs=n_envs,
-        gae_lambda=gae_lambda, gamma=gamma,
+        buffer_size=buffer_size,
+        observation_space=obs_space,
+        action_space=act_space,
+        device="cuda",
+        n_envs=n_envs,
+        gae_lambda=gae_lambda,
+        gamma=gamma,
         obs_provider=lambda t: panel[t],
         obs_index_provider=lambda: last_obs_t,
     )
@@ -221,27 +241,35 @@ def test_gae_matches_phase8_buffer():
     rng = np.random.default_rng(99)
     transitions = []
     for _ in range(buffer_size):
-        transitions.append((
-            rng.integers(low=0, high=n_dates, size=(n_envs,), dtype=np.int64),
-            rng.standard_normal((n_envs, n_stocks, n_factors)).astype(np.float32),
-            rng.uniform(0.0, 1.0, size=(n_envs, n_stocks)).astype(np.float32),
-            rng.standard_normal(n_envs).astype(np.float32) * 0.01,
-            (rng.random(n_envs) < 0.05).astype(np.float32),
-            rng.standard_normal(n_envs).astype(np.float32),
-            rng.standard_normal(n_envs).astype(np.float32),
-        ))
+        transitions.append(
+            (
+                rng.integers(low=0, high=n_dates, size=(n_envs,), dtype=np.int64),
+                rng.standard_normal((n_envs, n_stocks, n_factors)).astype(np.float32),
+                rng.uniform(0.0, 1.0, size=(n_envs, n_stocks)).astype(np.float32),
+                rng.standard_normal(n_envs).astype(np.float32) * 0.01,
+                (rng.random(n_envs) < 0.05).astype(np.float32),
+                rng.standard_normal(n_envs).astype(np.float32),
+                rng.standard_normal(n_envs).astype(np.float32),
+            )
+        )
     last_vals_np = rng.standard_normal(n_envs).astype(np.float32)
     dones = (rng.random(n_envs) < 0.1).astype(bool)
 
     for t_idx, obs, act, rew, eps, val, lp in transitions:
         last_obs_t.copy_(th.as_tensor(t_idx, device="cuda", dtype=th.long))
         gpu_buf.add(
-            obs, act, rew, eps,
+            obs,
+            act,
+            rew,
+            eps,
             th.as_tensor(val, device="cuda"),
             th.as_tensor(lp, device="cuda"),
         )
         idx_buf.add(
-            obs, act, rew, eps,  # obs is ignored by idx_buf
+            obs,
+            act,
+            rew,
+            eps,  # obs is ignored by idx_buf
             th.as_tensor(val, device="cuda"),
             th.as_tensor(lp, device="cuda"),
         )
@@ -253,10 +281,8 @@ def test_gae_matches_phase8_buffer():
     # After compute_returns_and_advantage the parent exposes numpy
     # mirrors; the cuda copies live on _*_cuda. Compare whichever is
     # convenient.
-    np.testing.assert_allclose(idx_buf.advantages, gpu_buf.advantages,
-                               atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(idx_buf.returns, gpu_buf.returns,
-                               atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(idx_buf.advantages, gpu_buf.advantages, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(idx_buf.returns, gpu_buf.returns, atol=1e-5, rtol=1e-5)
 
 
 @cuda
@@ -270,26 +296,25 @@ def test_get_yields_obs_via_provider():
     last_obs_t = th.zeros(n_envs, dtype=th.long, device="cuda")
 
     buf = _make_index_buf(
-        buffer_size=buffer_size, n_envs=n_envs,
-        n_stocks=n_stocks, n_factors=n_factors,
-        panel=panel, last_obs_t=last_obs_t,
+        buffer_size=buffer_size,
+        n_envs=n_envs,
+        n_stocks=n_stocks,
+        n_factors=n_factors,
+        panel=panel,
+        last_obs_t=last_obs_t,
     )
 
     rng = np.random.default_rng(13)
-    planted_t = rng.integers(low=0, high=n_dates,
-                             size=(buffer_size, n_envs)).astype(np.int64)
+    planted_t = rng.integers(low=0, high=n_dates, size=(buffer_size, n_envs)).astype(np.int64)
     for step in range(buffer_size):
-        last_obs_t.copy_(th.as_tensor(planted_t[step], device="cuda",
-                                      dtype=th.long))
+        last_obs_t.copy_(th.as_tensor(planted_t[step], device="cuda", dtype=th.long))
         buf.add(
             np.zeros((n_envs, n_stocks, n_factors), dtype=np.float32),
             rng.uniform(0, 1, size=(n_envs, n_stocks)).astype(np.float32),
             rng.standard_normal(n_envs).astype(np.float32) * 0.01,
             np.zeros(n_envs, dtype=np.float32),
-            th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                         device="cuda"),
-            th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                         device="cuda"),
+            th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda"),
+            th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda"),
         )
 
     last_values = th.zeros(n_envs, device="cuda")
@@ -325,5 +350,4 @@ def test_get_yields_obs_via_provider():
     # exact equality with panel[expected_flat_t].
     arange_idx = th.arange(buffer_size * n_envs, device="cuda", dtype=th.long)
     samples_arange = buf._get_samples(arange_idx)
-    th.testing.assert_close(samples_arange.observations, expected_obs_full,
-                            atol=0.0, rtol=0.0)
+    th.testing.assert_close(samples_arange.observations, expected_obs_full, atol=0.0, rtol=0.0)

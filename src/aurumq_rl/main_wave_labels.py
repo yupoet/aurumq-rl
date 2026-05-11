@@ -34,7 +34,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -46,13 +45,13 @@ class MainWaveConfig:
     user spec; override in ``_eval_main_wave.py`` CLI as needed.
     """
 
-    hold_window: int = 5            # max hold days (entry_day .. entry_day+H-1)
-    vol_window: int = 20            # past-vol window for threshold
-    sigma_multiplier: float = 2.0   # threshold = sigma_mult * past_vol * sqrt(H)
+    hold_window: int = 5  # max hold days (entry_day .. entry_day+H-1)
+    vol_window: int = 20  # past-vol window for threshold
+    sigma_multiplier: float = 2.0  # threshold = sigma_mult * past_vol * sqrt(H)
     absolute_threshold: float = 0.06  # threshold floor
-    max_adverse_limit: float = 0.05   # 5% — max allowed adverse excursion for hit
-    amount_ma_window: int = 20      # rolling window for amount MA
-    amount_ma_min: float = 1e8      # 20d avg amount > 1 亿 to be tradeable
+    max_adverse_limit: float = 0.05  # 5% — max allowed adverse excursion for hit
+    amount_ma_window: int = 20  # rolling window for amount MA
+    amount_ma_min: float = 1e8  # 20d avg amount > 1 亿 to be tradeable
     ma5_window: int = 5
     ma10_window: int = 10
 
@@ -84,30 +83,30 @@ class MainWaveLabels:
     (n_dates, n_stocks); all returns are decimals (0.05 == +5%)."""
 
     # Liquidity / eligibility
-    amount_ma20: np.ndarray              # rolling mean of (close * vol)
-    liquid_mask: np.ndarray              # bool, amount_ma20 > min
-    below_ma_state: np.ndarray           # bool, MA5 < MA10 on day t
-    death_cross_event: np.ndarray        # bool, MA5 first crosses below MA10 at t
-    entry_eligible_mask: np.ndarray      # bool, OK to buy at entry_day = t+1
+    amount_ma20: np.ndarray  # rolling mean of (close * vol)
+    liquid_mask: np.ndarray  # bool, amount_ma20 > min
+    below_ma_state: np.ndarray  # bool, MA5 < MA10 on day t
+    death_cross_event: np.ndarray  # bool, MA5 first crosses below MA10 at t
+    entry_eligible_mask: np.ndarray  # bool, OK to buy at entry_day = t+1
 
     # Path metrics over the hold window starting at t+1
-    entry_day_idx: np.ndarray            # int, t+1 (-1 if no valid entry)
-    exit_day_idx: np.ndarray             # int, in [entry_day, entry_day+H]
-    holding_days: np.ndarray             # int, exit_day_idx - entry_day_idx
-    entry_price: np.ndarray              # close[entry_day_idx]
+    entry_day_idx: np.ndarray  # int, t+1 (-1 if no valid entry)
+    exit_day_idx: np.ndarray  # int, in [entry_day, entry_day+H]
+    holding_days: np.ndarray  # int, exit_day_idx - entry_day_idx
+    entry_price: np.ndarray  # close[entry_day_idx]
     exit_price: np.ndarray
-    hold_return: np.ndarray              # exit/entry - 1
-    final_return: np.ndarray             # alias of hold_return for clarity
-    max_cum_return_5d: np.ndarray        # max of (close[entry+i]/entry - 1) over hold path
-    peak_day_offset: np.ndarray          # int, days from entry to peak
-    max_drawdown_during_hold: np.ndarray # min of running drawdown from running peak
-    max_adverse_excursion: np.ndarray    # min of (close[entry+i]/entry - 1) (≤ 0)
-    rise_duration: np.ndarray            # peak_day_offset (days from entry to peak)
+    hold_return: np.ndarray  # exit/entry - 1
+    final_return: np.ndarray  # alias of hold_return for clarity
+    max_cum_return_5d: np.ndarray  # max of (close[entry+i]/entry - 1) over hold path
+    peak_day_offset: np.ndarray  # int, days from entry to peak
+    max_drawdown_during_hold: np.ndarray  # min of running drawdown from running peak
+    max_adverse_excursion: np.ndarray  # min of (close[entry+i]/entry - 1) (≤ 0)
+    rise_duration: np.ndarray  # peak_day_offset (days from entry to peak)
 
     # Threshold and event labels
-    past_vol: np.ndarray                 # std of pct_chg over vol_window (per (t, j))
-    threshold: np.ndarray                # max(sigma * past_vol * sqrt(H), abs_threshold)
-    hit_main_wave: np.ndarray            # bool
+    past_vol: np.ndarray  # std of pct_chg over vol_window (per (t, j))
+    threshold: np.ndarray  # max(sigma * past_vol * sqrt(H), abs_threshold)
+    hit_main_wave: np.ndarray  # bool
 
     # Score (0..100)
     height_score: np.ndarray
@@ -116,10 +115,10 @@ class MainWaveLabels:
     win_score: np.ndarray
     entry_timing_score: np.ndarray
     drawdown_penalty: np.ndarray
-    main_wave_score: np.ndarray          # final composite, can be negative
+    main_wave_score: np.ndarray  # final composite, can be negative
 
     # Validity (False if path could not be evaluated, e.g. ran past panel end)
-    label_valid_mask: np.ndarray         # bool
+    label_valid_mask: np.ndarray  # bool
 
     config: MainWaveConfig
 
@@ -169,7 +168,7 @@ def _compute_ma_arrays(close: np.ndarray, ma5_w: int, ma10_w: int):
     below_state = ma5 < ma10
     # Event: ma5 was >= ma10 yesterday and is < ma10 today.
     prev_above_or_equal = np.zeros_like(below_state, dtype=np.bool_)
-    prev_above_or_equal[1:] = ~below_state[:-1]   # yesterday MA5 >= MA10
+    prev_above_or_equal[1:] = ~below_state[:-1]  # yesterday MA5 >= MA10
     death_cross_event = below_state & prev_above_or_equal
     return ma5, ma10, below_state, death_cross_event
 
@@ -183,7 +182,7 @@ def compute_main_wave_labels(
     close: np.ndarray,
     pct_chg: np.ndarray,
     vol: np.ndarray,
-    valid_mask_basic: np.ndarray,   # ~is_st & ~is_suspended & days_since_ipo>=60
+    valid_mask_basic: np.ndarray,  # ~is_st & ~is_suspended & days_since_ipo>=60
     cfg: MainWaveConfig | None = None,
 ) -> MainWaveLabels:
     """Compute every label needed for main-wave eval.
@@ -235,7 +234,7 @@ def compute_main_wave_labels(
     #   - t+1 < T (can compute a path)
     decision_eligible = valid_mask_basic & liquid_mask & (~below_state)
     entry_eligible_mask = np.zeros_like(decision_eligible, dtype=np.bool_)
-    entry_eligible_mask[: T - 1] = decision_eligible[: T - 1]   # need t+1 to exist
+    entry_eligible_mask[: T - 1] = decision_eligible[: T - 1]  # need t+1 to exist
 
     # ---------- Path metrics ----------
     H = cfg.hold_window
@@ -254,17 +253,17 @@ def compute_main_wave_labels(
 
     for t in range(T - 1):
         entry = t + 1
-        path_max_t = min(entry + H, T)   # exclusive upper bound on path indices
+        path_max_t = min(entry + H, T)  # exclusive upper bound on path indices
         if path_max_t - entry < 1:
             continue
         # For each stock, traverse path days [entry .. entry + H - 1].
         # Exit_day = first death-cross-event in the path, OR entry+H-1 if none.
-        eligible_now = entry_eligible_mask[t]                     # (S,)
+        eligible_now = entry_eligible_mask[t]  # (S,)
         if not eligible_now.any():
             continue
 
         # close at entry; same denominator for all path days.
-        ep = close[entry]                                         # (S,)
+        ep = close[entry]  # (S,)
         # Avoid division by zero / negative; treat ep==0 as ineligible.
         ep_safe = np.where(eligible_now & (ep > 0), ep, np.nan)
 
@@ -292,9 +291,7 @@ def compute_main_wave_labels(
             # update min adverse
             running_min = np.minimum(running_min, cur_ret)
             # drawdown from running max
-            running_min_during_path = np.minimum(
-                running_min_during_path, cur_ret - running_max
-            )
+            running_min_during_path = np.minimum(running_min_during_path, cur_ret - running_max)
             # Death cross at this day → exit AT this day if not already exited.
             dc_today = death_cross_event[day]
             new_exit = dc_today & (~exit_found) & eligible_now
@@ -306,7 +303,7 @@ def compute_main_wave_labels(
         available_days = min(H, T - entry)
         clipped_exit_offset = np.minimum(exit_offset, available_days - 1)
         e_idx = entry
-        x_idx = entry + clipped_exit_offset                       # (S,)
+        x_idx = entry + clipped_exit_offset  # (S,)
 
         # Mask of (t, j) cells whose path has at least 1 day (always 1 here).
         ok = eligible_now & (ep > 0)
@@ -319,13 +316,11 @@ def compute_main_wave_labels(
 
         entry_day_idx[t, ok] = e_idx
         exit_day_idx[t, ok] = x_idx[ok]
-        holding_days[t, ok] = clipped_exit_offset[ok] + 1   # 1..H
+        holding_days[t, ok] = clipped_exit_offset[ok] + 1  # 1..H
         entry_price[t, ok] = ep[ok]
         # exit price = close[x_idx[j], j]
         # gather along axis 0
-        exit_price_row = np.take_along_axis(
-            close, x_idx[None, :], axis=0
-        )[0]                                                       # (S,)
+        exit_price_row = np.take_along_axis(close, x_idx[None, :], axis=0)[0]  # (S,)
         exit_price[t, ok] = exit_price_row[ok]
         hold_return[t, ok] = (exit_price_row[ok] / ep[ok]) - 1.0
 
@@ -369,21 +364,22 @@ def compute_main_wave_labels(
         1.0,
     )
     win_score = (final_return > 0).astype(np.float32)
-    entry_timing_score = (
-        0.5 * np.clip(rise_duration.astype(np.float32) / float(H), 0.0, 1.0)
-        + 0.5 * (1.0 - np.clip(np.abs(max_adverse_excursion) / cfg.max_adverse_limit, 0.0, 1.0))
-    )
-    drawdown_penalty = np.clip(
-        np.abs(max_adverse_excursion) / cfg.max_adverse_limit, 0.0, 1.0
-    )
+    entry_timing_score = 0.5 * np.clip(
+        rise_duration.astype(np.float32) / float(H), 0.0, 1.0
+    ) + 0.5 * (1.0 - np.clip(np.abs(max_adverse_excursion) / cfg.max_adverse_limit, 0.0, 1.0))
+    drawdown_penalty = np.clip(np.abs(max_adverse_excursion) / cfg.max_adverse_limit, 0.0, 1.0)
 
-    main_wave_score = 100.0 * (
-        cfg.w_height * height_score
-        + cfg.w_duration * duration_score
-        + cfg.w_smoothness * smoothness_score
-        + cfg.w_win * win_score
-        + cfg.w_entry_timing * entry_timing_score
-    ) - 100.0 * cfg.w_drawdown_penalty * drawdown_penalty
+    main_wave_score = (
+        100.0
+        * (
+            cfg.w_height * height_score
+            + cfg.w_duration * duration_score
+            + cfg.w_smoothness * smoothness_score
+            + cfg.w_win * win_score
+            + cfg.w_entry_timing * entry_timing_score
+        )
+        - 100.0 * cfg.w_drawdown_penalty * drawdown_penalty
+    )
 
     # Cells that are not label_valid get 0 score and never count as hits.
     main_wave_score = np.where(label_valid, main_wave_score, 0.0).astype(np.float32)

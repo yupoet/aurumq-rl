@@ -1069,12 +1069,18 @@ def alpha083(panel: pl.DataFrame) -> pl.Series:
     )
     # Inner: range_ma / (vwap - close); outer: numerator / inner. Both use safe_div.
     inner = safe_div(pl.col("__a083_rm"), pl.col("vwap") - pl.col("close"))
-    return staged3.with_columns(inner.alias("__a083_inner")).select(
-        safe_div(
-            pl.col("__a083_r1") * pl.col("__a083_r2"),
-            pl.col("__a083_inner"),
-        ).alias("alpha083").cast(pl.Float64)
-    ).to_series()
+    return (
+        staged3.with_columns(inner.alias("__a083_inner"))
+        .select(
+            safe_div(
+                pl.col("__a083_r1") * pl.col("__a083_r2"),
+                pl.col("__a083_inner"),
+            )
+            .alias("alpha083")
+            .cast(pl.Float64)
+        )
+        .to_series()
+    )
 
 
 def alpha085(panel: pl.DataFrame) -> pl.Series:

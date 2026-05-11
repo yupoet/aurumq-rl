@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._common import ewm_std_1d, rolling_mean_1d
 from .events import Event
 from .panels import MarketPanel
-from ._common import ewm_std_1d, rolling_mean_1d
-
 
 __all__ = ["detect_events_v2"]
 
@@ -64,7 +63,7 @@ def _detect_events_one_stock(
     amt_ma = _rolling_mean(amount, window=amt_ma_window)
 
     events: list[Event] = []
-    last_peak_idx = -1   # for non-overlapping detection within this stock
+    last_peak_idx = -1  # for non-overlapping detection within this stock
     t = pre_window + 1
     while t <= n - min_duration - 1:
         if t <= last_peak_idx:
@@ -75,7 +74,9 @@ def _detect_events_one_stock(
             t += 1
             continue
         # Need adj_close[t-1] valid
-        if not (np.isfinite(adj_close[t]) and np.isfinite(adj_close[t - 1]) and adj_close[t - 1] > 0):
+        if not (
+            np.isfinite(adj_close[t]) and np.isfinite(adj_close[t - 1]) and adj_close[t - 1] > 0
+        ):
             t += 1
             continue
         # Inflection: today_gain >= min_today_gain
@@ -112,7 +113,7 @@ def _detect_events_one_stock(
         if not np.isfinite(sub).all() or (sub <= 0).any():
             t += 1
             continue
-        rel = sub / adj_close[t] - 1.0   # returns since t (offset 0..len-1)
+        rel = sub / adj_close[t] - 1.0  # returns since t (offset 0..len-1)
         # benchmark forward returns since t
         bench_sub = benchmark_close[t:end]
         if not np.isfinite(bench_sub).all() or bench_sub[0] <= 0:
@@ -147,13 +148,15 @@ def _detect_events_one_stock(
             continue
         # All gates passed
         event_quality = float(fwd_max_excess / adaptive_thr)
-        events.append(Event(
-            ts_code=ts_code,
-            event_start_idx=t,
-            event_peak_idx=t + peak_offset,
-            event_quality=event_quality,
-            event_method="A",
-        ))
+        events.append(
+            Event(
+                ts_code=ts_code,
+                event_start_idx=t,
+                event_peak_idx=t + peak_offset,
+                event_quality=event_quality,
+                event_method="A",
+            )
+        )
         last_peak_idx = t + peak_offset
         t = last_peak_idx + 1
     return events

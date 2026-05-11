@@ -1,4 +1,5 @@
 """Tests for Path 1 eval metrics module (spec §3)."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -6,7 +7,6 @@ import datetime as dt
 import numpy as np
 import polars as pl
 import pytest
-
 from p3.path1_eval import (
     compute_ece_10bin,
     compute_mean_top50_proximity_excess,
@@ -41,11 +41,15 @@ def test_mean_top50_proximity_excess_perfect_predictor():
 
     result = compute_mean_top50_proximity_excess(df, top_k=50)
     expected = float(
-        np.mean([
-            df.filter(pl.col("trade_date") == dt.date.fromisoformat(d))
-              .sort("score", descending=True).head(50)["actual_y"].mean()
-            for d in ("2025-08-01", "2025-08-02")
-        ])
+        np.mean(
+            [
+                df.filter(pl.col("trade_date") == dt.date.fromisoformat(d))
+                .sort("score", descending=True)
+                .head(50)["actual_y"]
+                .mean()
+                for d in ("2025-08-01", "2025-08-02")
+            ]
+        )
     )
     assert result == pytest.approx(expected, abs=1e-9)
 

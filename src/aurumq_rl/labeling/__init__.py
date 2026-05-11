@@ -32,14 +32,13 @@ Example
 >>> # label_df: (trade_date, ts_code, y_t3) for each decision cell
 """
 
-from .panels import MarketPanel
+from .directional_change import detect_events_directional_change
 from .events import Event, dedupe_events, derive_labels, events_to_dataframe
-from .thresholds import search_threshold, ThresholdResult
-from .v2_excess_adaptive import detect_events_v2
+from .panels import MarketPanel
+from .thresholds import ThresholdResult, search_threshold
 from .trend_scanning import detect_events_trend_scanning
 from .triple_barrier import detect_events_triple_barrier
-from .directional_change import detect_events_directional_change
-
+from .v2_excess_adaptive import detect_events_v2
 
 # ---------------------------------------------------------------------------
 # P0 locked configuration (data-side ablation winner)
@@ -47,7 +46,7 @@ from .directional_change import detect_events_directional_change
 
 P0_LABEL_NAME: str = "v2_excess_adaptive"
 P0_HORIZON: str = "t3"
-P0_THRESHOLD: float = 1.2327          # event_quality threshold from train_eff
+P0_THRESHOLD: float = 1.2327  # event_quality threshold from train_eff
 P0_PANEL_VERSION: str = "phase26f_v3_344"
 P0_FEATURE_SCHEMA_HASH: str = "5e71e158e331"
 

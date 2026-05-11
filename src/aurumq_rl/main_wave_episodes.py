@@ -29,11 +29,10 @@ Pure numpy. No torch / SB3 dependency.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Config + container
@@ -48,7 +47,7 @@ class EpisodeConfig:
     min_peak_return: float = 0.10
     min_duration: int = 3
     max_duration: int = 20
-    min_avg_daily_return: float = 0.015   # peak_return / duration must exceed
+    min_avg_daily_return: float = 0.015  # peak_return / duration must exceed
 
     # Drawdown allowance: linear in peak_return so a +30% wave can have larger
     # pullbacks than a +10% wave. allowance = base + per_peak * peak_return
@@ -56,8 +55,8 @@ class EpisodeConfig:
     dd_per_peak: float = 0.50
 
     # Inflection criteria — t_start must be a clear "first up day"
-    min_first_day_return: float = 0.005   # today's close > yesterday's by ≥ 0.5%
-    pre_window_max_gain: float = 0.03      # prior 5d cumulative gain ≤ 3%
+    min_first_day_return: float = 0.005  # today's close > yesterday's by ≥ 0.5%
+    pre_window_max_gain: float = 0.03  # prior 5d cumulative gain ≤ 3%
     lookback_for_inflection: int = 5
 
     # Liquidity at t_start
@@ -78,8 +77,8 @@ class MainWaveEpisode:
     t_start: int
     t_peak: int
     peak_return: float
-    duration: int          # = t_peak - t_start (days of upward movement)
-    max_dd_during: float   # absolute, ≥ 0
+    duration: int  # = t_peak - t_start (days of upward movement)
+    max_dd_during: float  # absolute, ≥ 0
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +162,7 @@ def find_main_wave_episodes(
             # 4. Prior window must not already be trending up
             lb = cfg.lookback_for_inflection
             prior_start = max(0, t - lb)
-            prior = c[prior_start:t]   # excludes today
+            prior = c[prior_start:t]  # excludes today
             if len(prior) >= 2 and prior[0] > 0:
                 prior_gain = float(prior[-1] / prior[0]) - 1.0
                 if prior_gain > cfg.pre_window_max_gain:
@@ -175,12 +174,12 @@ def find_main_wave_episodes(
             if not np.isfinite(sub).all() or (sub <= 0).any():
                 t += 1
                 continue
-            rel = sub.astype(np.float64) / float(c[t]) - 1.0   # offset 0..len-1
+            rel = sub.astype(np.float64) / float(c[t]) - 1.0  # offset 0..len-1
             # Peak must be at offset >= min_duration (require ≥ min_duration days of rise)
             if len(rel) <= cfg.min_duration:
                 t += 1
                 continue
-            search_region = rel[cfg.min_duration:]
+            search_region = rel[cfg.min_duration :]
             if len(search_region) == 0:
                 t += 1
                 continue
@@ -192,8 +191,8 @@ def find_main_wave_episodes(
                 t += 1
                 continue
             # 7. DD during [0, peak_offset]
-            running_peak = np.maximum.accumulate(rel[:peak_offset + 1])
-            max_dd = float((running_peak - rel[:peak_offset + 1]).max())
+            running_peak = np.maximum.accumulate(rel[: peak_offset + 1])
+            max_dd = float((running_peak - rel[: peak_offset + 1]).max())
             if max_dd > _max_dd_allowance(peak_ret, cfg):
                 t += 1
                 continue
@@ -202,14 +201,16 @@ def find_main_wave_episodes(
                 t += 1
                 continue
             # All gates passed — record episode
-            episodes.append(MainWaveEpisode(
-                stock_idx=j,
-                t_start=t,
-                t_peak=t + peak_offset,
-                peak_return=peak_ret,
-                duration=peak_offset,
-                max_dd_during=max_dd,
-            ))
+            episodes.append(
+                MainWaveEpisode(
+                    stock_idx=j,
+                    t_start=t,
+                    t_peak=t + peak_offset,
+                    peak_return=peak_ret,
+                    duration=peak_offset,
+                    max_dd_during=max_dd,
+                )
+            )
             # Advance past peak to avoid overlapping episodes from the same
             # rising region.
             t = t + peak_offset + 1

@@ -376,9 +376,7 @@ def alpha031(panel: pl.DataFrame) -> pl.Series:
     staged = staged.with_columns(cs_rank(pl.col("__a031_d10")).alias("__a031_r1"))
     staged = staged.with_columns(cs_rank(pl.col("__a031_r1")).alias("__a031_rr"))
     staged = staged.with_columns((-1.0 * pl.col("__a031_rr")).alias("__a031_inner"))
-    staged = staged.with_columns(
-        ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec")
-    )
+    staged = staged.with_columns(ts_decay_linear(pl.col("__a031_inner"), 10).alias("__a031_dec"))
     staged = staged.with_columns(cs_rank(pl.col("__a031_dec")).alias("__a031_pr1"))
     staged = staged.with_columns(cs_rank(pl.col("__a031_pr1")).alias("__a031_pr2"))
     staged = staged.with_columns(cs_rank(pl.col("__a031_pr2")).alias("__a031_p1"))
@@ -387,9 +385,7 @@ def alpha031(panel: pl.DataFrame) -> pl.Series:
     staged = staged.with_columns((-1.0 * pl.col("__a031_d3")).alias("__a031_neg_d3"))
     staged = staged.with_columns(cs_rank(pl.col("__a031_neg_d3")).alias("__a031_p2"))
     # Part 3: sign(scale(corr(adv20, low, 12)))
-    staged = staged.with_columns(
-        ts_corr(pl.col("adv20"), pl.col("low"), 12).alias("__a031_corr")
-    )
+    staged = staged.with_columns(ts_corr(pl.col("adv20"), pl.col("low"), 12).alias("__a031_corr"))
     staged = staged.with_columns(cs_scale(pl.col("__a031_corr")).alias("__a031_corr_s"))
     staged = staged.with_columns(sign_(pl.col("__a031_corr_s")).alias("__a031_p3"))
     return staged.select(

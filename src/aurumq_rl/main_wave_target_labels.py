@@ -40,9 +40,9 @@ from .main_wave_episodes import MainWaveEpisode
 class TargetConfig:
     """Knobs for episode → target conversion."""
 
-    proximity_lookahead: int = 3   # T-1, T-2, T-3 valid; T-4+ no credit
+    proximity_lookahead: int = 3  # T-1, T-2, T-3 valid; T-4+ no credit
     proximity_weights: tuple[float, ...] = (1.0, 0.6, 0.3)
-    duration_factor_baseline: float = 10.0     # duration / baseline → clip([0.5, 1.5])
+    duration_factor_baseline: float = 10.0  # duration / baseline → clip([0.5, 1.5])
     duration_factor_min: float = 0.5
     duration_factor_max: float = 1.5
 
@@ -51,23 +51,23 @@ class TargetConfig:
 class MainWaveTargets:
     """Per-(t, j) target signals from episodes."""
 
-    target_quality: np.ndarray              # (T, S) float, env reward source
-    proximity: np.ndarray                   # (T, S) int8 in {0, 1, 2, 3} — best (smallest k) hit, 0=miss
-    episode_id_at_proximity: np.ndarray     # (T, S) int32, idx into episodes list, -1 if miss
+    target_quality: np.ndarray  # (T, S) float, env reward source
+    proximity: np.ndarray  # (T, S) int8 in {0, 1, 2, 3} — best (smallest k) hit, 0=miss
+    episode_id_at_proximity: np.ndarray  # (T, S) int32, idx into episodes list, -1 if miss
     config: TargetConfig
 
 
 def quality_of_episode(e: MainWaveEpisode, cfg: TargetConfig | None = None) -> float:
     """Composite per-episode quality used as the reward magnitude."""
     cfg = cfg or TargetConfig()
-    duration_factor = float(np.clip(
-        e.duration / cfg.duration_factor_baseline,
-        cfg.duration_factor_min,
-        cfg.duration_factor_max,
-    ))
-    smoothness_factor = 1.0 - float(np.clip(
-        e.max_dd_during / max(e.peak_return, 1e-6), 0.0, 1.0
-    ))
+    duration_factor = float(
+        np.clip(
+            e.duration / cfg.duration_factor_baseline,
+            cfg.duration_factor_min,
+            cfg.duration_factor_max,
+        )
+    )
+    smoothness_factor = 1.0 - float(np.clip(e.max_dd_during / max(e.peak_return, 1e-6), 0.0, 1.0))
     return float(e.peak_return) * duration_factor * smoothness_factor
 
 
@@ -91,9 +91,7 @@ def build_target_quality(
     """
     cfg = cfg or TargetConfig()
     L = cfg.proximity_lookahead
-    assert len(cfg.proximity_weights) >= L, (
-        f"proximity_weights must have at least {L} entries"
-    )
+    assert len(cfg.proximity_weights) >= L, f"proximity_weights must have at least {L} entries"
 
     target_quality = np.zeros((n_dates, n_stocks), dtype=np.float32)
     proximity = np.zeros((n_dates, n_stocks), dtype=np.int8)

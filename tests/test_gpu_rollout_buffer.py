@@ -7,6 +7,7 @@ Covers:
 - ``get()`` yields cuda RolloutBufferSamples with correct shapes.
 - VRAM footprint sanity at the smoke configuration.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -21,16 +22,14 @@ cuda = pytest.mark.skipif(not th.cuda.is_available(), reason="cuda required")
 
 
 def _build_spaces(n_stocks: int = 50, n_factors: int = 20):
-    obs_space = spaces.Box(low=-np.inf, high=np.inf,
-                           shape=(n_stocks, n_factors), dtype=np.float32)
-    act_space = spaces.Box(low=0.0, high=1.0,
-                           shape=(n_stocks,), dtype=np.float32)
+    obs_space = spaces.Box(low=-np.inf, high=np.inf, shape=(n_stocks, n_factors), dtype=np.float32)
+    act_space = spaces.Box(low=0.0, high=1.0, shape=(n_stocks,), dtype=np.float32)
     return obs_space, act_space
 
 
-def _fill_buffer(buf, *, n_steps: int, n_envs: int, n_stocks: int,
-                 n_factors: int, seed: int = 0) -> tuple[
-                     list[np.ndarray], np.ndarray]:
+def _fill_buffer(
+    buf, *, n_steps: int, n_envs: int, n_stocks: int, n_factors: int, seed: int = 0
+) -> tuple[list[np.ndarray], np.ndarray]:
     """Fill buffer with deterministic synthetic transitions.
 
     Returns (last_values_cpu, dones_cpu) for compute_returns_and_advantage.
@@ -41,13 +40,19 @@ def _fill_buffer(buf, *, n_steps: int, n_envs: int, n_stocks: int,
         action = rng.uniform(0.0, 1.0, size=(n_envs, n_stocks)).astype(np.float32)
         reward = rng.standard_normal(n_envs).astype(np.float32) * 0.01
         episode_start = (rng.random(n_envs) < 0.05).astype(np.float32)
-        value = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                             device="cuda" if th.cuda.is_available() else "cpu")
-        log_prob = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                                device="cuda" if th.cuda.is_available() else "cpu")
+        value = th.as_tensor(
+            rng.standard_normal(n_envs).astype(np.float32),
+            device="cuda" if th.cuda.is_available() else "cpu",
+        )
+        log_prob = th.as_tensor(
+            rng.standard_normal(n_envs).astype(np.float32),
+            device="cuda" if th.cuda.is_available() else "cpu",
+        )
         buf.add(obs, action, reward, episode_start, value, log_prob)
-    last_values = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                               device="cuda" if th.cuda.is_available() else "cpu")
+    last_values = th.as_tensor(
+        rng.standard_normal(n_envs).astype(np.float32),
+        device="cuda" if th.cuda.is_available() else "cpu",
+    )
     dones = (rng.random(n_envs) < 0.1).astype(bool)
     return last_values, dones
 
@@ -56,11 +61,24 @@ def _fill_buffer(buf, *, n_steps: int, n_envs: int, n_stocks: int,
 def test_buffer_residency_on_cuda():
     obs_space, act_space = _build_spaces(20, 8)
     buf = GPURolloutBuffer(
-        buffer_size=16, observation_space=obs_space, action_space=act_space,
-        device="cuda", n_envs=4, gae_lambda=0.95, gamma=0.99,
+        buffer_size=16,
+        observation_space=obs_space,
+        action_space=act_space,
+        device="cuda",
+        n_envs=4,
+        gae_lambda=0.95,
+        gamma=0.99,
     )
-    for name in ("observations", "actions", "rewards", "returns",
-                 "episode_starts", "values", "log_probs", "advantages"):
+    for name in (
+        "observations",
+        "actions",
+        "rewards",
+        "returns",
+        "episode_starts",
+        "values",
+        "log_probs",
+        "advantages",
+    ):
         t = getattr(buf, name)
         assert isinstance(t, th.Tensor), f"{name} should be torch.Tensor"
         assert t.device.type == "cuda", f"{name} on {t.device}, expected cuda"
@@ -70,8 +88,11 @@ def test_cpu_device_raises():
     obs_space, act_space = _build_spaces(10, 4)
     with pytest.raises(ValueError, match="GPURolloutBuffer requires cuda"):
         GPURolloutBuffer(
-            buffer_size=8, observation_space=obs_space, action_space=act_space,
-            device="cpu", n_envs=2,
+            buffer_size=8,
+            observation_space=obs_space,
+            action_space=act_space,
+            device="cpu",
+            n_envs=2,
         )
 
 
@@ -85,15 +106,11 @@ def test_add_accepts_numpy_and_torch():
     action = rng.uniform(0.0, 1.0, size=(n_envs, 15)).astype(np.float32)
     reward = rng.standard_normal(n_envs).astype(np.float32)
     episode_start = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    value = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                         device="cuda")
-    log_prob = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32),
-                            device="cuda")
+    value = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda")
+    log_prob = th.as_tensor(rng.standard_normal(n_envs).astype(np.float32), device="cuda")
 
-    buf_np = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda",
-                              n_envs=n_envs)
-    buf_th = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda",
-                              n_envs=n_envs)
+    buf_np = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda", n_envs=n_envs)
+    buf_th = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda", n_envs=n_envs)
 
     buf_np.add(obs, action, reward, episode_start, value, log_prob)
     buf_th.add(
@@ -105,8 +122,7 @@ def test_add_accepts_numpy_and_torch():
         log_prob,
     )
 
-    for name in ("observations", "actions", "rewards", "episode_starts",
-                 "values", "log_probs"):
+    for name in ("observations", "actions", "rewards", "episode_starts", "values", "log_probs"):
         a = getattr(buf_np, name)[0]
         b = getattr(buf_th, name)[0]
         assert th.allclose(a, b, atol=1e-6), f"{name} mismatch np vs torch input"
@@ -120,14 +136,22 @@ def test_gae_matches_cpu_baseline():
     gae_lambda, gamma = 0.95, 0.99
 
     cpu_buf = RolloutBuffer(
-        buffer_size=n_steps, observation_space=obs_space,
-        action_space=act_space, device="cpu", n_envs=n_envs,
-        gae_lambda=gae_lambda, gamma=gamma,
+        buffer_size=n_steps,
+        observation_space=obs_space,
+        action_space=act_space,
+        device="cpu",
+        n_envs=n_envs,
+        gae_lambda=gae_lambda,
+        gamma=gamma,
     )
     gpu_buf = GPURolloutBuffer(
-        buffer_size=n_steps, observation_space=obs_space,
-        action_space=act_space, device="cuda", n_envs=n_envs,
-        gae_lambda=gae_lambda, gamma=gamma,
+        buffer_size=n_steps,
+        observation_space=obs_space,
+        action_space=act_space,
+        device="cuda",
+        n_envs=n_envs,
+        gae_lambda=gae_lambda,
+        gamma=gamma,
     )
 
     rng = np.random.default_rng(42)
@@ -135,34 +159,44 @@ def test_gae_matches_cpu_baseline():
     # IDENTICAL inputs (same arrays, same draws).
     transitions = []
     for _ in range(n_steps):
-        transitions.append((
-            rng.standard_normal((n_envs, n_stocks, n_factors)).astype(np.float32),
-            rng.uniform(0.0, 1.0, size=(n_envs, n_stocks)).astype(np.float32),
-            rng.standard_normal(n_envs).astype(np.float32) * 0.01,
-            (rng.random(n_envs) < 0.05).astype(np.float32),
-            rng.standard_normal(n_envs).astype(np.float32),  # value (cpu numpy)
-            rng.standard_normal(n_envs).astype(np.float32),  # log_prob
-        ))
+        transitions.append(
+            (
+                rng.standard_normal((n_envs, n_stocks, n_factors)).astype(np.float32),
+                rng.uniform(0.0, 1.0, size=(n_envs, n_stocks)).astype(np.float32),
+                rng.standard_normal(n_envs).astype(np.float32) * 0.01,
+                (rng.random(n_envs) < 0.05).astype(np.float32),
+                rng.standard_normal(n_envs).astype(np.float32),  # value (cpu numpy)
+                rng.standard_normal(n_envs).astype(np.float32),  # log_prob
+            )
+        )
     last_vals_np = rng.standard_normal(n_envs).astype(np.float32)
     dones = (rng.random(n_envs) < 0.1).astype(bool)
 
     for obs, act, rew, eps, val, lp in transitions:
         cpu_buf.add(
-            obs, act, rew, eps,
+            obs,
+            act,
+            rew,
+            eps,
             th.as_tensor(val, device="cpu"),
             th.as_tensor(lp, device="cpu"),
         )
         gpu_buf.add(
-            obs, act, rew, eps,
+            obs,
+            act,
+            rew,
+            eps,
             th.as_tensor(val, device="cuda"),
             th.as_tensor(lp, device="cuda"),
         )
 
     cpu_buf.compute_returns_and_advantage(
-        last_values=th.as_tensor(last_vals_np, device="cpu"), dones=dones,
+        last_values=th.as_tensor(last_vals_np, device="cpu"),
+        dones=dones,
     )
     gpu_buf.compute_returns_and_advantage(
-        last_values=th.as_tensor(last_vals_np, device="cuda"), dones=dones,
+        last_values=th.as_tensor(last_vals_np, device="cuda"),
+        dones=dones,
     )
 
     cpu_adv = cpu_buf.advantages
@@ -186,11 +220,12 @@ def test_get_yields_cuda_samples():
     obs_space, act_space = _build_spaces(12, 5)
     n_steps, n_envs = 16, 4
     n_stocks, n_factors = 12, 5
-    buf = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda",
-                           n_envs=n_envs, gae_lambda=0.95, gamma=0.99)
-    last_values, dones = _fill_buffer(buf, n_steps=n_steps, n_envs=n_envs,
-                                      n_stocks=n_stocks, n_factors=n_factors,
-                                      seed=7)
+    buf = GPURolloutBuffer(
+        n_steps, obs_space, act_space, device="cuda", n_envs=n_envs, gae_lambda=0.95, gamma=0.99
+    )
+    last_values, dones = _fill_buffer(
+        buf, n_steps=n_steps, n_envs=n_envs, n_stocks=n_stocks, n_factors=n_factors, seed=7
+    )
     buf.compute_returns_and_advantage(last_values=last_values, dones=dones)
 
     batch_size = 8
@@ -199,8 +234,14 @@ def test_get_yields_cuda_samples():
     batches = list(buf.get(batch_size=batch_size))
     assert len(batches) == total // batch_size
     for batch in batches:
-        for name in ("observations", "actions", "old_values", "old_log_prob",
-                     "advantages", "returns"):
+        for name in (
+            "observations",
+            "actions",
+            "old_values",
+            "old_log_prob",
+            "advantages",
+            "returns",
+        ):
             t = getattr(batch, name)
             assert t.device.type == "cuda", f"{name} on {t.device}"
         assert batch.observations.shape == (batch_size, n_stocks, n_factors)
@@ -225,12 +266,13 @@ def test_buffer_size_estimate():
     th.cuda.reset_peak_memory_stats()
     base = th.cuda.memory_allocated()
 
-    buf = GPURolloutBuffer(n_steps, obs_space, act_space, device="cuda",
-                           n_envs=n_envs, gae_lambda=0.95, gamma=0.99)
+    buf = GPURolloutBuffer(
+        n_steps, obs_space, act_space, device="cuda", n_envs=n_envs, gae_lambda=0.95, gamma=0.99
+    )
 
     after = th.cuda.memory_allocated()
     bytes_used = after - base
-    one_gb = 1024 ** 3
+    one_gb = 1024**3
     assert bytes_used < one_gb, (
         f"GPURolloutBuffer at smoke config used {bytes_used / 1e6:.1f} MB "
         f">= 1 GB (expected obs term only ~6 MB)"

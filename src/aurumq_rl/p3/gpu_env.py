@@ -10,6 +10,7 @@ the default RolloutBuffer at 234 GiB on the 4070.
 Step semantics are byte-equivalent to ResidualPPOEnv (CPU gym.Env)
 under matched seeds — verified by ``scripts/p3/parity_check.py``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,7 +20,6 @@ import gymnasium as gym
 import numpy as np
 import torch
 from stable_baselines3.common.vec_env import VecEnv
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class ResidualGPUEnv(VecEnv):
 
     def __init__(
         self,
-        bundle,                      # P3Bundle
+        bundle,  # P3Bundle
         start_date: date,
         end_date: date,
         n_envs: int = 16,
@@ -83,7 +83,11 @@ class ResidualGPUEnv(VecEnv):
         F = bundle.n_features
         feats = torch.from_numpy(bundle.feature_panel).to(self.device, dtype=torch.float32)
         p = torch.from_numpy(bundle.p_baseline).to(self.device, dtype=torch.float32).unsqueeze(-1)
-        r = torch.from_numpy(bundle.rank_pct_baseline).to(self.device, dtype=torch.float32).unsqueeze(-1)
+        r = (
+            torch.from_numpy(bundle.rank_pct_baseline)
+            .to(self.device, dtype=torch.float32)
+            .unsqueeze(-1)
+        )
         obs_panel = torch.cat([feats, p, r], dim=-1)
         del feats, p, r
         # Sanitize in fp32 first.
@@ -95,35 +99,53 @@ class ResidualGPUEnv(VecEnv):
         self.panel = obs_panel  # IndexOnlyRolloutBuffer reads via env.panel[t]
 
         # Reward / score inputs (fp32 for numerical accuracy at top_k).
-        self.p_baseline_cuda = torch.from_numpy(bundle.p_baseline).to(self.device, dtype=torch.float32)
-        self.realized_cuda = torch.from_numpy(bundle.realized_pct_t_plus_1).to(self.device, dtype=torch.float32)
-        self.market_cuda = torch.from_numpy(bundle.market_pct_t_plus_1).to(self.device, dtype=torch.float32)
-        self.in_universe_cuda = torch.from_numpy(bundle.in_universe).to(self.device, dtype=torch.bool)
+        self.p_baseline_cuda = torch.from_numpy(bundle.p_baseline).to(
+            self.device, dtype=torch.float32
+        )
+        self.realized_cuda = torch.from_numpy(bundle.realized_pct_t_plus_1).to(
+            self.device, dtype=torch.float32
+        )
+        self.market_cuda = torch.from_numpy(bundle.market_pct_t_plus_1).to(
+            self.device, dtype=torch.float32
+        )
+        self.in_universe_cuda = torch.from_numpy(bundle.in_universe).to(
+            self.device, dtype=torch.bool
+        )
 
         # Per-env state on cuda
         self.t = torch.full((n_envs,), self.start_idx, dtype=torch.long, device=self.device)
         # last_obs_t mirrors the t-index of the obs most recently emitted.
         # IndexOnlyRolloutBuffer.add() reads this snapshot to record the
         # panel slice that produced the obs, instead of materialising it.
-        self.last_obs_t = torch.full((n_envs,), self.start_idx, dtype=torch.long, device=self.device)
+        self.last_obs_t = torch.full(
+            (n_envs,), self.start_idx, dtype=torch.long, device=self.device
+        )
         self._pending_action: torch.Tensor | None = None
 
         obs_dim_per_stock = F + 2
         observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf,
+            low=-np.inf,
+            high=np.inf,
             shape=(self.n_stocks, obs_dim_per_stock),
             dtype=np.float32,
         )
         action_space = gym.spaces.Box(
-            low=-action_range, high=action_range,
+            low=-action_range,
+            high=action_range,
             shape=(self.n_stocks,),
             dtype=np.float32,
         )
-        super().__init__(num_envs=n_envs, observation_space=observation_space, action_space=action_space)
+        super().__init__(
+            num_envs=n_envs, observation_space=observation_space, action_space=action_space
+        )
 
         logger.info(
             "ResidualGPUEnv: T_window=[%d,%d) S=%d F+2=%d n_envs=%d panel=%s",
-            start_idx, end_idx, self.n_stocks, obs_dim_per_stock, n_envs,
+            start_idx,
+            end_idx,
+            self.n_stocks,
+            obs_dim_per_stock,
+            n_envs,
             tuple(self.panel.shape),
         )
 
@@ -149,31 +171,31 @@ class ResidualGPUEnv(VecEnv):
         t_now = self.t.clone()  # (n_envs,) long
 
         # 1. Clip delta
-        delta = action.clamp(-self.action_range, self.action_range)            # (n_envs, S)
+        delta = action.clamp(-self.action_range, self.action_range)  # (n_envs, S)
 
         # 2. Score = logit(p_baseline) + λ·delta, mask out-of-universe
-        p = self.p_baseline_cuda[t_now]                                         # (n_envs, S)
-        in_uni = self.in_universe_cuda[t_now]                                   # (n_envs, S)
+        p = self.p_baseline_cuda[t_now]  # (n_envs, S)
+        in_uni = self.in_universe_cuda[t_now]  # (n_envs, S)
         # Replace NaN p with 0.5 so logit→0 (matches gym.Env behavior)
         p_safe = torch.where(torch.isnan(p), torch.tensor(0.5, device=self.device), p)
-        score = _logit_t(p_safe) + self.lambda_logit * delta                    # (n_envs, S)
+        score = _logit_t(p_safe) + self.lambda_logit * delta  # (n_envs, S)
         score = torch.where(in_uni, score, torch.tensor(float("-inf"), device=self.device))
 
         # 3. Top-k per env
         k = min(self.top_k, self.n_stocks)
-        topk_vals, topk_idx = torch.topk(score, k=k, dim=-1)                    # (n_envs, k)
+        topk_vals, topk_idx = torch.topk(score, k=k, dim=-1)  # (n_envs, k)
 
         # 4. Realized excess return
         # Gather realized[t_now, topk_idx_per_env]
-        r_full = self.realized_cuda[t_now]                                      # (n_envs, S)
-        r_topk = torch.gather(r_full, 1, topk_idx)                              # (n_envs, k)
+        r_full = self.realized_cuda[t_now]  # (n_envs, S)
+        r_topk = torch.gather(r_full, 1, topk_idx)  # (n_envs, k)
         r_topk = torch.where(torch.isnan(r_topk), torch.zeros_like(r_topk), r_topk)
-        m = self.market_cuda[t_now]                                             # (n_envs,)
+        m = self.market_cuda[t_now]  # (n_envs,)
         m = torch.where(torch.isnan(m), torch.zeros_like(m), m)
         # If a stock got -inf score, it's not in universe — but topk may still
         # pick it when n_uni < top_k (unavoidable). Match gym.Env which doesn't
         # filter further; the reward ends up averaging some nan-protected zero.
-        reward = (r_topk - m.unsqueeze(-1)).mean(dim=-1)                        # (n_envs,)
+        reward = (r_topk - m.unsqueeze(-1)).mean(dim=-1)  # (n_envs,)
         reward_np = reward.detach().cpu().numpy().astype(np.float32)
 
         # 5. Saturation diagnostic per env
@@ -182,12 +204,14 @@ class ResidualGPUEnv(VecEnv):
         n_uni = in_uni.sum(dim=-1)
         infos = []
         for i in range(self.num_envs):
-            infos.append({
-                "delta_abs_mean": float(delta_abs[i].mean().item()),
-                "delta_abs_p95": float(torch.quantile(delta_abs[i], 0.95).item()),
-                "saturation_fraction": float(sat_frac[i].item()),
-                "n_in_universe": int(n_uni[i].item()),
-            })
+            infos.append(
+                {
+                    "delta_abs_mean": float(delta_abs[i].mean().item()),
+                    "delta_abs_p95": float(torch.quantile(delta_abs[i], 0.95).item()),
+                    "saturation_fraction": float(sat_frac[i].item()),
+                    "n_in_universe": int(n_uni[i].item()),
+                }
+            )
 
         # 6. Advance t; if hit end_idx, reset to start_idx (auto-reset like SB3 VecEnv)
         self.t = self.t + 1

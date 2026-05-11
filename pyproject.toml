@@ -115,6 +115,23 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Skip exploratory research code from lint/format gates.
+# Production code (src/, tests/, top-level scripts/*.py without underscore) stays gated.
+# - scripts/_*.py : private / one-shot diagnostics and helpers (underscore convention)
+# - scripts/p3/*  : P3 research stream — SL pivot, multiple-path ensemble research
+# - scripts/oss_upload_phase*.py : per-session OSS uploaders, throwaway after each handoff
+extend-exclude = [
+    # Exploratory / one-shot scripts (underscore convention)
+    "scripts/_*.py",
+    # P3 research stream (SL pivot, multi-path ensemble research) — not maintained as production
+    "scripts/p3",
+    # Per-session OSS uploaders (hardcoded handoff paths, throwaway after each handoff)
+    "scripts/oss_upload_*.py",
+    # Research helpers — kept for reference but not lint-gated
+    "scripts/build_combined_panel_*.py",
+    "scripts/eval_factor_importance.py",
+    "scripts/train_v2.py",
+]
 
 [tool.ruff.lint]
 select = [
@@ -128,6 +145,9 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
+    "E402",  # module-level import not at top: sys.path.insert + skipif patterns
+    "E701",  # multi-statement on one line: idiomatic `if x: return False` style
+    "N802",  # function name lowercase (allow test_method_A_*, nvmlInit mocks etc.)
     "N803",  # argument lowercase (allow numpy-style: X, y)
     "N806",  # variable lowercase in function (allow: X_train)
 ]

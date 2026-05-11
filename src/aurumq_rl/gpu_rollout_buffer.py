@@ -21,6 +21,7 @@ Notes:
 - Numerical equivalence with the parent is asserted in the test suite
   (1e-4 fp32 tolerance).
 """
+
 from __future__ import annotations
 
 from collections.abc import Generator
@@ -102,24 +103,22 @@ class GPURolloutBuffer(RolloutBuffer):
 
         self.observations = th.zeros(
             (self.buffer_size, self.n_envs, *self.obs_shape),
-            dtype=obs_dtype, device=device,
+            dtype=obs_dtype,
+            device=device,
         )
         self.actions = th.zeros(
             (self.buffer_size, self.n_envs, self.action_dim),
-            dtype=act_dtype, device=device,
+            dtype=act_dtype,
+            device=device,
         )
-        self.rewards = th.zeros((self.buffer_size, self.n_envs),
-                                dtype=th.float32, device=device)
-        self.returns = th.zeros((self.buffer_size, self.n_envs),
-                                dtype=th.float32, device=device)
-        self.episode_starts = th.zeros((self.buffer_size, self.n_envs),
-                                       dtype=th.float32, device=device)
-        self.values = th.zeros((self.buffer_size, self.n_envs),
-                               dtype=th.float32, device=device)
-        self.log_probs = th.zeros((self.buffer_size, self.n_envs),
-                                  dtype=th.float32, device=device)
-        self.advantages = th.zeros((self.buffer_size, self.n_envs),
-                                   dtype=th.float32, device=device)
+        self.rewards = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.returns = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.episode_starts = th.zeros(
+            (self.buffer_size, self.n_envs), dtype=th.float32, device=device
+        )
+        self.values = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.log_probs = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
+        self.advantages = th.zeros((self.buffer_size, self.n_envs), dtype=th.float32, device=device)
         self.generator_ready = False
         # BaseBuffer.reset() body, inlined:
         self.pos = 0
@@ -174,16 +173,12 @@ class GPURolloutBuffer(RolloutBuffer):
         # (float32 obs into float32 storage; numpy bools into float32 for
         # episode_starts via ``as_tensor``).
         device = self.device
-        self.observations[self.pos].copy_(
-            self._as_tensor(obs, device, self.observations.dtype)
-        )
+        self.observations[self.pos].copy_(self._as_tensor(obs, device, self.observations.dtype))
         # Reshape action to (n_envs, action_dim) the same way the parent does.
         action_t = self._as_tensor(action, device, self.actions.dtype)
         action_t = action_t.reshape((self.n_envs, self.action_dim))
         self.actions[self.pos].copy_(action_t)
-        self.rewards[self.pos].copy_(
-            self._as_tensor(reward, device, self.rewards.dtype)
-        )
+        self.rewards[self.pos].copy_(self._as_tensor(reward, device, self.rewards.dtype))
         self.episode_starts[self.pos].copy_(
             self._as_tensor(episode_start, device, self.episode_starts.dtype)
         )
@@ -213,7 +208,9 @@ class GPURolloutBuffer(RolloutBuffer):
     # ------------------------------------------------------------------
 
     def compute_returns_and_advantage(  # type: ignore[override]
-        self, last_values: th.Tensor, dones: np.ndarray | th.Tensor,
+        self,
+        last_values: th.Tensor,
+        dones: np.ndarray | th.Tensor,
     ) -> None:
         """Compute lambda-return and GAE(lambda), all on cuda.
 
@@ -231,8 +228,9 @@ class GPURolloutBuffer(RolloutBuffer):
         if isinstance(dones, th.Tensor):
             dones_t = dones.to(device=device, dtype=th.float32)
         else:
-            dones_t = th.as_tensor(np.asarray(dones).astype(np.float32),
-                                   device=device, dtype=th.float32)
+            dones_t = th.as_tensor(
+                np.asarray(dones).astype(np.float32), device=device, dtype=th.float32
+            )
 
         last_gae_lam = th.zeros(self.n_envs, dtype=th.float32, device=device)
         for step in reversed(range(self.buffer_size)):
@@ -247,9 +245,7 @@ class GPURolloutBuffer(RolloutBuffer):
                 + self.gamma * next_values * next_non_terminal
                 - self.values[step]
             )
-            last_gae_lam = (
-                delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
-            )
+            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
             self.advantages[step] = last_gae_lam
         # TD(lambda) target.
         self.returns = self.advantages + self.values
@@ -292,7 +288,8 @@ class GPURolloutBuffer(RolloutBuffer):
         return t.transpose(0, 1).contiguous().reshape(n_steps * n_envs, *rest)
 
     def get(  # type: ignore[override]
-        self, batch_size: int | None = None,
+        self,
+        batch_size: int | None = None,
     ) -> Generator[RolloutBufferSamples, None, None]:
         assert self.full, ""
         total = self.buffer_size * self.n_envs
@@ -306,9 +303,7 @@ class GPURolloutBuffer(RolloutBuffer):
             # SB3's external readers (`explained_variance` etc.) call
             # `.flatten()` on them themselves.
             for name in ("observations", "actions", "log_probs"):
-                self.__dict__[name] = self.swap_and_flatten_torch(
-                    self.__dict__[name]
-                )
+                self.__dict__[name] = self.swap_and_flatten_torch(self.__dict__[name])
             self._values_cuda = self.swap_and_flatten_torch(self._values_cuda)
             self._returns_cuda = self.swap_and_flatten_torch(self._returns_cuda)
             self._advantages_cuda = self.swap_and_flatten_torch(self._advantages_cuda)
@@ -332,8 +327,7 @@ class GPURolloutBuffer(RolloutBuffer):
         # Accept either numpy or torch indices; SB3 internals only ever
         # pass numpy via sample(), but our get() uses a cuda LongTensor.
         if isinstance(batch_inds, np.ndarray):
-            batch_inds = th.as_tensor(batch_inds, dtype=th.long,
-                                      device=self.device)
+            batch_inds = th.as_tensor(batch_inds, dtype=th.long, device=self.device)
         else:
             batch_inds = batch_inds.to(self.device, dtype=th.long)
 

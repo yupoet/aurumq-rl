@@ -524,9 +524,7 @@ def gtja_114(panel: pl.DataFrame) -> pl.Series:
     )
     den = safe_div(pl.col("__p"), pl.col("vwap") - pl.col("close"))
     df = df.with_columns(den.alias("__den"))
-    expr = safe_div(
-        pl.col("__rpd") * pl.col("__rrv"), pl.col("__den")
-    ).alias("gtja_114")
+    expr = safe_div(pl.col("__rpd") * pl.col("__rrv"), pl.col("__den")).alias("gtja_114")
     return df.select(expr).to_series()
 
 

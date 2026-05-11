@@ -15,7 +15,6 @@ from datetime import date
 
 import numpy as np
 
-
 __all__ = ["MarketPanel"]
 
 

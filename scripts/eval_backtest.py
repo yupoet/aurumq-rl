@@ -92,9 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         fns = meta.get("factor_names")
         if isinstance(fns, list) and fns:
             train_factor_names = [str(c) for c in fns]
-            print(
-                f"[backtest] factor_names from metadata: {len(train_factor_names)} cols"
-            )
+            print(f"[backtest] factor_names from metadata: {len(train_factor_names)} cols")
         elif args.n_factors is None and isinstance(meta.get("factor_count"), int):
             args.n_factors = int(meta["factor_count"])
             print(
@@ -104,9 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         # forward_period: prefer training metadata over CLI default
         if isinstance(meta.get("forward_period"), int):
             args.forward_period = int(meta["forward_period"])
-            print(
-                f"[backtest] forward_period={args.forward_period} (from metadata)"
-            )
+            print(f"[backtest] forward_period={args.forward_period} (from metadata)")
         # Honour per-prefix weights used at training time so OOS sees the
         # same scaling. Missing field -> no weighting (legacy runs).
         fgw = meta.get("feature_group_weights")

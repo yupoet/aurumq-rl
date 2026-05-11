@@ -13,6 +13,7 @@ Usage::
         --baseline-lift 2.61 \\
         --out runs/phase26ef_scoreboard.md
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,9 +54,7 @@ def main() -> None:
 
     rows: list[str] = []
     rows.append("# Phase 26 E/F/G Scoreboard\n")
-    rows.append(
-        f"Baseline (26C2 published): **{args.baseline_lift:.2f}× T-1 lift**\n\n"
-    )
+    rows.append(f"Baseline (26C2 published): **{args.baseline_lift:.2f}× T-1 lift**\n\n")
     rows.append("## Per-tier summary (top_k=5)\n")
     rows.append(
         "| tier | best lift | best hit | best ckpt | median (3 seeds) | min seed | max seed | vs 26C2 |"
@@ -89,7 +88,7 @@ def main() -> None:
         delta = med - args.baseline_lift
         sign = "+" if delta >= 0 else ""
         rows.append(
-            f"| {tier} | {best_lift:.2f}× | {best_hit*100:.2f}% | {best_ckpt} | "
+            f"| {tier} | {best_lift:.2f}× | {best_hit * 100:.2f}% | {best_ckpt} | "
             f"{med:.2f}× | {min(per_seed_lift):.2f}× | {max(per_seed_lift):.2f}× | {sign}{delta:.2f}× |"
         )
         tier_summaries[tier] = {
@@ -124,8 +123,7 @@ def main() -> None:
             )
         elif tier == "26F":
             ok = (
-                s["median_lift"] > args.baseline_lift + 0.10
-                and s["best_lift"] > args.baseline_lift
+                s["median_lift"] > args.baseline_lift + 0.10 and s["best_lift"] > args.baseline_lift
             )
             v = "PASS — events add value" if ok else "REJECT — events do not improve"
             rows.append(
@@ -142,14 +140,22 @@ def main() -> None:
     rows.append("")
     rows.append("## Recommendation\n")
     if "26F" in tier_summaries and tier_summaries["26F"]["median_lift"] > args.baseline_lift + 0.10:
-        if "26G" in tier_summaries and tier_summaries["26G"]["median_lift"] > tier_summaries["26F"]["median_lift"] + 0.10:
+        if (
+            "26G" in tier_summaries
+            and tier_summaries["26G"]["median_lift"] > tier_summaries["26F"]["median_lift"] + 0.10
+        ):
             rows.append(
                 "→ **Promote 26G to production.** Events + larger encoder both help. "
                 "Larger encoder may need more multi-seed runs before final commit."
             )
         else:
-            rows.append("→ **Promote 26F to production.** Event-decay tech features add measurable lift; encoder bump unnecessary.")
-    elif "26E" in tier_summaries and tier_summaries["26E"]["median_lift"] >= args.baseline_lift - 0.10:
+            rows.append(
+                "→ **Promote 26F to production.** Event-decay tech features add measurable lift; encoder bump unnecessary."
+            )
+    elif (
+        "26E" in tier_summaries
+        and tier_summaries["26E"]["median_lift"] >= args.baseline_lift - 0.10
+    ):
         rows.append(
             "→ **Stay on 26C2 production. 26E neutral, 26F/G no improvement.** "
             "Curated continuous tech is non-harmful but adds no lift; revisit with deeper feature engineering or different encoder family."

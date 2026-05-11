@@ -72,8 +72,7 @@ class GpuSamplerCallback(BaseCallback):  # type: ignore[misc]
         """Initialize NVML and pick the requested device."""
         if not NVML_AVAILABLE:
             self._warn_fallback_once(
-                "pynvml not installed — GPU monitoring disabled. "
-                "Install with: pip install pynvml"
+                "pynvml not installed — GPU monitoring disabled. Install with: pip install pynvml"
             )
             return
         try:
@@ -87,9 +86,7 @@ class GpuSamplerCallback(BaseCallback):  # type: ignore[misc]
             self._mem_total_mb = int(mem_info.total // (1024 * 1024))
             self._enabled = True
         except Exception as exc:  # pragma: no cover - hardware-dependent
-            self._warn_fallback_once(
-                f"NVML init failed ({exc!r}); GPU monitoring disabled."
-            )
+            self._warn_fallback_once(f"NVML init failed ({exc!r}); GPU monitoring disabled.")
             self._handle = None
             self._enabled = False
 
@@ -124,18 +121,14 @@ class GpuSamplerCallback(BaseCallback):  # type: ignore[misc]
         try:
             util = pynvml.nvmlDeviceGetUtilizationRates(self._handle)
             mem = pynvml.nvmlDeviceGetMemoryInfo(self._handle)
-            temp = pynvml.nvmlDeviceGetTemperature(
-                self._handle, pynvml.NVML_TEMPERATURE_GPU
-            )
+            temp = pynvml.nvmlDeviceGetTemperature(self._handle, pynvml.NVML_TEMPERATURE_GPU)
             try:
                 power_mw = pynvml.nvmlDeviceGetPowerUsage(self._handle)
                 power_w: float = float(power_mw) / 1000.0
             except Exception:
                 power_w = 0.0
         except Exception as exc:  # pragma: no cover - hardware-dependent
-            self._warn_fallback_once(
-                f"NVML sample failed ({exc!r}); disabling further sampling."
-            )
+            self._warn_fallback_once(f"NVML sample failed ({exc!r}); disabling further sampling.")
             self._enabled = False
             return None
 
@@ -157,9 +150,7 @@ class GpuSamplerCallback(BaseCallback):  # type: ignore[misc]
         try:
             self._jsonl.parent.mkdir(parents=True, exist_ok=True)
             with self._jsonl.open("a", encoding="utf-8") as f:
-                f.write(
-                    json.dumps(record, ensure_ascii=False, default=_json_default) + "\n"
-                )
+                f.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
         except OSError:
             # Never break training because of a logging IO error.
             pass

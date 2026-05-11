@@ -5,6 +5,7 @@ construction is needed by gpu_env, policy, and factor_importance
 tests, plus by some smoke scripts. Keeping it as a plain module
 makes it importable from anywhere.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -45,8 +46,9 @@ def make_synthetic_panel(
     base_date = _dt.date(2024, 1, 2)
     dates = [base_date + _dt.timedelta(days=i) for i in range(n_dates)]
     stock_codes = [f"SYN{i:04d}.SH" for i in range(n_stocks)]
-    factor_names = [f"alpha_{i:03d}" if i < n_factors // 2 else f"gtja_{i:03d}"
-                    for i in range(n_factors)]
+    factor_names = [
+        f"alpha_{i:03d}" if i < n_factors // 2 else f"gtja_{i:03d}" for i in range(n_factors)
+    ]
     return FactorPanel(
         factor_array=factor_array,
         return_array=return_array,

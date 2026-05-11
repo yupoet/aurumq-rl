@@ -7,12 +7,12 @@ because SB3's default ActorCriticPolicy assumes a flat features tensor
 and an mlp_extractor that splits it into (latent_pi, latent_vf). Our
 extractor returns a dict and the two heads need different shapes.
 """
+
 from __future__ import annotations
 
 from functools import partial
 from typing import Any
 
-import gymnasium as gym
 import torch
 from stable_baselines3.common.distributions import DiagGaussianDistribution
 from stable_baselines3.common.policies import ActorCriticPolicy
@@ -89,7 +89,9 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
         self.value_net = nn.Sequential(*layers)
         # Re-init action distribution + log_std
         self.action_dist = DiagGaussianDistribution(n_stocks)
-        self.log_std = nn.Parameter(torch.full((n_stocks,), -0.69, dtype=torch.float32))  # ~log(0.5)
+        self.log_std = nn.Parameter(
+            torch.full((n_stocks,), -0.69, dtype=torch.float32)
+        )  # ~log(0.5)
 
         if getattr(self, "ortho_init", False):
             self.action_net.apply(partial(self.init_weights, gain=0.01))
@@ -113,7 +115,7 @@ class PerStockEncoderPolicy(ActorCriticPolicy):
     def forward(self, obs, deterministic: bool = False):
         feats = self._features(obs)
         scores = self.action_net(feats["per_stock"]).squeeze(-1)  # (B, S)
-        values = self.value_net(feats["pooled"]).squeeze(-1)      # (B,)
+        values = self.value_net(feats["pooled"]).squeeze(-1)  # (B,)
         distribution = self.action_dist.proba_distribution(scores, self.log_std)
         actions = distribution.get_actions(deterministic=deterministic)
         log_probs = distribution.log_prob(actions)

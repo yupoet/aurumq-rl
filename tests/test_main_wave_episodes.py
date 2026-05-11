@@ -4,6 +4,7 @@ Convention: ``t_start`` = first up day (close[t_start] > close[t_start-1]
 by ≥ 0.5%). The user's "T-1 decision day" = ``t_start - 1``.
 ``peak_return = close[t_peak] / close[t_start] - 1``.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,14 +23,14 @@ def _flat_then_rise_panel():
     at day 15 (close=13.0). Then flat at 13.0."""
     T, S = 30, 1
     close = np.full((T, S), 10.0, dtype=np.float32)
-    close[10, 0] = 10.5   # +5% — first up day
+    close[10, 0] = 10.5  # +5% — first up day
     close[11, 0] = 11.0
     close[12, 0] = 11.6
     close[13, 0] = 12.2
     close[14, 0] = 12.7
     close[15, 0] = 13.0
     close[16:, 0] = 13.0
-    vol = np.full((T, S), 2e7, dtype=np.float32)   # amount = 20*1e7 = 2e8 > 1e8
+    vol = np.full((T, S), 2e7, dtype=np.float32)  # amount = 20*1e7 = 2e8 > 1e8
     valid = np.ones((T, S), dtype=np.bool_)
     return close, vol, valid
 
@@ -43,7 +44,7 @@ def test_single_clean_wave_detected():
     assert e.t_start == 10
     assert e.t_peak == 15
     assert e.duration == 5
-    expected_peak_ret = 13.0 / 10.5 - 1.0   # ≈ 0.2381
+    expected_peak_ret = 13.0 / 10.5 - 1.0  # ≈ 0.2381
     assert abs(e.peak_return - expected_peak_ret) < 1e-3
     assert e.max_dd_during < 1e-5
 
@@ -68,7 +69,7 @@ def test_wave_too_short_not_detected():
     """+15% gain in 1 day shouldn't qualify (need ≥ min_duration)."""
     T, S = 30, 1
     close = np.full((T, S), 10.0, dtype=np.float32)
-    close[10, 0] = 11.5   # +15% in 1 day
+    close[10, 0] = 11.5  # +15% in 1 day
     close[11:, 0] = 11.5
     vol = np.full((T, S), 2e7, dtype=np.float32)
     valid = np.ones((T, S), dtype=np.bool_)
@@ -82,7 +83,7 @@ def test_too_volatile_wave_excluded():
     close = np.full((T, S), 10.0, dtype=np.float32)
     close[10, 0] = 10.5
     close[11, 0] = 11.5
-    close[12, 0] = 10.3   # big drop from 11.5 to 10.3
+    close[12, 0] = 10.3  # big drop from 11.5 to 10.3
     close[13, 0] = 11.0
     close[14, 0] = 11.5
     close[15:, 0] = 11.5
@@ -99,7 +100,7 @@ def test_too_volatile_wave_excluded():
 
 def test_liquidity_gate_excludes_low_amount():
     close, vol, valid = _flat_then_rise_panel()
-    vol = np.full(vol.shape, 1e6, dtype=np.float32)   # amount ≈ 1e7 << 1e8
+    vol = np.full(vol.shape, 1e6, dtype=np.float32)  # amount ≈ 1e7 << 1e8
     eps = find_main_wave_episodes(close, vol, valid)
     assert len(eps) == 0
 
@@ -132,7 +133,7 @@ def test_slow_drift_excluded_by_avg_daily():
     close = np.full((T, S), 10.0, dtype=np.float32)
     base = 10.0
     for i in range(12):
-        base = base * (1.008)   # ~0.8%/day
+        base = base * (1.008)  # ~0.8%/day
         close[10 + i, 0] = base
     close[22:, 0] = base
     vol = np.full((T, S), 2e7, dtype=np.float32)
@@ -151,7 +152,7 @@ def test_non_overlapping_episodes():
     # Wave 1: t_start=10, peak at day 15 (close=13.0, peak_ret=23.8%)
     for i, v in enumerate([10.5, 11.0, 11.6, 12.2, 12.7, 13.0]):
         close[10 + i, 0] = v
-    close[16:35, 0] = 13.0   # 19 days flat between waves
+    close[16:35, 0] = 13.0  # 19 days flat between waves
     # Wave 2: t_start=35, peak at day 40 (close=16.9 from base 13.0)
     for i, mult in enumerate([1.05, 1.05, 1.05, 1.05, 1.04, 1.04]):
         close[35 + i, 0] = close[35 + i - 1, 0] * mult
@@ -164,7 +165,7 @@ def test_non_overlapping_episodes():
     assert eps[0].t_start == 10
     assert eps[0].t_peak == 15
     assert eps[1].t_start == 35
-    assert eps[1].t_start > eps[0].t_peak   # non-overlap
+    assert eps[1].t_start > eps[0].t_peak  # non-overlap
 
 
 def test_summary_helper():
@@ -182,7 +183,7 @@ def test_summary_helper():
 
 def test_invalid_basic_mask_excludes_t_start():
     close, vol, valid = _flat_then_rise_panel()
-    valid[10, 0] = False   # ST that day
+    valid[10, 0] = False  # ST that day
     eps = find_main_wave_episodes(close, vol, valid)
     # Episode at t_start=10 must NOT be recorded; t_start=11 also rejected
     # because pre-window gain c[10]/c[6] = 10.5/10 - 1 = 5% > 3% threshold.
