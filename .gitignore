@@ -101,3 +101,6 @@ refs/
 
 # Per-member ensemble score caches (regenerable from models)
 reports/**/_scores_cache_*.npy
+data/p3_4070_slices/
+data/p3_4070_slices_v2/
+data/p3_4070_refresh/
