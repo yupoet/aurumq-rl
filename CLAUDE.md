@@ -62,9 +62,25 @@ Parquet 必须含字段：
 - **本项目不包含因子计算逻辑**。所有因子由输入数据 pipeline 提供，本项目仅按列名前缀识别和消费。
 - `src/aurumq_rl/env.py` 和 `inference.py` 必须支持 gymnasium 缺失时优雅降级（占位类抛 ImportError，但 import 模块不报错）。
 
-### 4. Universe 过滤红线
+### 4. Universe 过滤红线（2026-05-14 起 paris 锁定 5 universe）
 
-默认 universe 过滤（`UniverseFilter.MAIN_BOARD_NON_ST`）必须排除：
+`UniverseFilter` 的 source of truth 是 paris ship 的 `data/universes/*_membership.parquet`
+（见 `oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-5-universe-lock/` 和
+`2026-05-14-npf-v2-1-main-board/`）。当 membership parquet 缺失时回退到 main-board regex。
+
+5 个锁定 universe:
+
+| enum | size | type | 说明 |
+|---|---|---|---|
+| `MAIN_BOARD` | 3003 | static | A 股主板 60[0135]/00[0123], 排除 ST/退市 |
+| `CSI300` | ~300/day | PIT | 沪深 300, point-in-time 季度调仓 |
+| `CSI500` | ~500/day | PIT | 中证 500, point-in-time |
+| `NPF` (default ⭐) | 401 | static | 新质生产力 v2.1, 主板限定 ±10% 涨跌停一致 |
+| `NPF_FULL` | 618 | static | NPF + Layer 2/3 (主板内 hot cross + concept backfill) |
+| `NPF_CROSS_BOARD` | 779 | static | NPF 跨板块（含创业/科创/北交, **仅 exploration**） |
+| `GROWTH_BOARDS` | 2253 | static | 创业板 300xxxx + 科创板 688xxxx + 北交所 8xxxxx |
+
+默认 `MAIN_BOARD` (= legacy `MAIN_BOARD_NON_ST`) 必须排除：
 - ❌ 北交所（`.BJ` 后缀，或代码 8/4 开头）
 - ❌ 科创板（688 开头）
 - ❌ 创业板（300/301 开头）
@@ -73,6 +89,14 @@ Parquet 必须含字段：
 保留：
 - ✅ 沪主板：60[01356] 开头
 - ✅ 深主板：00[0123] 开头
+
+**Legacy aliases** (向后兼容旧训练脚本):
+- `MAIN_BOARD_NON_ST` → `MAIN_BOARD`
+- `HS300` → `CSI300`
+- `ZZ500` → `CSI500`
+
+**训练窗口锁定 2024-04-01 ~ 当前** (paris dc_hot endpoint 最早可用日, 早于此 sparse pattern 噪声).
+所有新 wave/exit bundle 的 `manifest.json` 必须含 `"universe": "<name>"` + `"train_window": [start, end]` 字段。
 
 ## 因子识别策略
 

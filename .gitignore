@@ -104,3 +104,9 @@ reports/**/_scores_cache_*.npy
 data/p3_4070_slices/
 data/p3_4070_slices_v2/
 data/p3_4070_refresh/
+data/paris_reply_*/
+data/universes/
+data/kronos/
+data/p3_4070_daily/
+data/paris_kronos_plan/
+data/weekly_eval_*/

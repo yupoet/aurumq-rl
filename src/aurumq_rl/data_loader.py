@@ -44,9 +44,11 @@ environment.
 from __future__ import annotations
 
 import datetime
+import os
 import re
 import sys
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -101,13 +103,65 @@ OPTIONAL_COLUMNS: tuple[str, ...] = ("is_st", "days_since_ipo", "industry_code",
 
 
 class UniverseFilter(StrEnum):
-    """Stock universe selection mode."""
+    """Stock universe selection mode.
+
+    Source of truth: paris's `2026-05-14-5-universe-lock/` + `2026-05-14-npf-v2-1-main-board/`
+    bundles (cached locally at ``data/universes/<name>_membership.parquet``). When a
+    membership parquet is absent the filter falls back to the regex-based main-board
+    heuristic so synthetic and pre-lock panels still work.
+
+    The five paris-locked universes (2026-05-14):
+        * ``MAIN_BOARD`` — A-share main board, 3003 stocks (static).
+        * ``CSI300`` — Hu-Shen 300 index, point-in-time (~300 stocks/day).
+        * ``CSI500`` — CSI 500 index, point-in-time (~500 stocks/day).
+        * ``NPF`` — 新质生产力 default, main-board only, 401 stocks (static, v2.1).
+        * ``GROWTH_BOARDS`` — 创业板/科创板/北交所, 2253 stocks (static).
+
+    NPF tiers (paris v2.1 main-board-locked):
+        * ``NPF`` — default, 401 stocks (Layer 1A + 1B, main board only).
+        * ``NPF_FULL`` — 618 stocks (+ Layer 2 hot cross + Layer 3 concept backfill).
+        * ``NPF_CROSS_BOARD`` — 779 stocks, cross-board (exploration only).
+
+    Backward-compat aliases:
+        * ``MAIN_BOARD_NON_ST`` → ``MAIN_BOARD`` (legacy name, same set).
+        * ``HS300`` → ``CSI300`` (legacy spelling).
+        * ``ZZ500`` → ``CSI500`` (legacy spelling).
+    """
 
     ALL_A = "all_a"
+    # New paris-locked names
+    MAIN_BOARD = "main_board"
+    CSI300 = "csi300"
+    CSI500 = "csi500"
+    NPF = "npf"
+    NPF_FULL = "npf_full"
+    NPF_CROSS_BOARD = "npf_cross_board"
+    GROWTH_BOARDS = "growth_boards"
+    # Legacy aliases — kept for backward compat with older training scripts
     MAIN_BOARD_NON_ST = "main_board_non_st"
     HS300 = "hs300"
     ZZ500 = "zz500"
     ZZ1000 = "zz1000"
+
+
+_LEGACY_ALIAS = {
+    UniverseFilter.MAIN_BOARD_NON_ST: UniverseFilter.MAIN_BOARD,
+    UniverseFilter.HS300: UniverseFilter.CSI300,
+    UniverseFilter.ZZ500: UniverseFilter.CSI500,
+}
+
+
+# Static universes use just stock_code, trade_date is NULL.
+_STATIC_UNIVERSES = frozenset({
+    UniverseFilter.MAIN_BOARD,
+    UniverseFilter.NPF,
+    UniverseFilter.NPF_FULL,
+    UniverseFilter.NPF_CROSS_BOARD,
+    UniverseFilter.GROWTH_BOARDS,
+})
+
+# Point-in-time universes use (stock_code, trade_date) — index membership rebalances quarterly.
+_PIT_UNIVERSES = frozenset({UniverseFilter.CSI300, UniverseFilter.CSI500})
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +279,42 @@ def _is_main_board(code: str) -> bool:
     return bool(_SH_MAIN_PATTERN.match(code) or _SZ_MAIN_PATTERN.match(code))
 
 
+def _universe_dir() -> Path:
+    """Directory holding paris-shipped universe membership parquets."""
+    env = os.environ.get("AURUMQ_UNIVERSE_DIR")
+    if env:
+        return Path(env)
+    # Default: <project_root>/data/universes/
+    return Path(__file__).resolve().parents[2] / "data" / "universes"
+
+
+@lru_cache(maxsize=16)
+def _load_static_universe(name: str) -> frozenset[str]:
+    """Load a static universe (NPF / MAIN_BOARD / etc.) from local parquet."""
+    path = _universe_dir() / f"{name}_membership.parquet"
+    if not path.exists():
+        return frozenset()
+    df = pl.read_parquet(path)
+    code_col = "stock_code" if "stock_code" in df.columns else "ts_code"
+    return frozenset(df[code_col].to_list())
+
+
+@lru_cache(maxsize=4)
+def _load_pit_universe(name: str) -> pl.DataFrame:
+    """Load a point-in-time universe (CSI300 / CSI500) — schema (stock_code, trade_date)."""
+    path = _universe_dir() / f"{name}_membership.parquet"
+    if not path.exists():
+        return pl.DataFrame(schema={"stock_code": pl.Utf8, "trade_date": pl.Date})
+    df = pl.read_parquet(path)
+    code_col = "stock_code" if "stock_code" in df.columns else "ts_code"
+    # Normalize column name
+    if code_col != "stock_code":
+        df = df.rename({code_col: "stock_code"})
+    if df["trade_date"].dtype != pl.Date:
+        df = df.with_columns(pl.col("trade_date").cast(pl.Date))
+    return df
+
+
 def filter_universe(
     df: pl.DataFrame,
     mode: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
@@ -249,27 +339,45 @@ def filter_universe(
     if mode == UniverseFilter.ALL_A:
         return df
 
-    if mode == UniverseFilter.MAIN_BOARD_NON_ST:
-        # Apply main-board filter
+    # Resolve legacy aliases (HS300 → CSI300, ZZ500 → CSI500, MAIN_BOARD_NON_ST → MAIN_BOARD)
+    mode = _LEGACY_ALIAS.get(mode, mode)
+
+    # Static universe filter from paris's locked membership parquets
+    if mode in _STATIC_UNIVERSES:
+        codes = _load_static_universe(mode.value.upper())
+        if codes:
+            df = df.filter(pl.col("ts_code").is_in(list(codes)))
+            # For MAIN_BOARD: also exclude ST if name col present (defensive — paris's
+            # membership parquet already excludes ST/退, but legacy panels may not).
+            if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
+                df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
+            return df
+        # Fall back to regex when membership parquet missing (synthetic / pre-lock data)
         df = df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
-        # ST exclusion (only if name column exists)
-        if name_col in df.columns:
+        if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
             df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
         return df
 
-    # Index-component modes: prefer explicit boolean column when present,
-    # fall back to main-board heuristic otherwise.
-    if mode == UniverseFilter.HS300:
-        if "is_hs300" in df.columns:
-            return df.filter(pl.col("is_hs300") == True)  # noqa: E712
+    # Point-in-time universe (CSI300 / CSI500): require trade_date column for proper
+    # per-day membership. Prefer explicit `is_csi300` boolean column if present
+    # (matches the input-data contract in CLAUDE.md); else inner-join with the PIT
+    # membership parquet; else final fallback to is_hs300/is_zz500 column or
+    # main-board regex.
+    if mode in _PIT_UNIVERSES:
+        legacy_col = {UniverseFilter.CSI300: "is_hs300",
+                      UniverseFilter.CSI500: "is_zz500"}[mode]
+        if legacy_col in df.columns:
+            return df.filter(pl.col(legacy_col) == True)  # noqa: E712
+        pit = _load_pit_universe(mode.value.upper())
+        if len(pit) > 0 and "trade_date" in df.columns:
+            return df.join(
+                pit.rename({"stock_code": "ts_code"}),
+                on=["ts_code", "trade_date"], how="inner",
+            )
+        # Last-resort fallback: main-board heuristic
         return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
-    if mode == UniverseFilter.ZZ500:
-        if "is_zz500" in df.columns:
-            return df.filter(pl.col("is_zz500") == True)  # noqa: E712
-        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
-
-    # ZZ1000 (and any future enum value) — fall back to main-board heuristic.
+    # ZZ1000 / unknown — fall back to main-board heuristic for safety.
     return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
 
