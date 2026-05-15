@@ -1316,10 +1316,10 @@ Strategy D's +8 % concentration effect **stacks additively** on a stronger base 
 
 ### 9.5 OSS handoff 方向约定 / OSS Handoff Directionality
 
-- `oss://ledashi-oss-sgp/fromsz/handoffs/...` = ledashi (4070 Windows) → paris (Ubuntu ECS) 方向
-- `oss://ledashi-oss-sgp/aurumq-rl/handoffs/...` = paris → ledashi 方向
-- ECS 在 sgp 区只能直传 `ledashi-oss-sgp`，CRR 自动同步到大陆 `ledashi-oss` 让 ledashi 拉取
-- **文档内的 `oss://` 路径要写主库（ledashi-oss/...），不要写源 bucket（ledashi-oss-sgp/...）**
+- `<PRIVATE_OBJECT_STORE>/handoffs/handoffs/...` = ledashi (4070 Windows) → paris (Ubuntu ECS) 方向
+- `<PRIVATE_OBJECT_STORE>/handoffs/...` = paris → ledashi 方向
+- ECS 在 sgp 区只能直传 `<PRIVATE_OBJECT_STORE>`，CRR 自动同步到大陆 `<PRIVATE_OBJECT_STORE>` 让 ledashi 拉取
+- **文档内的 `oss://` 路径要写主库（<PRIVATE_OBJECT_STORE>/...），不要写源 bucket（<PRIVATE_OBJECT_STORE>/...）**
 
 ### 9.6 全 Bug 索引（按 Phase 排序）/ Full Bug Index (by Phase)
 

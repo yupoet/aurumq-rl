@@ -1,8 +1,0 @@
-tech_boll_percent
-cmf_120d_pct_amt
-tech_evt_kdj_below_30_cross_decay10
-tech_evt_kdj_j_oversold_turn_decay10
-tech_evt_macd_zero_cross_decay10
-tech_evt_boll_squeeze_break_decay10
-tech_evt_ma5_cross_ma10_decay10
-tech_evt_vol_breakout_3sigma_decay10

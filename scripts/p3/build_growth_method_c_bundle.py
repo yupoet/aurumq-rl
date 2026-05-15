@@ -1,7 +1,7 @@
 """Build growth_method_c inference bundle for paris promote-after-shadow.
 
 Per paris REPLY v21 §3:
-  oss://ledashi-oss-sgp/fromsz/handoffs/2026-05-15-growth-method-c-bundle/
+  <PRIVATE_OBJECT_STORE>/handoffs/2026-05-15-growth-method-c-bundle/
   ├── meta_lgb_model.txt
   ├── feature_cols.json
   ├── isotonic.pkl
@@ -19,6 +19,13 @@ Pipeline:
 """
 from __future__ import annotations
 
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
+
 import hashlib
 import json
 import pickle
@@ -32,9 +39,9 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
 PANEL = "data/p3_4070_long/feature_panel_v3_344_pruned.parquet"
-LABEL_DIR = Path("D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-growth-labels")
+LABEL_DIR = Path(f"{_HANDOFF_INBOX}/2026-05-15-paris-growth-labels")
 UNIVERSE = Path("data/universes/GROWTH_BOARDS_membership.parquet")
-OUT = Path("D:/dev/aurumq-rl/runs/growth_method_c_bundle")
+OUT = Path("runs/growth_method_c_bundle")
 OUT.mkdir(parents=True, exist_ok=True)
 
 TRAIN_START = pd.Timestamp("2022-01-01").date()

@@ -16,6 +16,13 @@ Run after combined_panel_v2 download completes.
 """
 from __future__ import annotations
 
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
+
 import json
 import time
 from itertools import product
@@ -25,7 +32,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-PANEL_V2 = "D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-combined-panel-v2/combined_panel_v_x_v2.parquet"
+PANEL_V2 = f"{_HANDOFF_INBOX}/2026-05-15-paris-combined-panel-v2/combined_panel_v_x_v2.parquet"
 PANEL_LEDASHI = "data/p3_4070_long/feature_panel_v3_344_pruned.parquet"
 LABEL_TEMPLATE = "data/p3_4070_long/target_y_wave_{v}.parquet"
 PANEL_CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"

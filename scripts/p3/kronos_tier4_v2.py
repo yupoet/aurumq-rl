@@ -15,6 +15,13 @@ Mirror of matrix_v3.py but with paris combined_panel (union concat).
 """
 from __future__ import annotations
 
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
+
 import json
 import time
 from itertools import product
@@ -25,11 +32,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-PANEL_2022 = "D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-combined-panel-2022-backfill/combined_panel_v_x_2022.parquet"
-PANEL_PROD = "D:/dev/aurumq-handoffs/inbox/2026-05-17-paris-combined-panel/combined_panel_v_x.parquet"
+PANEL_2022 = f"{_HANDOFF_INBOX}/2026-05-15-paris-combined-panel-2022-backfill/combined_panel_v_x_2022.parquet"
+PANEL_PROD = f"{_HANDOFF_INBOX}/2026-05-17-paris-combined-panel/combined_panel_v_x.parquet"
 LABEL_TEMPLATE = "data/p3_4070_long/target_y_wave_{v}.parquet"
 PANEL_CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"
-TECH_LINES = "D:/dev/aurumq-handoffs/inbox/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
+TECH_LINES = f"{_HANDOFF_INBOX}/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
 UNIVERSE_DIR = Path("data/universes")
 OUT_DIR = Path("data/kronos/outputs/tier4_v2")
 OUT_DIR.mkdir(parents=True, exist_ok=True)

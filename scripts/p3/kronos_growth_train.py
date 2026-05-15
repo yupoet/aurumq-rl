@@ -9,6 +9,13 @@ Labels are binary 0/1 → use objective="binary" for proper handling.
 """
 from __future__ import annotations
 
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
+
 import json
 import time
 from pathlib import Path
@@ -18,9 +25,9 @@ import numpy as np
 import pandas as pd
 
 PANEL = "data/p3_4070_long/feature_panel_v3_344_pruned.parquet"
-GROWTH_LABELS_DIR = Path("D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-growth-labels")
+GROWTH_LABELS_DIR = Path(f"{_HANDOFF_INBOX}/2026-05-15-paris-growth-labels")
 PANEL_CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"
-TECH_LINES = "D:/dev/aurumq-handoffs/inbox/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
+TECH_LINES = f"{_HANDOFF_INBOX}/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
 UNIVERSE_DIR = Path("data/universes")
 OUT_DIR = Path("data/kronos/outputs/growth_v4")  # wave_binary hyperparam rerun (paris v19 lgb_params)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -87,7 +94,7 @@ def compute_realized_and_sim_growth(growth_set: frozenset[str]):
     t = time.time()
     print("[realized] loading paris combined_panel close cols for GROWTH ...", flush=True)
     p = pd.read_parquet(
-        "D:/dev/aurumq-handoffs/inbox/2026-05-17-paris-combined-panel/combined_panel_v_x.parquet",
+        f"{_HANDOFF_INBOX}/2026-05-17-paris-combined-panel/combined_panel_v_x.parquet",
         columns=["ts_code", "trade_date", "close", "pct_chg"],
     )
     p["trade_date"] = pd.to_datetime(p["trade_date"]).dt.date

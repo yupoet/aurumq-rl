@@ -1,7 +1,7 @@
 # Universes — AurumQ-RL 统一选股池定义
 
 > **Lock date**: 2026-05-14 by paris v15.2
-> **Source of truth**: `oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-5-universe-lock/`
+> **Source of truth**: `<PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-5-universe-lock/`
 > **Local cache**: `data/universes/<NAME>_membership.parquet` (gitignored)
 
 ## TL;DR
@@ -198,7 +198,7 @@ UniverseFilter.ZZ500              # → CSI500
 ## paris 端 OSS 落盘
 
 ```
-oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-5-universe-lock/
+<PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-5-universe-lock/
 ├── CSI300_membership.parquet              31,500 rows PIT
 ├── CSI500_membership.parquet              26,000 PIT
 ├── CSI1000_membership.parquet             34,001 PIT (含 Tushare 2022 H1 backfill)

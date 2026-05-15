@@ -17,6 +17,13 @@ Horizons: fwd5, fwd10, fwd20.
 """
 from __future__ import annotations
 
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
+
 import json
 import time
 from pathlib import Path
@@ -24,8 +31,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-PRED = "D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-9seed-ensemble-preds/path4_ensemble_preds.parquet"
-CLOSE = "D:/dev/aurumq-rl/data/p3_4070_long/stock_close_volume_daily.parquet"
+PRED = f"{_HANDOFF_INBOX}/2026-05-15-paris-9seed-ensemble-preds/path4_ensemble_preds.parquet"
+CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"
 
 WINDOWS = {
     "H2_2025":         (pd.Timestamp("2025-07-01").date(), pd.Timestamp("2025-12-31").date()),
@@ -144,7 +151,7 @@ def main() -> int:
         "deltas_vs_ensemble_cal": deltas,
         "total_time_s": time.time() - t0,
     }
-    out_path = Path("D:/dev/aurumq-rl/data/kronos/outputs/crosseval_9seed.json")
+    out_path = Path("data/kronos/outputs/crosseval_9seed.json")
     out_path.write_text(json.dumps(out, indent=2, default=str))
     print(f"\n[saved] {out_path}")
     print(f"[done] {time.time()-t0:.0f}s")

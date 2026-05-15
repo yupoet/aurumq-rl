@@ -12,9 +12,16 @@ New triggers:
   I_kdj_death   (kdj_k < kdj_d AND prev_kdj_k > prev_kdj_d)
   I_kdj_high_death (above + kdj_d.shift(1) > 70, only high-position)
 
-Source data: oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-paris-macd-kdj-raw/
+Source data: <PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-macd-kdj-raw/
 """
 from __future__ import annotations
+
+import os
+
+# Public consumers: set AURUMQ_HANDOFF_INBOX to your local data dir.
+# Default: data/handoffs/inbox/<bundle_dir>/<file>
+_HANDOFF_INBOX = os.environ.get("AURUMQ_HANDOFF_INBOX", "data/handoffs/inbox")
+
 
 import json
 import time
@@ -26,7 +33,7 @@ import pandas as pd
 PRED_PATH = "data/kronos/outputs/crosseval_predictions.parquet"
 V1_RESULTS = "data/kronos/outputs/crosseval_results.json"
 PANEL_CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"
-TECH_LINES = "D:/dev/aurumq-handoffs/inbox/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
+TECH_LINES = f"{_HANDOFF_INBOX}/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
 
 WINDOWS = {
     "H1_2025": (pd.Timestamp("2025-01-01").date(), pd.Timestamp("2025-06-30").date()),
@@ -262,7 +269,7 @@ def main() -> int:
         "config": {**v1.get("config", {}),
                    "dynamic_triggers": list(TRIGGERS),
                    "dynamic_K_max": K_MAX,
-                   "tech_lines_source": "oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-paris-macd-kdj-raw/",
+                   "tech_lines_source": "<PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-macd-kdj-raw/",
                    "v2_notes": "Added H/I triggers using paris-shipped raw MACD/KDJ"},
         "static": v1.get("static", {}),
         "dynamic": dyn_results,
@@ -350,7 +357,7 @@ def main() -> int:
     lines.append("- **I_kdj_death**: `kdj_k[t-1] > kdj_d[t-1] AND kdj_k[t] <= kdj_d[t]` (任意位置死叉)")
     lines.append("- **I_kdj_high_death**: I_kdj_death AND `kdj_d[t-1] > 70` (仅高位死叉)")
     lines.append("")
-    lines.append("Data source: `oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet` (paris ship, 2024-12-02 ~ 2026-05-13, MAIN_BOARD 3003 stocks).")
+    lines.append("Data source: `<PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-macd-kdj-raw/tech_lines_daily.parquet` (paris ship, 2024-12-02 ~ 2026-05-13, MAIN_BOARD 3003 stocks).")
     Path("data/kronos/outputs/crosseval_v2_table.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"[saved] crosseval_v2_results.json + crosseval_v2_table.md")
     print(f"\n[done] total {time.time()-t_total:.0f}s")

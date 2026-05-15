@@ -110,3 +110,34 @@ data/kronos/
 data/p3_4070_daily/
 data/paris_kronos_plan/
 data/weekly_eval_*/
+
+# Private operational scripts — internal infrastructure (OSS, handoff paths, etc.)
+# These hardcode private endpoints + bucket names; do NOT commit.
+# (Research scripts are kept; see scripts/p3/kronos_*.py for the open-source ones.)
+scripts/_pull*.py
+scripts/_push*.py
+scripts/_ship*.py
+scripts/_poll*.py
+scripts/_download*.py
+scripts/_run*.sh
+scripts/_smoke*.py
+scripts/_wait*.sh
+scripts/_inspect*.py
+scripts/oss_*.py
+scripts/oss_*.sh
+scripts/p3/_pull*.py
+scripts/p3/_push*.py
+scripts/p3/_ship*.py
+scripts/p3/_poll*.py
+scripts/p3/_download*.py
+scripts/p3/_smoke*.py
+scripts/p3/path_d_long_panel_retrain.sh
+
+# Internal handoff content (private bilateral communication; contains stock codes,
+# IC numbers, OSS paths, etc.). Public consumers route via their own object storage.
+handoffs/
+phase26fg_v3/
+run_phase26ef_overnight.sh
+docs/phase26/
+docs/superpowers/
+docs/TRAINING_HISTORY.md

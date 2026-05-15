@@ -65,7 +65,7 @@ Parquet 必须含字段：
 ### 4. Universe 过滤红线（2026-05-14 起 paris 锁定 5 universe）
 
 `UniverseFilter` 的 source of truth 是 paris ship 的 `data/universes/*_membership.parquet`
-（见 `oss://ledashi-oss/aurumq-rl/handoffs/2026-05-14-5-universe-lock/` 和
+（见 `<PRIVATE_OBJECT_STORE>/handoffs/2026-05-14-5-universe-lock/` 和
 `2026-05-14-npf-v2-1-main-board/`）。当 membership parquet 缺失时回退到 main-board regex。
 
 5 个锁定 universe:
