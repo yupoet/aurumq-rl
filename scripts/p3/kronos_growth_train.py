@@ -22,7 +22,7 @@ GROWTH_LABELS_DIR = Path("D:/dev/aurumq-handoffs/inbox/2026-05-15-paris-growth-l
 PANEL_CLOSE = "data/p3_4070_long/stock_close_volume_daily.parquet"
 TECH_LINES = "D:/dev/aurumq-handoffs/inbox/2026-05-14-paris-macd-kdj-raw/tech_lines_daily.parquet"
 UNIVERSE_DIR = Path("data/universes")
-OUT_DIR = Path("data/kronos/outputs/growth")
+OUT_DIR = Path("data/kronos/outputs/growth_v4")  # wave_binary hyperparam rerun (paris v19 lgb_params)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 TRAIN_START = pd.Timestamp("2022-01-01").date()
@@ -45,16 +45,18 @@ METHOD_TO_NAME = {"A": "v1", "B": "v2", "C": "v3", "D": "v4"}
 HORIZON = "t20"
 YEARS = [2022, 2023, 2024, 2025, 2026]
 
-# paris hyperparam (binary version)
+# paris production wave_binary hyperparam (v19 lgb_params_wave_binary.json)
 LGB_PARAMS = dict(
-    objective="binary", metric="binary_logloss",
-    learning_rate=0.05, num_leaves=127,
-    min_data_in_leaf=100,
-    feature_fraction=0.85, bagging_fraction=0.85, bagging_freq=5,
-    lambda_l1=0.1, lambda_l2=0.1,
-    n_estimators=120,
+    objective="binary", metric="average_precision",
+    boosting_type="gbdt",
+    learning_rate=0.05, num_leaves=63,
+    feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=5,
+    min_data_in_leaf=200,
+    n_estimators=500,
     verbose=-1, num_threads=-1, random_state=42,
 )
+EARLY_STOPPING_ROUNDS = 50
+VAL_FRAC = 0.15  # last 15% of train rows by date for early stopping
 
 
 def _dt(df):
@@ -270,10 +272,19 @@ def main():
             continue
 
         t = time.time()
+        train = train.sort_values("trade_date").reset_index(drop=True)
+        n_val = int(len(train) * VAL_FRAC)
+        tr = train.iloc[:-n_val]
+        va = train.iloc[-n_val:]
         model = lgb.LGBMClassifier(**LGB_PARAMS)
-        model.fit(train[base_cols], train["y"])
-        print(f"  train: {time.time()-t:.0f}s")
-        del train
+        model.fit(
+            tr[base_cols], tr["y"],
+            eval_set=[(va[base_cols], va["y"])],
+            eval_metric="average_precision",
+            callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
+        )
+        print(f"  train: {time.time()-t:.0f}s, best_iter={model.best_iteration_}, tr_rows={len(tr):,} va_rows={len(va):,}")
+        del train, tr, va
 
         t = time.time()
         preds = model.predict_proba(panel[base_cols])[:, 1].astype(np.float32)
@@ -321,8 +332,8 @@ def main():
         "results": results,
         "total_time_s": time.time() - t_total,
     }
-    Path("data/kronos/outputs/growth_results.json").write_text(json.dumps(out, indent=2, default=str))
-    print(f"\n[saved] growth_results.json + {len(results)} predictions")
+    Path("data/kronos/outputs/growth_v4_results.json").write_text(json.dumps(out, indent=2, default=str))
+    print(f"\n[saved] growth_v4_results.json + {len(results)} predictions")
     print(f"[done] total {time.time()-t_total:.0f}s")
     return 0
 
