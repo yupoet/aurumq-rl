@@ -57,19 +57,23 @@ CELLS = [
     ("v3", "NPF", "v2"),
 ]
 
-# paris path4_regression hyperparam (n_estimators=0 = no fixed cap, rely on early-stop)
+# paris path4_regression hyperparam, BUT fixed n=200 (no early-stop)
+# Reason: rmse on sparse wave_v* target (mean ≈ 0.029) early-stops at iter=1 because
+# the first tree already predicts mean = optimal-rmse-ish; subsequent trees add
+# < threshold improvement. Use fixed iterations (like matrix v3 did with n=120, just
+# bump to 200 since panel v2 is wider).
 LGB_PARAMS = dict(
     objective="regression", metric="rmse", boosting_type="gbdt",
     learning_rate=0.05, num_leaves=127,
     feature_fraction=0.85, bagging_fraction=0.85, bagging_freq=5,
     min_data_in_leaf=100,
     lambda_l1=0.1, lambda_l2=0.1,
-    n_estimators=2000,  # cap; early-stop decides actual
+    n_estimators=200,
     max_depth=-1,
     verbose=-1, num_threads=-1, random_state=42,
 )
-EARLY_STOPPING_ROUNDS = 100
-TRAIN_TAIL_VAL_FRAC = 0.15  # last 15% of train rows (by date) for early stop
+EARLY_STOPPING_ROUNDS = 0  # disabled
+TRAIN_TAIL_VAL_FRAC = 0.0  # no val split
 
 
 def _dt(df):
@@ -145,16 +149,26 @@ def load_panel(name):
         print(f"[panel] reading combined_panel_v_x_v2 ({PANEL_V2}) ...", flush=True)
         t = time.time()
         p = pd.read_parquet(PANEL_V2)
-        # float64 → float32, industry_code String → category, drop non-feature cols
-        for c in p.columns:
-            if p[c].dtype == np.float64:
-                p[c] = p[c].astype(np.float32)
+        # Convert trade_date FIRST
         p = _dt(p)
-        # Drop industry_code / industry_l1_name / industry_l2_name (string), pass numeric only to LGB
-        drop_str_cols = [c for c in p.columns if p[c].dtype == object or str(p[c].dtype).startswith("string")]
-        print(f"  drop string cols: {drop_str_cols[:10]}{'...' if len(drop_str_cols)>10 else ''} ({len(drop_str_cols)} cols)")
-        keep_cols = [c for c in p.columns if c not in drop_str_cols or c == "ts_code"]
-        p = p[keep_cols]
+        # Keep only numeric+bool cols + ts_code key. Strip name/industry_l1_name/etc.
+        drop_cols = []
+        for c in p.columns:
+            if c in ("ts_code", "trade_date"):
+                continue
+            if not (pd.api.types.is_numeric_dtype(p[c]) or pd.api.types.is_bool_dtype(p[c])):
+                drop_cols.append(c)
+        print(f"  drop non-numeric cols: {drop_cols[:10]}{'...' if len(drop_cols)>10 else ''} ({len(drop_cols)} cols)")
+        p = p.drop(columns=drop_cols)
+        # Coerce nullable Int (pandas Int64) → numpy int64; float64 → float32
+        for c in p.columns:
+            if c in ("ts_code", "trade_date"):
+                continue
+            dt = p[c].dtype
+            if str(dt).startswith("Int"):  # pandas nullable Int64/Int32
+                p[c] = p[c].astype("float32")  # NaN-safe; LGB handles
+            elif dt == np.float64:
+                p[c] = p[c].astype(np.float32)
         print(f"  panel v2: {len(p):,} rows × {len(p.columns)} cols ({time.time()-t:.0f}s)")
         return p
     elif name == "ledashi":
@@ -202,28 +216,19 @@ def main():
             label = all_labels[label_v]
             joined = upanel.merge(label, on=["ts_code", "trade_date"], how="inner")
             train_full = joined[(joined["trade_date"] >= TRAIN_START) & (joined["trade_date"] <= TRAIN_END)].copy()
-            train_full = train_full.sort_values("trade_date").reset_index(drop=True)
-            n_val = max(1, int(len(train_full) * TRAIN_TAIL_VAL_FRAC))
-            tr = train_full.iloc[:-n_val]
-            va = train_full.iloc[-n_val:]
-            print(f"  train rows: {len(tr):,} (val tail: {len(va):,})")
+            print(f"  train rows: {len(train_full):,}")
 
-            if len(tr) < 10000:
+            if len(train_full) < 10000:
                 print("  SKIP: train rows < 10K")
-                matrix_results[exp_id] = {"skipped": True, "train_rows": len(tr)}
+                matrix_results[exp_id] = {"skipped": True, "train_rows": len(train_full)}
                 continue
 
             t = time.time()
             model = lgb.LGBMRegressor(**LGB_PARAMS)
-            model.fit(
-                tr[base_cols], tr["y"],
-                eval_set=[(va[base_cols], va["y"])],
-                eval_metric="rmse",
-                callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
-            )
-            n_iter = model.best_iteration_ or LGB_PARAMS["n_estimators"]
-            print(f"  train: {time.time()-t:.0f}s, best_iter={n_iter}")
-            del train_full, tr, va
+            model.fit(train_full[base_cols], train_full["y"])
+            n_iter = LGB_PARAMS["n_estimators"]
+            print(f"  train: {time.time()-t:.0f}s, n_iter={n_iter} (fixed)")
+            del train_full
 
             t = time.time()
             preds = model.predict(upanel[base_cols]).astype(np.float32)
