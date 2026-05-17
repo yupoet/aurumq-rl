@@ -76,8 +76,9 @@ def _membership_available(name: str) -> bool:
     return len(_load_static_universe(name)) > 0
 
 
-@pytest.mark.skipif(not _membership_available("NPF"),
-                    reason="NPF membership parquet not staged locally")
+@pytest.mark.skipif(
+    not _membership_available("NPF"), reason="NPF membership parquet not staged locally"
+)
 def test_npf_default_is_main_board_only_401():
     """NPF v2.1 default: exactly 401 stocks, all main-board (60[0135]/00[0123])."""
     codes = _load_static_universe("NPF")
@@ -91,14 +92,19 @@ def test_npf_default_is_main_board_only_401():
             assert c[:3] in ("000", "001", "002", "003"), f"non-main-board SZ: {c}"
 
 
-@pytest.mark.skipif(not _membership_available("NPF"),
-                    reason="NPF membership parquet not staged locally")
+@pytest.mark.skipif(
+    not _membership_available("NPF"), reason="NPF membership parquet not staged locally"
+)
 def test_npf_filter_drops_growth_and_star_boards():
     df = pl.DataFrame(
-        {"ts_code": ["600519.SH",   # Mao, MAIN BOARD + NPF
-                     "300750.SZ",   # CATL, GROWTH (创业)
-                     "688001.SH",   # 华兴源创, STAR (科创)
-                     "999999.SZ"]}  # synthetic non-existent
+        {
+            "ts_code": [
+                "600519.SH",  # Mao, MAIN BOARD + NPF
+                "300750.SZ",  # CATL, GROWTH (创业)
+                "688001.SH",  # 华兴源创, STAR (科创)
+                "999999.SZ",
+            ]
+        }  # synthetic non-existent
     )
     out = filter_universe(df, mode=UniverseFilter.NPF)
     # Mao may or may not be in NPF; growth/star MUST be dropped
@@ -108,12 +114,13 @@ def test_npf_filter_drops_growth_and_star_boards():
     assert "999999.SZ" not in out_codes
 
 
-@pytest.mark.skipif(not _membership_available("GROWTH_BOARDS"),
-                    reason="GROWTH_BOARDS membership parquet not staged locally")
+@pytest.mark.skipif(
+    not _membership_available("GROWTH_BOARDS"),
+    reason="GROWTH_BOARDS membership parquet not staged locally",
+)
 def test_growth_boards_keeps_only_300_688_8xxxxx():
     df = pl.DataFrame(
-        {"ts_code": ["600519.SH", "300001.SZ", "688001.SH",
-                     "836999.BJ", "000001.SZ"]}
+        {"ts_code": ["600519.SH", "300001.SZ", "688001.SH", "836999.BJ", "000001.SZ"]}
     )
     out = filter_universe(df, mode=UniverseFilter.GROWTH_BOARDS)
     kept = set(out["ts_code"].to_list())
@@ -123,15 +130,18 @@ def test_growth_boards_keeps_only_300_688_8xxxxx():
     assert "688001.SH" in kept
 
 
-@pytest.mark.skipif(not _membership_available("MAIN_BOARD"),
-                    reason="MAIN_BOARD membership parquet not staged locally")
+@pytest.mark.skipif(
+    not _membership_available("MAIN_BOARD"),
+    reason="MAIN_BOARD membership parquet not staged locally",
+)
 def test_main_board_membership_3003():
     codes = _load_static_universe("MAIN_BOARD")
     assert len(codes) == 3003
 
 
-@pytest.mark.skipif(len(_load_pit_universe("CSI300")) == 0,
-                    reason="CSI300 PIT parquet not staged locally")
+@pytest.mark.skipif(
+    len(_load_pit_universe("CSI300")) == 0, reason="CSI300 PIT parquet not staged locally"
+)
 def test_csi300_pit_300_per_day():
     """At any single trading day, CSI300 should have exactly 300 stocks."""
     pit = _load_pit_universe("CSI300")
@@ -141,15 +151,18 @@ def test_csi300_pit_300_per_day():
     assert (counts["len"] >= 295).all() and (counts["len"] <= 305).all()
 
 
-@pytest.mark.skipif(len(_load_pit_universe("CSI300")) == 0,
-                    reason="CSI300 PIT parquet not staged locally")
+@pytest.mark.skipif(
+    len(_load_pit_universe("CSI300")) == 0, reason="CSI300 PIT parquet not staged locally"
+)
 def test_csi300_filter_per_date_join():
     """CSI300 filter joins per (ts_code, trade_date). Picks 600519.SH (Mao, always in)
     but drops 688001.SH (科创 not in CSI300)."""
-    df = pl.DataFrame({
-        "ts_code": ["600519.SH", "688001.SH"],
-        "trade_date": [dt.date(2025, 3, 3), dt.date(2025, 3, 3)],
-    })
+    df = pl.DataFrame(
+        {
+            "ts_code": ["600519.SH", "688001.SH"],
+            "trade_date": [dt.date(2025, 3, 3), dt.date(2025, 3, 3)],
+        }
+    )
     out = filter_universe(df, mode=UniverseFilter.CSI300)
     kept = set(out["ts_code"].to_list())
     assert "600519.SH" in kept
@@ -159,6 +172,7 @@ def test_csi300_filter_per_date_join():
 def test_legacy_aliases_resolve():
     """HS300 → CSI300, ZZ500 → CSI500, MAIN_BOARD_NON_ST → MAIN_BOARD: same enum semantics."""
     from aurumq_rl.data_loader import _LEGACY_ALIAS
+
     assert _LEGACY_ALIAS[UniverseFilter.HS300] == UniverseFilter.CSI300
     assert _LEGACY_ALIAS[UniverseFilter.ZZ500] == UniverseFilter.CSI500
     assert _LEGACY_ALIAS[UniverseFilter.MAIN_BOARD_NON_ST] == UniverseFilter.MAIN_BOARD

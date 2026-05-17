@@ -152,13 +152,15 @@ _LEGACY_ALIAS = {
 
 
 # Static universes use just stock_code, trade_date is NULL.
-_STATIC_UNIVERSES = frozenset({
-    UniverseFilter.MAIN_BOARD,
-    UniverseFilter.NPF,
-    UniverseFilter.NPF_FULL,
-    UniverseFilter.NPF_CROSS_BOARD,
-    UniverseFilter.GROWTH_BOARDS,
-})
+_STATIC_UNIVERSES = frozenset(
+    {
+        UniverseFilter.MAIN_BOARD,
+        UniverseFilter.NPF,
+        UniverseFilter.NPF_FULL,
+        UniverseFilter.NPF_CROSS_BOARD,
+        UniverseFilter.GROWTH_BOARDS,
+    }
+)
 
 # Point-in-time universes use (stock_code, trade_date) — index membership rebalances quarterly.
 _PIT_UNIVERSES = frozenset({UniverseFilter.CSI300, UniverseFilter.CSI500})
@@ -364,15 +366,15 @@ def filter_universe(
     # membership parquet; else final fallback to is_hs300/is_zz500 column or
     # main-board regex.
     if mode in _PIT_UNIVERSES:
-        legacy_col = {UniverseFilter.CSI300: "is_hs300",
-                      UniverseFilter.CSI500: "is_zz500"}[mode]
+        legacy_col = {UniverseFilter.CSI300: "is_hs300", UniverseFilter.CSI500: "is_zz500"}[mode]
         if legacy_col in df.columns:
             return df.filter(pl.col(legacy_col) == True)  # noqa: E712
         pit = _load_pit_universe(mode.value.upper())
         if len(pit) > 0 and "trade_date" in df.columns:
             return df.join(
                 pit.rename({"stock_code": "ts_code"}),
-                on=["ts_code", "trade_date"], how="inner",
+                on=["ts_code", "trade_date"],
+                how="inner",
             )
         # Last-resort fallback: main-board heuristic
         return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
