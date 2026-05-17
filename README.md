@@ -53,6 +53,7 @@
 - [§9 工程教训：从踩坑到守则](#9-工程教训--从踩坑到守则)
 - [§10 上手与复现](#10-上手与复现)
 - [§11 路线图、引用、许可](#11-路线图引用许可)
+- [§12 研究范式分类与未来方向](#12-research-paradigms)
 
 ### English TOC
 
@@ -67,6 +68,7 @@
 - [§9 Engineering Lessons: From Pitfalls to Operating Rules](#9-engineering-lessons)
 - [§10 Quick Start and Reproduction](#10-quick-start-and-reproduction)
 - [§11 Roadmap, Citation, License](#11-roadmap-citation-license)
+- [§12 Research Paradigms and Future Directions](#12-research-paradigms)
 
 ### Phase Timeline
 
@@ -1567,6 +1569,183 @@ For real-data training, users must: (1) acquire market data through compliant ch
 **Disclaimer (中文).** 本项目作者不对收益和风险承担任何责任。**请记住：量化策略历史回测优秀 ≠ 实盘赚钱**。
 
 **Disclaimer (English).** This project is for **educational and research purposes**. Backtested performance does **not** guarantee live trading profits. The authors take no responsibility for any financial losses incurred from using this code.
+
+---
+
+## §12 研究范式分类与未来方向 / Research Paradigms and Future Directions <a id="12-research-paradigms"></a>
+
+### 12.1 两大 paradigm 学术分类 / Two Research Paradigms
+
+A 股选股 ML 研究归两大 paradigm:
+
+#### Paradigm 1 — Predictive Cross-Sectional Modeling (前瞻横截面预测)
+
+**学名 / Academic name**:
+- Cross-Sectional Return Forecasting
+- Supervised Alpha Modeling
+- Forward Return Prediction
+
+**核心范式 / Core**: `features(t) → y(t)` 其中 `y(t) = f(forward_returns over [t+1, t+K])`。每天 rank stocks by predicted y,选 top-K。
+
+**业界占比 / Industry**: 主流 (Renaissance, Two Sigma, 多数对冲基金)。
+
+**子方向 / Sub-directions**:
+
+| algorithm family | 学名 | 代表 algorithm |
+|---|---|---|
+| Regression | Continuous target regression | LGB regression / XGBoost / CatBoost / MLP |
+| Classification | Binary / Quantile classification | LGB binary / Logistic / Probit |
+| Learning-to-Rank | Pairwise + listwise loss | LambdaMART / RankNet / ListNet |
+| Distributional | Quantile regression / Mixture density | LGB quantile / TabNet |
+| Multi-horizon Multi-task | Joint learning K=1/5/10/20 | Multi-head NN / multi-output LGB |
+| Sequence Models | LSTM / Transformer for tabular time-series | Kronos / FinBERT-style |
+| Stacking / Meta-learning | L1 / L2 ensemble | LGB / NN on base predictions |
+
+**所有 paradigm 1 共同特点**: 用 forward window 计算 label,无论 K=20 还是 K=1,无论 regression 还是 binary,本质都是预测"未来 K 天 outcome"。
+
+#### Paradigm 2 — Event-Anchored Pattern Recognition (事件锚定模式识别)
+
+**学名 / Academic name**:
+- Event Study + Case-Control Sampling (经济学/金融学派)
+- Pre-Event Pattern Detection
+- Anomaly / Novelty / Rare-Event Detection (ML 派)
+- Sequence-to-Event Models (深度学习派)
+
+**核心范式 / Core**: 历史扫一遍找 N 个 events,取每 event 前 T-1/T-3/T-5 天作 positive,随机非 pre-event day 作 negative。`features(t) → P(t is pre-event)`。
+
+**业界占比 / Industry**: 小众 (人工选股 + 部分模式识别 trading + 异常检测 quant)。
+
+**子方向 / Sub-directions**:
+
+| algorithm family | 学名 | 代表 algorithm |
+|---|---|---|
+| Event-Anchored Classification | Case-control logistic / Imbalanced binary | LGB / XGBoost on anchored samples |
+| Pattern Mining | Matrix Profile / Motif discovery | STUMPY / Time Series Subsequence search |
+| Imbalanced Classification | Focal loss / SMOTE oversampling | Focal-Loss LGB / XGBoost scale_pos_weight |
+| Anomaly Detection | Isolation Forest / Autoencoder | iForest / VAE |
+| Survival Analysis | Cox proportional hazards | scikit-survival / Cox-LGB |
+| Sequence-to-Event | LSTM / Transformer / TCN | DeepAR / Kronos fine-tune |
+| Self-Supervised Pre-training | Contrastive learning on time series | SimCLR-style for finance |
+
+**所有 paradigm 2 共同特点**: 用 backward 历史扫描定义 event,用 pre-event window 作正样本,严重 class imbalance,符合 "找主升浪前夕入场" 思路。
+
+### 12.2 当前研究进度 / Research Progress (updated 2026-05-17)
+
+#### Paradigm 1 (产出 1067+ cells of evidence)
+
+| matrix | scope | cells | status |
+|---|---|---|---|
+| matrix v3-v8 | Panel ablation 系列 (paris combined_panel evolution) | ~150 | ✅ done, RESULT v3-v8 shipped |
+| matrix v9 | direct ret_fwdK regression (short proximity attempt) | 60 | ✅ done, **failed** — IC weak/negative |
+| matrix v10 | 7 panel × 6 universe × 4 wave_v* × 7 sizing + 6 ES eval | 174 | ✅ **done** (5/16 12:30, 255 min) |
+| matrix v10b | + target_y (paris primary proximity, 5th label) | 42 | ✅ **done** (5/16 14:30, 111 min) |
+| matrix v10c | LGB binary classifier on wave_v* (P75 dense threshold) | 168 | ✅ **done** (5/16 21:00, 388 min) |
+| matrix v10de | CatBoost + XGBoost expanded (algorithm diversity) | 96 | ✅ **done** (5/17 00:50, 123 min, +inf fix re-fire) |
+| matrix v10fg | L1 meta stacker (24) + L2 hybrid blend (6) | 30 | ✅ **done** (5/17 01:02, meta 全 SKIP due to only 2/7 panel preds saved; hybrid completed) |
+| matrix v10h | Bootstrap CI post-processing on 207 pred parquets | 207 | ✅ **done** (5/17 01:56, 55 min, block-bootstrap 1000 iter on Sharpe NET) |
+| matrix v11 (paris sparse binary apples-to-apples) | 7 panel × 6 universe × 4 method (A/B/C/D) × 3 horizon (t1/t3/t5) | 504 | 🟡 **in progress** ~217/504 (43%, 5/17 10:18 OOM crash + resumed, ETA ~22:00) |
+
+**Key non-obvious findings from v10/v10b/v10c/v10de**:
+- **Label structure determines IC ceiling**, not panel/algorithm: wave_v3 sparse proximity → +4% IC vs target_y dense calibrated proximity → +2% IC on same MAIN_BOARD ledashi cell.
+- **Universe×Regime alpha extreme**: target_y NPF Q1 IC **+10.22%** (panel-invariant across 7 panels), target_y HARD_TECH H2 +6.29% & Q1 +10.82% (dual-regime record), CSI500 H2 +7.97% but Q1 -2.00% (bull-rotation flip).
+- **Phase C concept_* features over-engineered**: v2_null vs ledashi (no Phase C) on theme universes Q1 IC differ < 0.7pp (Phase C marginal); on HARD_TECH wave_v3 binary, Phase C NULL **rescues Q1 +5.24pp** vs Phase C present.
+- **No single panel/label wins all universes** (paper-level evidence):
+  - wave_v3 wins MAIN_BOARD + HARD_TECH + NPF_FULL binary
+  - wave_v4 wins CSI1000 + NPF binary
+  - wave_v2 wins CSI500 binary
+  - LGB binary wins theme universes (NPF/NPF_FULL/HARD_TECH); CatBoost wins PIT universes (CSI500/CSI1000)
+- **r2b 232-col minimalist panel** reaches CSI1000 wave_v3 binary equi-regime gold standard (H2 +5.61% / Q1 +4.62% / spread 0.99pp) with **only 3 trees** — feature engineering minimalism wins.
+- **3 equi-regime gold cells found** (spread < 0.5pp + Sharpe NET ≥ 3.5):
+  - HARD_TECH v3unified wave_v4 binary: +5.84/+5.87/Sharpe +4.09 (spread 0.03pp ⭐⭐⭐)
+  - HARD_TECH v2_no_phase_c wave_v2 binary: +4.19/+4.22/Sharpe +4.12 (spread 0.03pp)
+  - MAIN_BOARD v2_no_phase_c wave_v4 binary: +3.24/+3.18/Sharpe +3.64 (spread 0.06pp)
+- **Sparse 0.8% label trains model 50-225 trees** (paris production-aligned, no best_iter=1 early-stop bug like dense 25% label).
+
+#### Paradigm 2 (anchor-based main rising wave)
+
+| matrix | scope | status |
+|---|---|---|
+| Phase 1 short proximity labels (paris ship 5/16) | 4 method × 3 horizon × 6 universe, target_pos_rate=0.008 | ✅ shipped, used by v11 |
+| Phase 2 anchor labels β + α (paris ship 5/16) | 3 anchor (T-1/T-3/T-5) × 6 universe × {α 5-condition, β PELT-hybrid} | ✅ shipped, used by v12 |
+| matrix v12 anchor-based (planned) | 7 panel × 6 universe × 3 anchor × {α, β} = 252 cells | 🟡 next after v11 |
+| Imbalanced loss variants | Focal-Loss / SMOTE on anchor labels | future |
+| Sequence-to-Event | Kronos fine-tune for pre-event detection | future |
+
+#### paris ↔ ledashi handoff cadence (5/16 single day)
+v24 (Phase 1 + Phase 2 labels + LABELS_SPEC + IC pre-estimate) → v25 (P2 reference data 5 files) → v25b (wave_v3 retro 2025+ true OOS) → v26 (catboost+xgb hyperparams + 5 reverse-ask answers) → v27 (wave_v1/v2/v4 retro + IC ROI table + regime labels + best_iter table) → 14 docs / 700+ files / ~95 MB cumulative.
+
+### 12.3 实证结论 / Empirical Findings (2026-05-15..17)
+
+来自 matrix v3-v10de 全 paradigm-1 横评 + bootstrap CI on 207 cells:
+
+**Panel × Regime interaction** (validated bootstrap CI v10h):
+- **ledashi 226 pruned panel**: H2 momentum regime best on broad universes (MAIN_BOARD/CSI1000 wave_v3 IC +4.14%)
+- **paris tier4_v2_old 378 panel**: NPF binary H2 + Sharpe powerhouse (+5.59 / +4.43 avg vs ledashi +3.01/+3.69)
+- **v3unified (paris production candidate 244 cols)**: NPF Q1 IC **+11.07%** record holder + NPF_FULL wave_v3 binary equi-regime gold (+5.47/+4.28 spread 1.19pp)
+- **r2b 232-col minimalist**: CSI1000 wave_v3 binary dual-regime gold with **only 3 trees** (+5.61 H2 / +4.62 Q1)
+- **Phase C concept features over-engineered**: NULL or drop both 0.3-1pp Q1 stability gain on theme universes (NPF/HARD_TECH)
+
+**Label × Algorithm interaction** (formal evidence v10c+v10de):
+- **wave_v3 sparse proximity** → highest IC across most cells (LGB binary +4.34 > regression +4.14)
+- **wave_v4 (direct proximity)** → best Q1 regime stability on theme universes
+- **wave_v1 binary** → systematically weak (best_iter often = 1/2, no learnable signal)
+- **wave_v2 binary** → fast learner (2-12 trees) on PIT universes
+- **target_y (paris primary 83% pos rate)** → 1/2 the IC of wave_v3 (label sparsity dominates)
+- **paris sparse 0.8% binary** → 30x lower positive rate, model trains 50-225 trees, IC ~0.5-3% (production-relevant decision)
+- **CatBoost dominates PIT mid-cap universes (CSI500/CSI1000 Q1 +3.93%/+1.56% vs LGB +1.30%/+1.81%)**
+- **LGB binary dominates theme universes (NPF/NPF_FULL/HARD_TECH Q1 +0.36% / +2.03% / -1.51% — only positive Q1)**
+- **XGBoost generic params consistently 3rd weakest** (need paris-tuned hyperparams for v10de_v2)
+
+**Universe × Label × Panel interaction (3D)**:
+- 6 universes × 4 wave_v* × 7 panels = no global best combination
+- Production stack MUST use regime detector + universe×label×panel routing
+- **Best dual-regime equi-stable cells** (spread < 0.5pp, Sharpe NET ≥ 3.5):
+  - HARD_TECH × v3unified × wave_v4 binary: H2 +5.84% / Q1 +5.87% / Sharpe +4.09 (spread **0.03pp** ⭐⭐⭐)
+  - HARD_TECH × v2_no_phase_c × wave_v2 binary: H2 +4.19 / Q1 +4.22 / Sharpe +4.12 (spread 0.03pp)
+  - MAIN_BOARD × v2_no_phase_c × wave_v4 binary: H2 +3.24 / Q1 +3.18 / Sharpe +3.64 (spread 0.06pp)
+
+**Sizing**: top_k=5/10/15/20/30/50 + adaptive scheme. Production sweet spot ~10-30 names per universe. Sharpe NET typically 1.5-4.5 after 0.20% round-trip cost (extreme +4.79 on r2a HARD_TECH wave_v3 binary).
+
+**Dyn-exit production champions**:
+- MAIN_BOARD wave_v3 + Q_OR_FIE ensemble = best
+- CSI1000 wave_v3 + J5_take_profit_5 = highest Sharpe NET seen
+- F_trend_break (close < MA5) = wife's strategy, robust across universes
+
+**paris production label distribution insight** (paris v26+ confirmed):
+- paris production wave_v[1234] static train cutoff 2024-12, NO walk-forward retrain
+- paris label = global static τ from train-window search with target_pos_rate=0.008 (0.8% positive)
+- ledashi v10c dense P75 cross-section threshold = 25% positive → 30x noise → best_iter=1 early-stop bug
+- v25b retro-score 2025-01+ subset = true paris production-style OOS baseline
+
+### 12.4 未来研究方向 / Future Research Directions
+
+**Tier 1 (1-2 weeks)**:
+- v11 short-K proximity labels (paradigm 1 short-horizon completion)
+- v11+ anchor-based main-rising-wave label (paradigm 2 entry)
+- Walk-forward rolling retrain (paradigm 1 robustness verification)
+- Sector-neutral alpha decomposition (paradigm 1 cleanliness)
+
+**Tier 2 (1-3 months)**:
+- Meta-learner across panels (paradigm 1 model diversity)
+- Risk-parity portfolio construction (replace top-K equal-weight)
+- Regime classifier conditional model (HMM / vol-regime)
+- Hyperparam Optuna search (Bayesian)
+
+**Tier 3 (3+ months)**:
+- Sequence-to-Event models (paradigm 2 deep learning)
+- Self-supervised pre-training on time-series subsequences
+- Intraday signals integration (tick-level + cross-asset basis)
+- Cross-asset signals (futures basis, ETF flow, options skew)
+
+### 12.5 论文化 / Toward Publication
+
+The matrix v3-v10 series produces academic-grade evidence on:
+- Panel design × regime interaction (paper draft target: "Cross-sectional alpha decomposition by regime in A-share markets")
+- Hyperparam-label fit (paper draft target: "Regression vs binary classifier choice in proximity-weighted forecasting")
+- Dyn-exit ensemble alpha (paper draft target: "Adaptive exit triggers in factor-based portfolios")
+- Comparison Paradigm 1 vs Paradigm 2 (future paper after anchor-based label complete)
+
+PRs welcomed for: anchor-based label math formula refinement, paradigm-2 algorithm benchmarks, sector-neutral decomposition implementations.
 
 ---
 
