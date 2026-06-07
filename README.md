@@ -1673,6 +1673,15 @@ A 股选股 ML 研究归两大 paradigm:
 | v10h | bootstrap CI | 207×4 | top cells from v10/v10c/v10d/v10e | itself | shipped |
 | **v11** | **P1 binary sparse (paris 0.8%)** | **504** | 7×6 × 4 methods × 3 horizons | **missing** | shipped (no CI) |
 | **v12** | **P2 anchor α/β** | **252** (147 valid + 105 skip) | 7×6 × 2 specs × 3 anchors | **missing** | shipped (no CI; β sparse) |
+| **v13** | **P3 Kronos sequence anchor** | **22** | 6 univ × 3 anchor × α full + β-MAIN_BOARD + null control | planned | scheduled 5/22 evening fire |
+
+**v13 paradigm 3 matrix** (post paris ACK_v30 + ledashi ACK-of-ACK shipped 5/19 PM):
+- Architecture: reuse `aurumq_predictor_small` encoder → 1536-dim hidden state (60d + 120d concat) → +1 log(free_float_mv) → 1537-dim → LGB binary head
+- D-1 leakage guard strict (paris ACK §R2): `embedding(D) = encoder(OHLCV[D-seq:D-1])`
+- Skip Phase 1 explicit pre-train (ledashi optimization, saves 2-4h; fallback if Phase 3 全军覆没)
+- 22 cells: 21 main (18 α + 3 β-MAIN_BOARD) + 1 null-embedding random control (paris Q1 strong-rec)
+- Compute: Phase 2 ~3-4h GPU embed extract + Phase 3 ~1.5h LGB train + Phase 4 ~1h eval
+- Production gate: if 5 cells meet (Sharpe NET ≥ 3.0 + dual-regime + bootstrap CI lower > 0) → Track 11 paradigm 3 catalog launches
 
 ### 12.3 实证结论 / Empirical Findings (paper-level, multi-paradigm)
 

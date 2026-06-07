@@ -161,6 +161,61 @@ pytest tests/test_perf.py --benchmark-only
 
 退化超过 20% 视为回归，必须修复或写明原因。
 
+## 持续科研协议 (Ongoing Research Protocol)
+
+本项目不只是工程,**也是持续 ML research**。每轮 matrix 实验后,Claude 必须:
+
+### 1. 维护研究 paradigm 分类
+
+两大 paradigm:
+
+**Paradigm 1 — Predictive Cross-Sectional Modeling (前瞻横截面预测)**
+- `features(t) → y(t) = f(forward_returns over [t+1, t+K])`
+- 子方向: Regression / Binary Classification / Learning-to-Rank / Distributional / Multi-horizon Multi-task / Sequence Models / Stacking
+- 业界主流(Renaissance, Two Sigma, paris production)
+- 我们 matrix v3-v10/v10b-h 全部归属
+
+**Paradigm 2 — Event-Anchored Pattern Recognition (事件锚定模式识别)**
+- 历史扫一遍找 events → take pre-event window as positive → binary classifier
+- 子方向: Event-Anchored Classification / Pattern Mining / Imbalanced Classification / Anomaly Detection / Survival Analysis / Sequence-to-Event / Self-Supervised Pre-training
+- 小众但跟"找前夕入场"策略直接 aligned
+- 我们规划 v11+ anchor-based label 进入
+
+任何新 matrix 实验 design **必须先标注** 属于 paradigm 1 还是 2,以及具体 sub-direction。
+
+### 2. 每轮 matrix 后更新 README §12
+
+每轮 matrix v* 跑完,Claude 主动更新 `README.md §12.2 研究进度` 表 + `§12.3 实证结论`。不要等用户提醒。
+
+### 3. 实证结论的报告要求
+
+**强结论 (statistically significant)** vs **弱结论 (need bootstrap CI)** 必须显式区分:
+
+- 单 cell sample 充分 (MAIN_BOARD/CSI 系列, > 200K eval rows, IC SE < 0.015): 0.3pp 差距 = significant
+- Small universe (NPF/HARD_TECH, < 50K rows, IC SE ≥ 0.018): 0.5pp 内 = within noise,需要 bootstrap CI
+- 跨 panel/algorithm 比较只能在 sample size 平衡时下结论
+
+### 4. 路径化论文积累
+
+matrix 系列产出可论文化的 evidence,目标:
+- "Cross-sectional alpha decomposition by regime in A-share markets" (panel × regime interaction)
+- "Regression vs binary classifier choice in proximity-weighted forecasting" (hyperparam-label fit)
+- "Adaptive exit triggers in factor-based portfolios" (dyn-exit ensemble alpha)
+- "Paradigm 1 vs Paradigm 2 comparison in stock selection" (future, after anchor-based 完成)
+
+Claude 在新 evidence 出现时,**主动指出"这条结论可以进 paper X"**。
+
+### 5. 数据隐私与公开
+- 论文 / 公开 README 里的 IC 数字披露相对差距 + 量级 即可,不暴露具体 panel 名 / factor 内部命名 / OSS 路径
+- 内部讨论 / 私 handoff 可用具体数字 + 路径
+- 商业 data vendor (Tushare 等) endpoint / token format 永不出现
+
+### 6. 完整 label / model inventory 维护
+
+每次用户问 label 数量,Claude 必须给出**完整 inventory** (包括 paris primary `target_y.parquet` + 4 个 `target_y_wave_v*.parquet`),不要只说 "4 个 wave"。Paris growth_labels (24 binary GROWTH labels) 也要算上。
+
+---
+
 ## 不要做的事
 
 - ❌ 不要把真实 A 股数据 commit 到仓库（即使脱敏过）
