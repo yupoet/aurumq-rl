@@ -162,8 +162,10 @@ def test_filter_all_a_keeps_everything(universe_df: pl.DataFrame) -> None:
 def test_filter_main_board_non_st(universe_df: pl.DataFrame) -> None:
     out = filter_universe(universe_df, mode=UniverseFilter.MAIN_BOARD_NON_ST)
     codes = set(out["ts_code"].to_list())
-    # Only main-board, non-ST
-    assert codes == {"600519.SH", "002594.SZ", "601398.SH"}
+    # Main-board only. ST-named rows are KEPT (C3): ST exclusion is per-date
+    # via the is_st column / eligibility masks, not a load-time name drop
+    # that would erase the stock's pre-ST history (survivorship bias).
+    assert codes == {"600519.SH", "000001.SZ", "002594.SZ", "601398.SH"}
 
 
 def test_filter_main_board_excludes_chinext_star_bj(universe_df: pl.DataFrame) -> None:
@@ -190,8 +192,9 @@ def test_filter_zz1000_falls_back_to_main_board(universe_df: pl.DataFrame) -> No
     assert len(out) > 0
 
 
-def test_filter_st_skipped_when_name_col_missing() -> None:
-    # When the `name` column is absent, ST filter is silently skipped.
+def test_filter_works_without_name_col() -> None:
+    # The name column plays no role in load-time filtering (C3) — board
+    # membership is code-based and ST-ness is handled per-date downstream.
     df = pl.DataFrame({"ts_code": ["600519.SH", "000001.SZ"]})
     out = filter_universe(df, mode=UniverseFilter.MAIN_BOARD_NON_ST)
     assert len(out) == 2

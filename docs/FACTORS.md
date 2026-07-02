@@ -122,10 +122,13 @@ constraints are tuned for the main board.
 
 ### ST detection
 
-ST detection is purely name-based: the regex `r"\*?ST|退"` is applied to the
-`name` column. If the `name` column is absent, ST filtering is silently
-skipped. We trust the data pipeline to keep names current; we do **not**
-maintain an internal list of ST tickers.
+ST exclusion is **per date**, not load time (C3 survivorship fix): rows stay
+in the panel and `is_st_array` (from the `is_st` column; if that column is
+absent, the row-level `name` regex `r"\*?ST|退"` is the fallback) flags the
+dates a stock is actually ST. The env trading mask, train_v2 valid mask, and
+the eval scripts exclude those (date, stock) cells. A stock's pre-ST history
+is never dropped because its *current* name contains ST/退 — that would be
+survivorship bias. We do **not** maintain an internal list of ST tickers.
 
 ## 6. Data contract recap
 

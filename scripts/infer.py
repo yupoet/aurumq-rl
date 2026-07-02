@@ -144,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             scores = np.concatenate([scores, np.zeros(n - scores.shape[0], dtype=np.float32)])
 
+    # C3: the panel keeps ST-dated rows (per-date ST filtering). Exclude
+    # stocks that are ST on the eval date from the picks; -inf sorts last.
+    scores = np.where(panel.is_st_array[t_idx], -np.inf, scores)
+
     sorted_idx = np.argsort(scores)[::-1]
     top_idx = sorted_idx[: args.top_k]
     picks = [

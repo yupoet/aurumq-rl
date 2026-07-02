@@ -130,6 +130,9 @@ def main() -> int:
                     s = model.policy.action_net(feats["per_stock"]).squeeze(-1)
                     scores.append(s[0].detach().cpu().numpy())
             preds = np.stack(scores, axis=0)
+            # C3: panel keeps ST-dated rows; enforce non-ST per date. NaN
+            # preds are excluded by the isfinite masks in backtest helpers.
+            preds = np.where(panel.is_st_array, np.nan, preds)
             result, _series = run_backtest_with_series(
                 predictions=preds,
                 returns=panel.return_array,

@@ -28,12 +28,18 @@ because of missing factor groups; the model just sees those positions as 0.
 
 Universe filter
 ---------------
-Default ``UniverseFilter.MAIN_BOARD_NON_ST`` excludes:
+Default ``UniverseFilter.MAIN_BOARD_NON_ST`` excludes at load time:
 
 * BSE (.BJ, codes 8/4)
 * STAR market (688)
 * ChiNext (300/301)
-* ST/*ST stocks
+
+ST/退 exclusion is PER DATE, not load time (C3): rows stay in the panel and
+``is_st_array`` (from the ``is_st`` column, or the row-level ``name`` as a
+fallback) flags the dates a stock is actually ST. Downstream eligibility
+masks — the env trading mask, train_v2's valid mask, the eval scripts —
+exclude those (date, stock) cells. Dropping a stock's whole history because
+its *current* name contains ST/退 is survivorship bias.
 
 Other modes: ``ALL_A`` (no filter), ``HS300``, ``ZZ500``, ``ZZ1000``.
 
@@ -152,6 +158,15 @@ _LEGACY_ALIAS = {
 
 
 # Static universes use just stock_code, trade_date is NULL.
+#
+# LIMITATION (C3, disclosed — not fixed): these are date-less membership
+# snapshots locked on ``STATIC_UNIVERSE_LOCK_DATE`` and applied to FULL
+# history. Stocks that delisted before the lock date are absent from every
+# historical date, which inflates historical labels/backtests (survivorship
+# bias). True point-in-time membership (as CSI300/CSI500 already have) needs
+# upstream data this repo does not ship; until then :func:`filter_universe`
+# emits a UserWarning whenever a static universe is applied to a panel that
+# starts meaningfully before the lock date.
 _STATIC_UNIVERSES = frozenset(
     {
         UniverseFilter.MAIN_BOARD,
@@ -161,6 +176,14 @@ _STATIC_UNIVERSES = frozenset(
         UniverseFilter.GROWTH_BOARDS,
     }
 )
+
+# Membership lock date of the static universes (paris `2026-05-14-5-universe-lock`
+# / `2026-05-14-npf-v2-1-main-board` bundles).
+STATIC_UNIVERSE_LOCK_DATE = datetime.date(2026, 5, 14)
+
+# Panels starting more than this many days before the lock date trigger the
+# survivorship disclosure warning ("meaningfully before" the lock).
+_SURVIVORSHIP_WARN_GRACE_DAYS = 30
 
 # Point-in-time universes use (stock_code, trade_date) — index membership rebalances quarterly.
 _PIT_UNIVERSES = frozenset({UniverseFilter.CSI300, UniverseFilter.CSI500})
@@ -317,6 +340,35 @@ def _load_pit_universe(name: str) -> pl.DataFrame:
     return df
 
 
+def _warn_static_membership_survivorship(df: pl.DataFrame, mode: UniverseFilter) -> None:
+    """Emit the C3 survivorship disclosure for static membership snapshots.
+
+    Fires when a date-less locked membership set is applied to a panel whose
+    date range starts meaningfully before ``STATIC_UNIVERSE_LOCK_DATE``:
+    stocks delisted before the lock date are absent from ALL dates, so
+    historical windows carry survivorship bias.
+    """
+    if "trade_date" not in df.columns or df.is_empty():
+        return
+    start = df["trade_date"].min()
+    if isinstance(start, datetime.datetime):
+        start = start.date()
+    if not isinstance(start, datetime.date):
+        return
+    grace = datetime.timedelta(days=_SURVIVORSHIP_WARN_GRACE_DAYS)
+    if start >= STATIC_UNIVERSE_LOCK_DATE - grace:
+        return
+    warnings.warn(
+        f"Universe '{mode.value}' is a static membership snapshot locked on "
+        f"{STATIC_UNIVERSE_LOCK_DATE}; stocks delisted before the lock date are "
+        f"absent from ALL dates, so this panel (starts {start}) carries "
+        "survivorship bias in historical windows. Point-in-time membership "
+        "(as CSI300/CSI500 have) is the real fix.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def filter_universe(
     df: pl.DataFrame,
     mode: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
@@ -331,8 +383,11 @@ def filter_universe(
     mode:
         Filter mode (see :class:`UniverseFilter`).
     name_col:
-        Column holding stock name (used for ST detection). If absent,
-        ST filtering is skipped.
+        Unused; retained for backward compatibility. ST exclusion is no
+        longer name-based at load time — it is enforced PER DATE via the
+        panel's ``is_st`` column and the downstream eligibility masks (C3:
+        dropping a stock's whole history for a *current* ST/退 name is
+        survivorship bias).
 
     Returns
     -------
@@ -344,21 +399,18 @@ def filter_universe(
     # Resolve legacy aliases (HS300 → CSI300, ZZ500 → CSI500, MAIN_BOARD_NON_ST → MAIN_BOARD)
     mode = _LEGACY_ALIAS.get(mode, mode)
 
-    # Static universe filter from paris's locked membership parquets
+    # Static universe filter from paris's locked membership parquets.
+    # NOTE: board membership (code patterns / locked sets) is applied at load
+    # time; ST-ness is NOT — rows stay in the panel and `is_st_array` carries
+    # the per-date flag for the env/train/eval eligibility masks.
     if mode in _STATIC_UNIVERSES:
         codes = _load_static_universe(mode.value.upper())
         if codes:
-            df = df.filter(pl.col("ts_code").is_in(list(codes)))
-            # For MAIN_BOARD: also exclude ST if name col present (defensive — paris's
-            # membership parquet already excludes ST/退, but legacy panels may not).
-            if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
-                df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
-            return df
-        # Fall back to regex when membership parquet missing (synthetic / pre-lock data)
-        df = df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
-        if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
-            df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
-        return df
+            _warn_static_membership_survivorship(df, mode)
+            return df.filter(pl.col("ts_code").is_in(list(codes)))
+        # Fall back to regex when membership parquet missing (synthetic / pre-lock
+        # data). Code-based board patterns are time-invariant — no snapshot bias.
+        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
     # Point-in-time universe (CSI300 / CSI500): require trade_date column for proper
     # per-day membership. Prefer explicit `is_csi300` boolean column if present
@@ -795,6 +847,20 @@ class FactorPanelLoader:
         days_since_ipo_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
 
         has_is_st = "is_st" in df.columns
+        if not has_is_st and "name" in df.columns:
+            # Per-date ST fallback (C3): with no `is_st` column, derive the
+            # flag per ROW from the name. When the exporter stores historical
+            # names this is point-in-time; with current-name snapshots it
+            # degrades to the old name-based behavior, but confined to the
+            # eligibility mask instead of erasing pre-ST history from the panel.
+            df = df.with_columns(
+                pl.col("name")
+                .cast(pl.Utf8)
+                .str.contains(_ST_NAME_PATTERN.pattern)
+                .fill_null(False)
+                .alias("is_st")
+            )
+            has_is_st = True
         has_days_ipo = "days_since_ipo" in df.columns
         # `adj_factor` is optional: when present, forward returns are computed
         # on adjusted close (close * adj_factor) so corporate actions
@@ -981,6 +1047,7 @@ class FactorPanelLoader:
 __all__ = [
     "FactorPanel",
     "FactorPanelLoader",
+    "STATIC_UNIVERSE_LOCK_DATE",
     "UniverseFilter",
     "FACTOR_COL_PREFIXES",
     "REQUIRED_COLUMNS",

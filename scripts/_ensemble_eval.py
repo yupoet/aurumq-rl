@@ -279,6 +279,9 @@ def main() -> int:
             preds = per_member[labels[0]].astype(np.float64)
         else:
             preds = _aggregate(per_member, labels, agg)
+        # C3: panel keeps ST-dated rows; enforce non-ST per date. NaN preds
+        # are excluded by the isfinite masks in backtest helpers.
+        preds = np.where(panel.is_st_array, np.nan, preds)
         result, _series = run_backtest_with_series(
             predictions=preds,
             returns=panel.return_array,

@@ -203,6 +203,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[backtest] predictions shape: {out.shape}")
 
+    # C3: the panel now KEEPS ST-dated rows (per-date ST filtering instead of
+    # a load-time name drop). Enforce non-ST eligibility here: NaN predictions
+    # are excluded by the isfinite masks inside the backtest helpers, so ST
+    # (date, stock) cells can never enter the top-K or the IC.
+    n_st_cells = int(panel.is_st_array.sum())
+    if n_st_cells:
+        out = np.where(panel.is_st_array, np.nan, out)
+        print(f"[backtest] masked {n_st_cells} per-date ST cells from predictions")
+
     result, series = run_backtest_with_series(
         predictions=out,
         returns=panel.return_array,

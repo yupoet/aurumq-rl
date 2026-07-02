@@ -278,7 +278,7 @@ Three ways to get data: (1) synthetic demo (`generate_synthetic.py`), (2) export
 2. **`main_board`**: `60[0135]\d{3}.SH` ∪ `00[0123]\d{3}.SZ`（剔除 300***/688***/689***/4xx/8xx/9xx）
 3. **`listed`**: `days_since_ipo ≥ 60`（新股 60 日保护）
 4. **`not_delisted`**: `stock_info.delist_date IS NULL`
-5. **`not_st`**: `is_st == False` AND stock_name 不含 "ST" / "*ST" / "退"
+5. **`not_st`**: 按当日 `is_st == False` 逐日过滤（C3:不再按当前名称删除整段历史,避免幸存者偏差;无 `is_st` 列时才按行级名称回退）
 6. **`not_suspended`**: 当日非停牌（vol > 0 也涵盖此条件）
 
 应用顺序很重要：先 `data_ok` 再 `main_board`，避免在停牌日按板别 regex 算返回值时遇到 NaN/Null 行的 regex 失败。
@@ -295,7 +295,7 @@ panel = load_panel("data.parquet", universe_filter=UniverseFilter.ALL_NON_ST)
 panel = load_panel("data.parquet", universe_filter=UniverseFilter.HS300)
 ```
 
-**English.** Default `UniverseFilter.MAIN_BOARD_NON_ST` applies six AND-gates: `data_ok` (has bar + vol > 0), `main_board` (regex `60[0135]\d{3}.SH ∪ 00[0123]\d{3}.SZ`), `listed` (days_since_ipo ≥ 60), `not_delisted`, `not_st` (`is_st = False` AND `stock_name` excludes ST/*ST/退), `not_suspended`. Ordering matters: `data_ok` before `main_board` to avoid regex on NaN. Alternative filters: `ALL_NON_ST`, `HS300`, `ZZ500`, or supply your own callable.
+**English.** Default `UniverseFilter.MAIN_BOARD_NON_ST` applies six AND-gates: `data_ok` (has bar + vol > 0), `main_board` (regex `60[0135]\d{3}.SH ∪ 00[0123]\d{3}.SZ`), `listed` (days_since_ipo ≥ 60), `not_delisted`, `not_st` (per-date `is_st = False`; C3: no whole-history name-based drop — that is survivorship bias; row-level name is only a fallback when `is_st` is missing), `not_suspended`. Ordering matters: `data_ok` before `main_board` to avoid regex on NaN. Alternative filters: `ALL_NON_ST`, `HS300`, `ZZ500`, or supply your own callable.
 
 ### 2.4 模块架构 / Module Architecture
 
