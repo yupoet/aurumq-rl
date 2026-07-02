@@ -693,6 +693,11 @@ def main(argv: list[str] | None = None) -> int:
         "n_envs": args.n_envs,
         "obs_shape": [n_stocks, n_factors],
         "action_shape": [n_stocks],
+        # C8: train_v2 never wraps VecNormalize — the model consumes raw
+        # (z-scored) panel obs. Recorded explicitly so eval loaders
+        # (aurumq_rl.vecnorm_eval.resolve_obs_normalizer) never mistake a
+        # gpu_v2 run for a VecNormalize-trained one.
+        "obs_normalized": False,
         "factor_count": n_factors,
         "stock_codes": panel.stock_codes,
         "factor_names": panel.factor_names,
