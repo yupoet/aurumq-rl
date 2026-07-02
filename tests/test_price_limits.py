@@ -259,6 +259,33 @@ def test_half_cent_boundary_rounds_up_not_down() -> None:
     assert not at_up[0, 0]
 
 
+@pytest.mark.parametrize(
+    ("prev", "non_limit_close", "limit_close"),
+    [
+        (1.15, 1.26, 1.27),  # 1.15 * 1.10 = 1.265 → exchange publishes 1.27
+        (2.35, 2.58, 2.59),  # 2.35 * 1.10 = 2.585 → exchange publishes 2.59
+    ],
+)
+def test_half_cent_boundary_float32_vectorized(
+    prev: float, non_limit_close: float, limit_close: float
+) -> None:
+    """Re-review fix: under PRODUCTION dtype (float32 close/pct from the
+    loader), the reconstructed prev_close carries ~1e-7 relative noise, so
+    prev * (1 + limit) can land below the exact half-cent and floor the
+    limit price one tick low — falsely flagging a non-limit close (the
+    +1e-9 nudge only covers float64 product noise). The reconstruction must
+    be snapped to the 0.01 grid (exchange prev closes are tick-quantized)
+    BEFORE the limit price is computed."""
+    pct = np.array(
+        [[(non_limit_close - prev) / prev, (limit_close - prev) / prev]],
+        dtype=np.float32,
+    )
+    close = np.array([[non_limit_close, limit_close]], dtype=np.float32)
+    at_up, _ = compute_at_limit_masks(pct, ["600000.SH", "600000.SH"], close=close)
+    assert not at_up[0, 0], f"{non_limit_close} is one tick below the true limit {limit_close}"
+    assert at_up[0, 1], f"{limit_close} is the true exchange limit price"
+
+
 # ---------------------------------------------------------------------------
 # compute_at_limit_masks — vectorized (T, S) detection shared by training/eval
 # ---------------------------------------------------------------------------

@@ -420,6 +420,16 @@ def compute_at_limit_masks(
         # half-tick _PRICE_EPSILON absorbs the comparison side of that.
         with np.errstate(divide="ignore", invalid="ignore"):
             prev_close = close64 / (1.0 + pct)
+        # Snap the reconstruction to the 0.01 grid: exchange prev closes are
+        # always tick-quantized, but float32-origin close/pct noise (~1e-7
+        # relative) can land prev * (1 + limit_pct) BELOW an exact half-cent
+        # and floor the limit price one tick low — falsely flagging a close
+        # one tick under the true limit (e.g. prev 1.15 → 1.26 flagged when
+        # the true limit is 1.27). The +1e-9 nudge below only covers float64
+        # product noise; quantizing removes reconstruction noise at the
+        # source. _PRICE_EPSILON protects the comparison side, not this
+        # limit-price side.
+        prev_close = np.floor(prev_close * 100.0 + 0.5) / 100.0
         have_price = (
             np.isfinite(close64) & (close64 > 0) & np.isfinite(prev_close) & (prev_close > 0)
         )
