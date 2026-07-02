@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         FactorPanelLoader,
         UniverseFilter,
         align_panel_to_stock_list,
+        build_tradeable_mask,
     )
 
     args = parse_args(argv)
@@ -203,14 +204,17 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[backtest] predictions shape: {out.shape}")
 
-    # C3: the panel now KEEPS ST-dated rows (per-date ST filtering instead of
-    # a load-time name drop). Enforce non-ST eligibility here: NaN predictions
-    # are excluded by the isfinite masks inside the backtest helpers, so ST
-    # (date, stock) cells can never enter the top-K or the IC.
-    n_st_cells = int(panel.is_st_array.sum())
-    if n_st_cells:
-        out = np.where(panel.is_st_array, np.nan, out)
-        print(f"[backtest] masked {n_st_cells} per-date ST cells from predictions")
+    # C3+M5: enforce per-date eligibility through the SHARED tradeable mask
+    # (~suspended & ~ST & IPO gate & ~limit-up & ~limit-down) — the same
+    # data_loader.build_tradeable_mask the GPU training path uses, so
+    # training and eval agree exactly. This subsumes the earlier ST-only
+    # prediction NaN-ing (Task B/C3); the mask is applied to top-K
+    # selection, IC AND the random baseline inside the backtest helpers.
+    tradeable = build_tradeable_mask(panel)
+    print(
+        f"[backtest] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} "
+        f"cells eligible (ST/suspended/IPO/price-limit excluded)"
+    )
 
     result, series = run_backtest_with_series(
         predictions=out,
@@ -220,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         n_random_simulations=args.n_random_simulations,
         random_seed=args.seed,
         forward_period=args.forward_period,
+        tradeable_mask=tradeable,
     )
 
     out_path = args.run_dir / "backtest.json"

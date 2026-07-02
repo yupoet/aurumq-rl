@@ -19,7 +19,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter, build_tradeable_mask
 from aurumq_rl.gpu_env import GPUStockPickingEnv
 from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
 from aurumq_rl.policy import PerStockEncoderPolicy
@@ -347,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 dates=list(panel.dates),
                 stock_codes=list(panel.stock_codes),
                 factor_names=[panel.factor_names[i] for i in keep_idx],
+                close_array=panel.close_array,
             )
             n_dates, n_stocks, n_factors = panel.factor_array.shape
             print(f"[train_v2] dropped {len(dropped_factors)} factor cols matching {prefixes}: "
@@ -373,10 +374,26 @@ def main(argv: list[str] | None = None) -> int:
         _gb = panel_t.element_size() * panel_t.numel() / 1e9
         print(f"[train_v2] panel kept as fp32 ({_gb:.2f} GB on cuda)")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
+    # C4: entry eligibility comes from the SHARED tradeable mask
+    # (~ST & ~suspended & IPO gate & ~limit-up & ~limit-down at decision
+    # date) — the same function the backtest eval scripts use, so training
+    # and evaluation agree exactly. PARITY RULE: matches the CPU env's
+    # _apply_trading_mask (both limit directions are untradeable). A stock
+    # that closed limit-up at t is an unexecutable fill whose forward
+    # return must never be credited.
+    tradeable_np = build_tradeable_mask(panel)
+    n_limit_masked = int(
+        (
+            (~panel.is_st_array)
+            & (~panel.is_suspended_array)
+            & (panel.days_since_ipo_array >= 60)
+            & ~tradeable_np
+        ).sum()
+    )
+    print(f"[train_v2] tradeable mask: {int(tradeable_np.sum()):,}/{tradeable_np.size:,} "
+          f"cells eligible ({n_limit_masked:,} masked by price limits)")
     valid_basic_np = (
-        (~panel.is_st_array)
-        & (~panel.is_suspended_array)
-        & (panel.days_since_ipo_array >= 60)
+        tradeable_np
         # Missing cells carry NaN forward returns (C2) — exclude them so
         # the reward never averages a NaN.
         & np.isfinite(panel.return_array)

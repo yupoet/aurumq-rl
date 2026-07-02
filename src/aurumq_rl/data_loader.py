@@ -217,6 +217,13 @@ class FactorPanel(NamedTuple):
         list[str], length n_stocks.
     factor_names:
         list[str], length n_factors.
+    close_array:
+        shape (n_dates, n_stocks), RAW (unadjusted) close prices with NaN
+        for missing cells, or ``None`` when the source has no prices
+        (e.g. the synthetic panel). Used by
+        :func:`aurumq_rl.price_limits.compute_at_limit_masks` to
+        reconstruct rounded limit prices (M7); price-limit rules operate
+        on raw exchange prices, so this stays unadjusted.
     """
 
     factor_array: np.ndarray
@@ -228,6 +235,7 @@ class FactorPanel(NamedTuple):
     dates: list[datetime.date]
     stock_codes: list[str]
     factor_names: list[str]
+    close_array: np.ndarray | None = None
 
 
 def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str]) -> FactorPanel:
@@ -275,6 +283,8 @@ def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str])
     is_st_array = _gather(panel.is_st_array, True)  # missing → ST (un-tradeable)
     is_suspended_array = _gather(panel.is_suspended_array, True)  # missing → suspended
     days_since_ipo_array = _gather(panel.days_since_ipo_array, 0)
+    # missing → NaN close (price-limit detection falls back to pct epsilon)
+    close_array = _gather(panel.close_array, np.nan) if panel.close_array is not None else None
 
     return FactorPanel(
         factor_array=factor_array,
@@ -286,6 +296,39 @@ def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str])
         dates=list(panel.dates),
         stock_codes=list(target_stock_codes),
         factor_names=list(panel.factor_names),
+        close_array=close_array,
+    )
+
+
+def build_tradeable_mask(panel: FactorPanel) -> np.ndarray:
+    """(T, S) bool mask of cells eligible for ENTRY at decision date t.
+
+    ``~suspended & ~ST & (days_since_ipo >= 60) & ~at_limit_up & ~at_limit_down``
+
+    SINGLE SOURCE OF TRUTH (C4/M5): the GPU training valid_mask
+    (scripts/train_v2.py) and the backtest eval scripts
+    (eval_backtest / _eval_all_checkpoints / _ensemble_eval) must both use
+    this function so training and evaluation agree exactly.
+
+    Parity rule: matches the CPU env's ``env._apply_trading_mask`` — BOTH
+    limit-up and limit-down closes are untradeable (a limit-up close cannot
+    be bought; a limit-down close is treated symmetrically per the CPU env).
+    """
+    from aurumq_rl.price_limits import compute_at_limit_masks
+
+    at_up, at_down = compute_at_limit_masks(
+        pct_chg=panel.pct_change_array,
+        stock_codes=list(panel.stock_codes),
+        is_st=panel.is_st_array,
+        days_since_ipo=panel.days_since_ipo_array,
+        close=panel.close_array,
+    )
+    return (
+        (~panel.is_st_array)
+        & (~panel.is_suspended_array)
+        & (panel.days_since_ipo_array >= NEW_STOCK_PROTECT_DAYS)
+        & ~at_up
+        & ~at_down
     )
 
 
@@ -946,6 +989,9 @@ class FactorPanelLoader:
             dates=dates,
             stock_codes=stock_codes,
             factor_names=factor_cols,
+            # RAW close (NaN for missing cells) — price limits use exchange
+            # prices, never adjusted ones.
+            close_array=close_array,
         )
 
     def get_date_range(self) -> tuple[datetime.date | None, datetime.date | None]:
@@ -1055,4 +1101,6 @@ __all__ = [
     "discover_factor_columns",
     "filter_universe",
     "pivot_adjusted_close",
+    "align_panel_to_stock_list",
+    "build_tradeable_mask",
 ]

@@ -114,6 +114,7 @@ def _apply_trading_mask(
     days_since_ipo: np.ndarray,
     stock_codes: list[str] | None = None,
     respect_dynamic_price_limits: bool = True,
+    close: np.ndarray | None = None,
 ) -> np.ndarray:
     """Zero out returns for untradeable stocks.
 
@@ -128,29 +129,32 @@ def _apply_trading_mask(
     respect_dynamic_price_limits:
         True  → board-aware threshold via ``aurumq_rl.price_limits``.
         False → legacy ±9.5% threshold.
+    close            : optional (n_stocks,) RAW close prices — enables the
+        rounded-limit-price detection (M7) that catches low-price limit
+        closes the pct epsilon misses; None → pct-epsilon fallback.
 
     Returns
     -------
     masked_returns : (n_stocks,) with untradeable stocks set to 0.
+
+    PARITY RULE (C4): the GPU training path builds its valid_mask from
+    ``data_loader.build_tradeable_mask`` which uses the same
+    ``price_limits.compute_at_limit_masks`` — BOTH limit-up and limit-down
+    closes are untradeable in CPU and GPU envs alike.
     """
-    from aurumq_rl.price_limits import is_at_limit_down, is_at_limit_up
+    from aurumq_rl.price_limits import compute_at_limit_masks
 
     mask = np.ones(len(returns), dtype=bool)
 
     if respect_dynamic_price_limits and stock_codes is not None:
-        is_st_bool = is_st.astype(bool)
-        for i, code in enumerate(stock_codes):
-            st_flag = bool(is_st_bool[i])
-            pct = float(pct_changes[i])
-            try:
-                if is_at_limit_up(code, pct, is_st=st_flag) or is_at_limit_down(
-                    code, pct, is_st=st_flag
-                ):
-                    mask[i] = False
-            except ValueError:
-                # Unknown board → fall back to legacy threshold
-                if abs(pct) >= LIMIT_PCT_THRESHOLD:
-                    mask[i] = False
+        at_up, at_down = compute_at_limit_masks(
+            pct_chg=np.asarray(pct_changes, dtype=np.float64)[None, :],
+            stock_codes=list(stock_codes),
+            is_st=is_st.astype(bool)[None, :],
+            days_since_ipo=np.asarray(days_since_ipo, dtype=np.float64)[None, :],
+            close=None if close is None else np.asarray(close, dtype=np.float64)[None, :],
+        )
+        mask &= ~(at_up[0] | at_down[0])
     else:
         # Legacy ±9.5% threshold
         mask &= np.abs(pct_changes) < LIMIT_PCT_THRESHOLD
@@ -243,6 +247,7 @@ if GYM_AVAILABLE:
             days_since_ipo_panel: np.ndarray | None = None,
             industry_codes: np.ndarray | None = None,
             stock_codes: list[str] | None = None,
+            close_panel: np.ndarray | None = None,
         ) -> None:
             super().__init__()
 
@@ -281,6 +286,11 @@ if GYM_AVAILABLE:
                 else np.zeros(n_stocks, dtype=np.int32)
             )
             self._stock_codes: list[str] | None = stock_codes
+            # Optional RAW close prices: enables rounded-limit-price
+            # detection in _apply_trading_mask (M7).
+            self._close_panel: np.ndarray | None = (
+                close_panel.astype(np.float32) if close_panel is not None else None
+            )
 
             # Gym spaces
             self.observation_space = spaces.Box(
@@ -339,6 +349,11 @@ if GYM_AVAILABLE:
                 days_since_ipo=self._days_since_ipo_panel[t].astype(np.float64),
                 stock_codes=self._stock_codes,
                 respect_dynamic_price_limits=self.config.respect_dynamic_price_limits,
+                close=(
+                    self._close_panel[t].astype(np.float64)
+                    if self._close_panel is not None
+                    else None
+                ),
             )
 
             portfolio_return = float(np.dot(holdings, masked_returns))

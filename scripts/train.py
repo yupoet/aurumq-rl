@@ -449,6 +449,9 @@ def make_env(
                 is_suspended_panel=panel.is_suspended_array,
                 days_since_ipo_panel=panel.days_since_ipo_array,
                 stock_codes=panel.stock_codes,
+                # M7: raw close prices enable rounded-limit-price detection
+                # in _apply_trading_mask (None → pct-epsilon fallback).
+                close_panel=panel.close_array,
             )
         else:
             from aurumq_rl.portfolio_weight_env import (

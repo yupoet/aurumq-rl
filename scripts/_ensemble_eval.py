@@ -52,6 +52,7 @@ from aurumq_rl.data_loader import (
     FactorPanelLoader,
     UniverseFilter,
     align_panel_to_stock_list,
+    build_tradeable_mask,
 )
 
 
@@ -233,6 +234,13 @@ def main() -> int:
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[ensemble] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
+    # C3+M5: shared tradeable mask (~suspended & ~ST & IPO gate &
+    # ~limit-up & ~limit-down) — same data_loader.build_tradeable_mask as
+    # the training valid_mask, applied to top-K, IC and random baseline.
+    # Subsumes the earlier per-date ST-only prediction NaN-ing.
+    tradeable = build_tradeable_mask(panel)
+    print(f"[ensemble] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} cells eligible")
+
     panel_t = torch.from_numpy(panel.factor_array).to(args.device)
 
     # Score each member once, cache to disk for re-use across variants.
@@ -279,9 +287,6 @@ def main() -> int:
             preds = per_member[labels[0]].astype(np.float64)
         else:
             preds = _aggregate(per_member, labels, agg)
-        # C3: panel keeps ST-dated rows; enforce non-ST per date. NaN preds
-        # are excluded by the isfinite masks in backtest helpers.
-        preds = np.where(panel.is_st_array, np.nan, preds)
         result, _series = run_backtest_with_series(
             predictions=preds,
             returns=panel.return_array,
@@ -290,6 +295,7 @@ def main() -> int:
             n_random_simulations=args.n_random_simulations,
             random_seed=0,
             forward_period=args.forward_period,
+            tradeable_mask=tradeable,
         )
         rb = result.random_baseline
         rand_p50_adj = rb.get("p50_sharpe_adjusted", 0.0)

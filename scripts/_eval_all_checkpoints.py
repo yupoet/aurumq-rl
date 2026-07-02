@@ -37,6 +37,7 @@ from aurumq_rl.data_loader import (
     FactorPanelLoader,
     UniverseFilter,
     align_panel_to_stock_list,
+    build_tradeable_mask,
 )
 
 _CKPT_RE = re.compile(r"ppo_(\d+)_steps\.zip$")
@@ -112,6 +113,13 @@ def main() -> int:
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[eval] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
+    # C3+M5: shared tradeable mask (~suspended & ~ST & IPO gate &
+    # ~limit-up & ~limit-down) — same data_loader.build_tradeable_mask as
+    # the training valid_mask, applied to top-K, IC and random baseline.
+    # Subsumes the earlier per-date ST-only prediction NaN-ing.
+    tradeable = build_tradeable_mask(panel)
+    print(f"[eval] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} cells eligible")
+
     panel_t = torch.from_numpy(panel.factor_array).to(args.device)
 
     custom_objects = {"rollout_buffer_class": RolloutBuffer}
@@ -130,9 +138,6 @@ def main() -> int:
                     s = model.policy.action_net(feats["per_stock"]).squeeze(-1)
                     scores.append(s[0].detach().cpu().numpy())
             preds = np.stack(scores, axis=0)
-            # C3: panel keeps ST-dated rows; enforce non-ST per date. NaN
-            # preds are excluded by the isfinite masks in backtest helpers.
-            preds = np.where(panel.is_st_array, np.nan, preds)
             result, _series = run_backtest_with_series(
                 predictions=preds,
                 returns=panel.return_array,
@@ -141,6 +146,7 @@ def main() -> int:
                 n_random_simulations=args.n_random_simulations,
                 random_seed=0,
                 forward_period=forward_period,
+                tradeable_mask=tradeable,
             )
             label = f"{step}" if step >= 0 else "final"
             rb = result.random_baseline

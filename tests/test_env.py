@@ -85,6 +85,50 @@ def test_apply_trading_mask_dynamic_price_limit() -> None:
     assert masked[0] != 0.0
 
 
+def test_apply_trading_mask_rounded_limit_low_price() -> None:
+    """M7: with close prices available, limit detection reconstructs the
+    rounded limit price so low-price limit-ups (< pct epsilon) are caught."""
+    returns = np.array([0.05, 0.05])
+    # prev_close 1.53 → limit price 1.68 = +9.80%, below the old 9.9% epsilon.
+    pct = np.array([0.0, (1.68 - 1.53) / 1.53])
+    close = np.array([10.0, 1.68])
+    is_st = np.zeros(2, dtype=bool)
+    susp = np.zeros(2, dtype=bool)
+    days_ipo = np.array([100, 100])
+    masked = _apply_trading_mask(
+        returns,
+        pct,
+        is_st,
+        susp,
+        days_ipo,
+        stock_codes=["600000.SH", "600519.SH"],
+        close=close,
+        respect_dynamic_price_limits=True,
+    )
+    assert masked[1] == 0.0  # limit-up close is untradeable
+    assert masked[0] != 0.0
+
+
+def test_apply_trading_mask_limit_down_also_masked() -> None:
+    """CPU env parity rule: BOTH limit-up and limit-down closes are excluded."""
+    returns = np.array([0.05, 0.05])
+    pct = np.array([0.0, -0.10])
+    is_st = np.zeros(2, dtype=bool)
+    susp = np.zeros(2, dtype=bool)
+    days_ipo = np.array([100, 100])
+    masked = _apply_trading_mask(
+        returns,
+        pct,
+        is_st,
+        susp,
+        days_ipo,
+        stock_codes=["600000.SH", "600519.SH"],
+        respect_dynamic_price_limits=True,
+    )
+    assert masked[1] == 0.0
+    assert masked[0] != 0.0
+
+
 # ---------------------------------------------------------------------------
 # _apply_industry_constraint
 # ---------------------------------------------------------------------------

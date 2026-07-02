@@ -131,6 +131,102 @@ def test_nan_returns_do_not_poison_rewards():
     assert np.isfinite(rewards).all(), "NaN returns must be nan-guarded to 0"
 
 
+# ---------------------------------------------------------------------------
+# CPU-device tests (C4). GPUStockPickingEnv accepts device="cpu" so the
+# masking / reward logic is testable without CUDA; the cuda-residency guard
+# still applies for the default device="cuda".
+# ---------------------------------------------------------------------------
+
+
+def _make_cpu_env(returns_np, valid_np, top_k, n_stocks, cost_bps=0.0):
+    n_dates = returns_np.shape[0]
+    panel = torch.zeros((n_dates, n_stocks, 3), dtype=torch.float32)
+    returns = torch.from_numpy(returns_np.astype(np.float32))
+    valid = torch.from_numpy(valid_np)
+    env = GPUStockPickingEnv(
+        panel,
+        returns,
+        valid,
+        n_envs=1,
+        episode_length=10,
+        forward_period=5,
+        top_k=top_k,
+        cost_bps=cost_bps,
+        device="cpu",
+        seed=0,
+    )
+    env.reset()
+    env.t.zero_()  # deterministic start at t=0
+    env.last_obs_t = env.t.clone()
+    return env
+
+
+def test_default_device_still_requires_cuda_tensor():
+    panel = torch.zeros((30, 5, 3))
+    returns = torch.zeros((30, 5))
+    valid = torch.ones((30, 5), dtype=torch.bool)
+    with pytest.raises(ValueError, match="cuda"):
+        GPUStockPickingEnv(panel, returns, valid, n_envs=1)
+
+
+def test_cpu_device_construction_and_step():
+    n_dates, n_stocks = 30, 6
+    returns_np = np.zeros((n_dates, n_stocks), dtype=np.float32)
+    valid_np = np.ones((n_dates, n_stocks), dtype=np.bool_)
+    env = _make_cpu_env(returns_np, valid_np, top_k=3, n_stocks=n_stocks)
+    env.step_async(np.zeros((1, n_stocks), dtype=np.float32))
+    obs, rewards, dones, infos = env.step_wait()
+    assert obs.shape == (1, n_stocks, 3)
+    assert np.isfinite(rewards).all()
+
+
+def test_invalid_stock_never_credited_in_reward():
+    """C4: a stock invalid at t (e.g. closed limit-up) must not enter the
+    top-K reward even when the policy scores it highest."""
+    n_dates, n_stocks = 30, 6
+    returns_np = np.full((n_dates, n_stocks), 0.01, dtype=np.float32)
+    returns_np[0, 0] = 1.0  # huge return on the invalid stock
+    valid_np = np.ones((n_dates, n_stocks), dtype=np.bool_)
+    valid_np[0, 0] = False  # limit-up at decision date t=0
+    env = _make_cpu_env(returns_np, valid_np, top_k=2, n_stocks=n_stocks)
+    action = np.zeros((1, n_stocks), dtype=np.float32)
+    action[0, 0] = 1.0  # policy loves the invalid stock
+    env.step_async(action)
+    _, rewards, _, _ = env.step_wait()
+    # Reward = mean over 2 valid picks (0.01 each), NOT (1.0 + 0.01) / 2.
+    assert rewards[0] == pytest.approx(0.01, abs=1e-6)
+
+
+def test_fewer_valid_than_top_k_uses_only_valid_picks():
+    """C4 adjacent bug: when valid_count < top_k, torch.topk pads with -inf
+    picks; their (real, possibly large) returns must NOT enter the mean."""
+    n_dates, n_stocks = 30, 5
+    returns_np = np.full((n_dates, n_stocks), 1.0, dtype=np.float32)
+    returns_np[0, 0] = 0.02
+    returns_np[0, 1] = 0.04
+    valid_np = np.zeros((n_dates, n_stocks), dtype=np.bool_)
+    valid_np[0, :2] = True  # only 2 valid stocks; top_k=4
+    valid_np[1:] = True
+    env = _make_cpu_env(returns_np, valid_np, top_k=4, n_stocks=n_stocks)
+    env.step_async(np.zeros((1, n_stocks), dtype=np.float32))
+    _, rewards, _, _ = env.step_wait()
+    # Mean over the 2 REAL picks only: (0.02 + 0.04) / 2 = 0.03.
+    # The old code averaged over top_k=4 including two invalid stocks
+    # whose returns are 1.0 → (0.02 + 0.04 + 1.0 + 1.0) / 4 = 0.515.
+    assert rewards[0] == pytest.approx(0.03, abs=1e-6)
+
+
+def test_zero_valid_stocks_yields_zero_reward_minus_cost():
+    n_dates, n_stocks = 30, 4
+    returns_np = np.full((n_dates, n_stocks), 1.0, dtype=np.float32)
+    valid_np = np.ones((n_dates, n_stocks), dtype=np.bool_)
+    valid_np[0] = False  # nothing tradeable at t=0
+    env = _make_cpu_env(returns_np, valid_np, top_k=2, n_stocks=n_stocks, cost_bps=30.0)
+    env.step_async(np.zeros((1, n_stocks), dtype=np.float32))
+    _, rewards, _, _ = env.step_wait()
+    assert rewards[0] == pytest.approx(-30.0 / 1e4, abs=1e-7)
+
+
 @cuda
 def test_sb3_ppo_one_rollout():
     """Smoke: SB3 PPO can collect one rollout against our VecEnv without crashing."""

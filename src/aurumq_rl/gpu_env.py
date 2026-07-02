@@ -39,15 +39,20 @@ class GPUStockPickingEnv(VecEnv):
         # the reward for action taken at t.
         hold_returns: torch.Tensor | None = None,  # (T, S) fp32 cuda
     ) -> None:
-        if panel.device.type != "cuda":
-            raise ValueError("panel must be a cuda tensor")
+        # Residency guard: the panel must live on the env device. With the
+        # default device="cuda" this keeps the original protection against
+        # accidentally-CPU panels in training; device="cpu" allows the
+        # masking/reward logic to be tested without CUDA.
+        expected_device = torch.device(device).type
+        if panel.device.type != expected_device:
+            raise ValueError(f"panel must be a {expected_device} tensor")
         if panel.shape[0] != returns.shape[0] or panel.shape[1] != returns.shape[1]:
             raise ValueError("panel and returns date/stock dims must match")
         if panel.shape[:2] != valid_mask.shape:
             raise ValueError("panel and valid_mask date/stock dims must match")
         if hold_returns is not None:
-            if hold_returns.device.type != "cuda":
-                raise ValueError("hold_returns must be a cuda tensor")
+            if hold_returns.device.type != expected_device:
+                raise ValueError(f"hold_returns must be a {expected_device} tensor")
             if hold_returns.shape != returns.shape:
                 raise ValueError(
                     f"hold_returns shape {tuple(hold_returns.shape)} must match "
@@ -128,10 +133,15 @@ class GPUStockPickingEnv(VecEnv):
         # corrupting evaluate_actions during PPO updates.
         self.last_obs_t = self.t.clone()
 
-        # 1. mask invalid stocks (they can never enter top-K)
+        # 1. mask invalid stocks (they can never enter top-K).
+        #    PARITY RULE (C4): valid_mask is built by the caller
+        #    (scripts/train_v2.py via data_loader.build_tradeable_mask) with
+        #    the same semantics as the CPU env's _apply_trading_mask —
+        #    ~ST & ~suspended & IPO gate & neither limit-up NOR limit-down
+        #    at the decision date, plus finite forward returns.
         action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
         # 2. top-K
-        top_idx = torch.topk(action, k=self.top_k, dim=-1).indices  # (n_envs, K)
+        top_scores, top_idx = torch.topk(action, k=self.top_k, dim=-1)  # (n_envs, K)
         # 3. realized return. Phase 22: prefer hold_returns (per-stock realized
         #    hold_return under MA5/MA10 signal exit, capped at 5 days) when
         #    provided; else fall back to V1's 10d forward mean. Both use the
@@ -143,7 +153,14 @@ class GPUStockPickingEnv(VecEnv):
         # valid on a date, topk can still select a masked stock — treat its
         # return as 0 (the pre-C2 semantics) instead of poisoning the mean.
         fwd_rets = torch.nan_to_num(fwd_rets, nan=0.0)
-        rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
+        # C4 fix: when a date has fewer than top_k valid stocks, topk pads
+        # with -inf-scored (invalid) picks whose REAL returns would otherwise
+        # enter the mean. Zero those picks and average over real picks only
+        # (clamp avoids 0/0 on dates with no valid stock → reward = -cost).
+        real_pick = torch.isfinite(top_scores)  # (n_envs, K)
+        fwd_rets = fwd_rets * real_pick
+        n_real = real_pick.sum(dim=-1).clamp(min=1)
+        rewards = fwd_rets.sum(dim=-1) / n_real - self.cost_bps / 1e4
         # 4. turnover penalty (Jaccard-style)
         if self.turnover_coef > 0.0:
             overlap = torch.zeros_like(rewards)
