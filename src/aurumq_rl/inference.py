@@ -112,8 +112,9 @@ class RlAgentInference:
             Shape must match ``metadata.obs_shape``. Accepts 1D or 2D
             (with batch dim). Auto-converted to float32.
         deterministic:
-            True: deterministic policy output (default).
-            False: preserve any distribution sampling in the model.
+            Accepted for backward compatibility only. Since C6 the exported
+            graph IS the deterministic action (the distribution mean is
+            baked in at export time), so this flag has no runtime effect.
 
         Returns
         -------

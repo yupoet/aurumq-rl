@@ -54,6 +54,7 @@ from aurumq_rl.data_loader import (
     align_panel_to_stock_list,
     build_tradeable_mask,
 )
+from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -245,7 +246,7 @@ def main() -> int:
 
     # Score each member once, cache to disk for re-use across variants.
     per_member: dict[str, np.ndarray] = {}
-    for label, zp, _ in members:
+    for label, zp, mp in members:
         if not zp.exists():
             print(f"  [skip] {label}: model missing at {zp}")
             continue
@@ -256,8 +257,20 @@ def main() -> int:
                 print(f"  [cache] {label}: loaded {arr.shape}")
                 per_member[label] = arr
                 continue
+        # C8: if this member was trained with VecNormalize, apply its saved
+        # obs stats (vec_normalize.pkl next to the member zip); hard-error if
+        # its metadata says normalized but no pkl is found.
+        member_meta = json.loads(mp.read_text(encoding="utf-8")) if mp.exists() else {}
+        normalizer = resolve_obs_normalizer(zp.parent, member_meta)
+        if normalizer is not None:
+            print(f"  [norm] {label}: applying VecNormalize obs stats from {zp.parent}")
+            member_panel_t = torch.from_numpy(
+                normalizer.normalize_obs(panel.factor_array)
+            ).to(args.device)
+        else:
+            member_panel_t = panel_t
         print(f"  [score] {label}: scoring {n_dates} dates...")
-        scores = _score_member(zp, panel_t, args.device)
+        scores = _score_member(zp, member_panel_t, args.device)
         np.save(cache_path, scores)
         per_member[label] = scores
     if not per_member:

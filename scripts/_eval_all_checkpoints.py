@@ -39,6 +39,7 @@ from aurumq_rl.data_loader import (
     align_panel_to_stock_list,
     build_tradeable_mask,
 )
+from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
 
 _CKPT_RE = re.compile(r"ppo_(\d+)_steps\.zip$")
 
@@ -120,7 +121,16 @@ def main() -> int:
     tradeable = build_tradeable_mask(panel)
     print(f"[eval] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} cells eligible")
 
-    panel_t = torch.from_numpy(panel.factor_array).to(args.device)
+    # C8: apply train-time VecNormalize obs stats (vec_normalize.pkl in the
+    # run dir, shared by every checkpoint of the run); hard-error if metadata
+    # says the model was trained on normalized obs but the pkl is gone.
+    normalizer = resolve_obs_normalizer(args.run_dir, meta)
+    factor_input = panel.factor_array
+    if normalizer is not None:
+        print("[eval] applying VecNormalize obs stats from vec_normalize.pkl (C8)")
+        factor_input = normalizer.normalize_obs(factor_input)
+
+    panel_t = torch.from_numpy(factor_input).to(args.device)
 
     custom_objects = {"rollout_buffer_class": RolloutBuffer}
 
