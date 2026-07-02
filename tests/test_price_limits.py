@@ -226,6 +226,39 @@ def test_rounded_limit_down_detected_for_low_price_stock() -> None:
     assert not is_at_limit_down("600519.SH", (1.40 - 1.53) / 1.53, prev_close=1.53, close=1.40)
 
 
+def test_float32_close_still_detected_at_limit() -> None:
+    """Review fix: the loader stores close_array as float32. 48.51 in float32
+    is 48.5099983... — a 1e-6 price tolerance would MISS this true limit-up.
+    _PRICE_EPSILON is half a tick (5e-3): exact on the 0.01 元 grid (a close
+    one tick below the limit can never be flagged), while absorbing float32
+    storage error at any realistic A-share price."""
+    prev = 44.10  # limit-up price = round(44.10 * 1.10, 2) = 48.51
+    pct = np.array([[(48.51 - prev) / prev]], dtype=np.float32)  # production dtype
+    close = np.array([[48.51]], dtype=np.float32)
+    assert float(close[0, 0]) < 48.51 - 1e-6  # the quantization this guards against
+    at_up, _ = compute_at_limit_masks(pct, ["600000.SH"], close=close)
+    assert at_up[0, 0]
+    # One tick below the limit must stay undetected (half-tick is exact).
+    pct2 = np.array([[(48.50 - prev) / prev]], dtype=np.float32)
+    close2 = np.array([[48.50]], dtype=np.float32)
+    at_up2, _ = compute_at_limit_masks(pct2, ["600000.SH"], close=close2)
+    assert not at_up2[0, 0]
+
+
+def test_half_cent_boundary_rounds_up_not_down() -> None:
+    """Review fix: 1.15 * 1.10 = 1.265 exactly in decimal but the float64
+    product is 1.2649999999999997 — without the +1e-9 nudge inside the floor
+    the limit price comes out 1.26 and a NON-limit 1.26 close is falsely
+    flagged. The exchange publishes 1.27 (四舍五入)."""
+    assert not is_at_limit_up("600000.SH", (1.26 - 1.15) / 1.15, prev_close=1.15, close=1.26)
+    assert is_at_limit_up("600000.SH", (1.27 - 1.15) / 1.15, prev_close=1.15, close=1.27)
+    # Same boundary through the vectorized path (prev_close reconstructed).
+    pct = np.array([[(1.26 - 1.15) / 1.15]])
+    close = np.array([[1.26]])
+    at_up, _ = compute_at_limit_masks(pct, ["600000.SH"], close=close)
+    assert not at_up[0, 0]
+
+
 # ---------------------------------------------------------------------------
 # compute_at_limit_masks — vectorized (T, S) detection shared by training/eval
 # ---------------------------------------------------------------------------
@@ -256,6 +289,56 @@ def test_compute_at_limit_masks_price_based() -> None:
     assert at_down[0].tolist() == [False, False, False]
     assert at_up[1].tolist() == [True, False, False]
     assert at_down[1].tolist() == [False, True, False]
+
+
+@pytest.mark.parametrize(
+    ("prev_close", "limit_close", "below_close"),
+    [
+        (91.00, 100.10, 100.09),
+        (68.20, 75.02, 75.01),
+        (152.00, 167.20, 167.19),
+    ],
+)
+def test_rounded_limit_detection_float32_high_price(
+    prev_close: float, limit_close: float, below_close: float
+) -> None:
+    """Regression: the close pipeline is float32 (data_loader.close_array),
+    whose half-ulp at prices >= 64 is ~3.8e-6 — a 1e-6 tolerance rejects TRUE
+    limit closes like 91.00 → 100.10. Tolerance must cover float32 noise
+    (half a 0.01 tick is safe: the nearest non-limit close is one tick away).
+    """
+    pct = np.float32((limit_close - prev_close) / prev_close)
+    # Scalar API with float32 inputs.
+    assert is_at_limit_up(
+        "600519.SH", float(pct),
+        prev_close=float(np.float32(prev_close)), close=float(np.float32(limit_close)),
+    )
+    assert not is_at_limit_up(
+        "600519.SH", float(np.float32((below_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)), close=float(np.float32(below_close)),
+    )
+    # Vectorized API fed float32 arrays end-to-end.
+    close32 = np.array([[limit_close, below_close]], dtype=np.float32)
+    pct32 = np.array(
+        [[(limit_close - prev_close) / prev_close, (below_close - prev_close) / prev_close]],
+        dtype=np.float32,
+    )
+    at_up, _ = compute_at_limit_masks(pct32, ["600519.SH", "600519.SH"], close=close32)
+    assert at_up[0, 0], "true limit-up close must be detected from float32 prices"
+    assert not at_up[0, 1], "one tick below the limit must NOT be flagged"
+
+
+def test_rounded_limit_down_detection_float32_high_price() -> None:
+    # prev 91.00 → down limit round(81.90) = 81.90; float32 81.90 ≈ 81.900002.
+    prev_close, limit_close, above_close = 91.00, 81.90, 81.91
+    assert is_at_limit_down(
+        "600519.SH", float(np.float32((limit_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)), close=float(np.float32(limit_close)),
+    )
+    assert not is_at_limit_down(
+        "600519.SH", float(np.float32((above_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)), close=float(np.float32(above_close)),
+    )
 
 
 def test_compute_at_limit_masks_st_per_day() -> None:

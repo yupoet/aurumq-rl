@@ -138,7 +138,7 @@ def test_nan_returns_do_not_poison_rewards():
 # ---------------------------------------------------------------------------
 
 
-def _make_cpu_env(returns_np, valid_np, top_k, n_stocks, cost_bps=0.0):
+def _make_cpu_env(returns_np, valid_np, top_k, n_stocks, cost_bps=0.0, turnover_coef=0.0):
     n_dates = returns_np.shape[0]
     panel = torch.zeros((n_dates, n_stocks, 3), dtype=torch.float32)
     returns = torch.from_numpy(returns_np.astype(np.float32))
@@ -152,6 +152,7 @@ def _make_cpu_env(returns_np, valid_np, top_k, n_stocks, cost_bps=0.0):
         forward_period=5,
         top_k=top_k,
         cost_bps=cost_bps,
+        turnover_coef=turnover_coef,
         device="cpu",
         seed=0,
     )
@@ -214,6 +215,32 @@ def test_fewer_valid_than_top_k_uses_only_valid_picks():
     # The old code averaged over top_k=4 including two invalid stocks
     # whose returns are 1.0 → (0.02 + 0.04 + 1.0 + 1.0) / 4 = 0.515.
     assert rewards[0] == pytest.approx(0.03, abs=1e-6)
+
+
+def test_turnover_penalty_ignores_padding_picks():
+    """C4 follow-up: when valid_count < top_k, the padded -inf picks in
+    top_idx / prev_top_idx must not create spurious Jaccard overlap that
+    erases the turnover penalty."""
+    n_dates, n_stocks = 30, 6
+    returns_np = np.zeros((n_dates, n_stocks), dtype=np.float32)
+    valid_np = np.zeros((n_dates, n_stocks), dtype=np.bool_)
+    valid_np[0, [0, 1]] = True  # t=0: only stocks {0, 1} valid; top_k=4
+    valid_np[1, [2, 3]] = True  # t=1: portfolio flips completely to {2, 3}
+    valid_np[2:] = True
+    env = _make_cpu_env(
+        returns_np, valid_np, top_k=4, n_stocks=n_stocks, turnover_coef=1.0
+    )
+    action = np.zeros((1, n_stocks), dtype=np.float32)
+    env.step_async(action)
+    _, rewards_1, _, _ = env.step_wait()
+    # First step: no previous holdings → full turnover → -coef * 1.0.
+    assert rewards_1[0] == pytest.approx(-1.0, abs=1e-6)
+    env.step_async(action)
+    _, rewards_2, _, _ = env.step_wait()
+    # Real picks changed completely ({0,1} → {2,3}): full turnover again.
+    # The old code compared padded index SETS ({0,1,2,3} vs {2,3,0,1}) →
+    # spurious overlap 4 → zero turnover penalty.
+    assert rewards_2[0] == pytest.approx(-1.0, abs=1e-6)
 
 
 def test_zero_valid_stocks_yields_zero_reward_minus_cost():

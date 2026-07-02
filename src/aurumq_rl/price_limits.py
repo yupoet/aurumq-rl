@@ -71,7 +71,12 @@ IPO_NO_LIMIT_TRADING_DAYS: int = 5
 
 # Tolerance when comparing a close against a reconstructed limit price
 # (both quantised to 0.01 元, so 1e-6 comfortably absorbs float noise).
-_PRICE_EPSILON: float = 1e-6
+# Half a tick (0.01 元 grid): close and reconstructed limit price both live
+# on the 0.01 grid, so ANY tolerance below one tick is exact — no false
+# positives possible — while absorbing float32 storage error (the loader
+# stores close_array as float32: up to ~2e-6 relative, i.e. ~6e-5 absolute
+# at 1000 元 — a 1e-6 tolerance would MISS true limit closes there).
+_PRICE_EPSILON: float = 5e-3
 
 
 def identify_board(stock_code: str) -> StockBoard:
@@ -151,7 +156,12 @@ def get_price_limit_pct(
     ----------
     days_since_ipo:
         Trading days since IPO (0 = listing day). Optional; when omitted only
-        ``is_listing_day`` gates the IPO rules (legacy behaviour).
+        ``is_listing_day`` gates the IPO rules (legacy behaviour). Caveat:
+        ``days_since_ipo <= 0`` is treated as the listing day, which also
+        matches panel cells whose value defaults to 0 (missing data) — mask
+        consumers are protected because the ≥60-day IPO gate in
+        ``build_tradeable_mask`` / ``_apply_trading_mask`` excludes those
+        cells regardless.
 
     Returns
     -------
@@ -193,8 +203,12 @@ def _round_limit_price(price: float) -> float:
 
     Python's built-in ``round`` is banker's rounding and would map e.g.
     2.585 → 2.58 where the exchange publishes 2.59.
+
+    The +1e-9 nudge keeps exact half-cent products from flooring one tick
+    low when the float product lands within rounding error BELOW the true
+    half-cent (2.35 * 1.10 = 2.5849999999999997 → must still give 2.59).
     """
-    return math.floor(price * 100.0 + 0.5) / 100.0
+    return math.floor(price * 100.0 + 0.5 + 1e-9) / 100.0
 
 
 def is_at_limit_up(
@@ -398,6 +412,12 @@ def compute_at_limit_masks(
         close64 = np.asarray(close, dtype=np.float64)
         if close64.shape != pct.shape:
             raise ValueError(f"close shape {close64.shape} != pct_chg shape {pct.shape}")
+        # prev_close reconstruction: exact when pct_chg is quoted against the
+        # ex-rights 前收盘基准价 (repo contract, decimal form). Vendor exports
+        # that ROUND pct_chg (e.g. to 4 decimals) perturb prev_close by up to
+        # ~1e-4 relative — harmless in the interior but able to flip the
+        # rounded limit price by one tick right at a half-cent boundary; the
+        # half-tick _PRICE_EPSILON absorbs the comparison side of that.
         with np.errstate(divide="ignore", invalid="ignore"):
             prev_close = close64 / (1.0 + pct)
         have_price = (
@@ -405,9 +425,11 @@ def compute_at_limit_masks(
         )
         # Rounded limit price, half away from zero (exchange 四舍五入),
         # applied only for cells with valid prices on identifiable boards.
+        # The +1e-9 nudge mirrors _round_limit_price: exact half-cent
+        # products must not floor one tick low (2.35 * 1.10 → 2.59, not 2.58).
         have_price &= known
-        limit_up_price = np.floor(prev_close * (1.0 + up_pct) * 100.0 + 0.5) / 100.0
-        limit_down_price = np.floor(prev_close * (1.0 + down_pct) * 100.0 + 0.5) / 100.0
+        limit_up_price = np.floor(prev_close * (1.0 + up_pct) * 100.0 + 0.5 + 1e-9) / 100.0
+        limit_down_price = np.floor(prev_close * (1.0 + down_pct) * 100.0 + 0.5 + 1e-9) / 100.0
         at_up = np.where(have_price, close64 >= limit_up_price - _PRICE_EPSILON, at_up)
         at_down = np.where(have_price, close64 <= limit_down_price + _PRICE_EPSILON, at_down)
 

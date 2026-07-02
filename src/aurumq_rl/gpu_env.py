@@ -81,6 +81,11 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done = torch.zeros(n_envs, dtype=torch.long, device=self.device)
         self.episode_returns = torch.zeros(n_envs, dtype=torch.float32, device=self.device)
         self.prev_top_idx = torch.zeros(n_envs, top_k, dtype=torch.long, device=self.device)
+        # Which prev_top_idx entries were REAL picks (finite masked score).
+        # When valid_count < top_k, topk pads with -inf picks whose indices
+        # must not create spurious Jaccard overlap in the turnover term
+        # (C4 follow-up). All-False start = "no previous holdings".
+        self.prev_top_valid = torch.zeros(n_envs, top_k, dtype=torch.bool, device=self.device)
         # ``last_obs_t`` mirrors the t-index of the obs most recently emitted
         # by ``reset()`` / ``step_wait()``. The IndexOnlyRolloutBuffer reads
         # this snapshot inside ``add()`` to record which panel slice produced
@@ -112,6 +117,7 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done.zero_()
         self.episode_returns.zero_()
         self.prev_top_idx.zero_()
+        self.prev_top_valid.zero_()
         # Snapshot the t-index of the obs we are about to emit so the
         # index-only rollout buffer can reference it without copying obs.
         self.last_obs_t = self.t.clone()
@@ -161,16 +167,23 @@ class GPUStockPickingEnv(VecEnv):
         fwd_rets = fwd_rets * real_pick
         n_real = real_pick.sum(dim=-1).clamp(min=1)
         rewards = fwd_rets.sum(dim=-1) / n_real - self.cost_bps / 1e4
-        # 4. turnover penalty (Jaccard-style)
+        # 4. turnover penalty (Jaccard-style). C4 follow-up: compare only
+        #    REAL picks — padded -inf indices (valid_count < top_k) and the
+        #    zeroed prev_top_idx after reset must not create spurious
+        #    overlap. Denominator = current real-pick count (== top_k in the
+        #    normal fully-valid case, so behaviour there is unchanged).
         if self.turnover_coef > 0.0:
             overlap = torch.zeros_like(rewards)
+            denom = torch.ones_like(rewards)
             for i in range(self.num_envs):
-                overlap[i] = float(
-                    len(set(top_idx[i].tolist()) & set(self.prev_top_idx[i].tolist()))
-                )
-            jaccard_dist = 1.0 - overlap / float(self.top_k)
+                cur = set(top_idx[i][real_pick[i]].tolist())
+                prev = set(self.prev_top_idx[i][self.prev_top_valid[i]].tolist())
+                overlap[i] = float(len(cur & prev))
+                denom[i] = float(max(len(cur), 1))
+            jaccard_dist = 1.0 - overlap / denom
             rewards = rewards - self.turnover_coef * jaccard_dist
         self.prev_top_idx = top_idx
+        self.prev_top_valid = real_pick
         self.episode_returns += rewards
 
         # 5. advance time
@@ -214,6 +227,7 @@ class GPUStockPickingEnv(VecEnv):
         )
         # Zero prev_top_idx for done envs only
         self.prev_top_idx[dones] = 0
+        self.prev_top_valid[dones] = False
 
     def close(self) -> None:
         pass
