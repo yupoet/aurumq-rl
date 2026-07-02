@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import sys
+from functools import lru_cache
 from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
@@ -269,6 +270,52 @@ def is_at_limit_down(
     return pct_change <= down_limit + epsilon
 
 
+_LEGACY_THRESHOLD: float = 0.095  # legacy fallback for unidentifiable boards
+
+
+@lru_cache(maxsize=8)
+def _classify_boards(
+    stock_codes: tuple[str, ...],
+) -> tuple["np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray"]:
+    """Per-stock board classification arrays, cached per universe.
+
+    The CPU env calls :func:`compute_at_limit_masks` every ``env.step`` with
+    the same stock list; string parsing 5000 codes per step would dominate
+    the hot path (env.step budget < 2ms). Returned arrays are read-only.
+
+    Returns ``(up_base, down_base, st_capable, no_limit_5d, bj, known)``.
+    """
+    import numpy as np
+
+    n_stocks = len(stock_codes)
+    up_base = np.empty(n_stocks, dtype=np.float64)
+    down_base = np.empty(n_stocks, dtype=np.float64)
+    st_capable = np.zeros(n_stocks, dtype=np.bool_)  # ST ±5% boards (SH/SZ main)
+    no_limit_5d = np.zeros(n_stocks, dtype=np.bool_)  # STAR/GEM 5-day window
+    bj = np.zeros(n_stocks, dtype=np.bool_)
+    known = np.ones(n_stocks, dtype=np.bool_)
+    for j, code in enumerate(stock_codes):
+        try:
+            board = identify_board(code)
+        except ValueError:
+            known[j] = False
+            up_base[j] = _LEGACY_THRESHOLD
+            down_base[j] = -_LEGACY_THRESHOLD
+            continue
+        if board in (StockBoard.GEM, StockBoard.STAR):
+            up_base[j], down_base[j] = 0.20, -0.20
+            no_limit_5d[j] = True
+        elif board == StockBoard.BJ:
+            up_base[j], down_base[j] = 0.30, -0.30
+            bj[j] = True
+        else:
+            up_base[j], down_base[j] = 0.10, -0.10
+            st_capable[j] = True
+    for arr in (up_base, down_base, st_capable, no_limit_5d, bj, known):
+        arr.flags.writeable = False
+    return up_base, down_base, st_capable, no_limit_5d, bj, known
+
+
 def compute_at_limit_masks(
     pct_chg: "np.ndarray",
     stock_codes: Sequence[str],
@@ -317,31 +364,9 @@ def compute_at_limit_masks(
     if len(stock_codes) != n_stocks:
         raise ValueError(f"stock_codes length {len(stock_codes)} != n_stocks {n_stocks}")
 
-    LEGACY_THRESHOLD = 0.095  # legacy fallback for unidentifiable boards
-
-    up_base = np.empty(n_stocks, dtype=np.float64)
-    down_base = np.empty(n_stocks, dtype=np.float64)
-    st_capable = np.zeros(n_stocks, dtype=np.bool_)  # ST ±5% boards (SH/SZ main)
-    no_limit_5d = np.zeros(n_stocks, dtype=np.bool_)  # STAR/GEM 5-day window
-    bj = np.zeros(n_stocks, dtype=np.bool_)
-    known = np.ones(n_stocks, dtype=np.bool_)
-    for j, code in enumerate(stock_codes):
-        try:
-            board = identify_board(code)
-        except ValueError:
-            known[j] = False
-            up_base[j] = LEGACY_THRESHOLD
-            down_base[j] = -LEGACY_THRESHOLD
-            continue
-        if board in (StockBoard.GEM, StockBoard.STAR):
-            up_base[j], down_base[j] = 0.20, -0.20
-            no_limit_5d[j] = True
-        elif board == StockBoard.BJ:
-            up_base[j], down_base[j] = 0.30, -0.30
-            bj[j] = True
-        else:
-            up_base[j], down_base[j] = 0.10, -0.10
-            st_capable[j] = True
+    up_base, down_base, st_capable, no_limit_5d, bj, known = _classify_boards(
+        tuple(stock_codes)
+    )
 
     up_pct = np.broadcast_to(up_base, (n_dates, n_stocks)).copy()
     down_pct = np.broadcast_to(down_base, (n_dates, n_stocks)).copy()
