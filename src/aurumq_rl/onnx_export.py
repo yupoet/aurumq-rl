@@ -265,6 +265,10 @@ def _build_deterministic_export_module(policy: Any, norm_stats: dict[str, Any] |
       .mode()``). No Distribution object is constructed, so nothing stochastic
       (and no tracer warnings) enters the graph.
     - SAC: ``tanh(mu)`` (``SquashedDiagGaussianDistribution.mode()``).
+      CAVEAT: this equals ``policy.predict(deterministic=True)`` only for
+      (-1, 1) action bounds, where SB3's ``unscale_action`` is the identity.
+      Other Box bounds differ by that affine rescale (monotonic, so top-k
+      ranking is unaffected).
 
     The raw mean is intentionally NOT clipped to the action space (see
     ``export_sb3_policy_to_onnx``).

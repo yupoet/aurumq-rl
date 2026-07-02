@@ -108,6 +108,9 @@ def _assert_parity(sess: ort.InferenceSession, model, obs: np.ndarray, sb3_obs=N
     sb3_actions, _ = model.policy.predict(
         obs if sb3_obs is None else sb3_obs, deterministic=True
     )
+    # Precondition: predict() clips to the (-1, 1) action space while the
+    # export is the RAW mean — value parity is only meaningful in-bounds.
+    assert np.all(np.abs(sb3_actions) < 1.0)
     onnx_actions = sess.run(["action"], {"observation": obs})[0]
     np.testing.assert_allclose(onnx_actions, sb3_actions, rtol=1e-4, atol=1e-5)
     # Downstream consumers rank scores for top-k selection: the ranking must

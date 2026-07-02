@@ -123,3 +123,30 @@ def test_resolve_metadata_normalized_but_pkl_norm_obs_false_raises(tmp_path: Pat
     _save_vecnorm(tmp_path / VEC_NORMALIZE_FILENAME, norm_obs=False)
     with pytest.raises(FileNotFoundError, match="no usable"):
         resolve_obs_normalizer(tmp_path, metadata={"obs_normalized": True})
+
+
+# ---------------------------------------------------------------------------
+# C8 re-review: _ensemble_eval score cache keyed on normalization state
+# ---------------------------------------------------------------------------
+
+
+def test_ensemble_score_cache_path_keyed_on_normalization(tmp_path: Path) -> None:
+    """Normalized and raw runs must use distinct cache files; the raw name
+    stays the legacy one so existing non-vecnorm caches remain valid."""
+    from _ensemble_eval import _score_cache_path  # scripts/ on sys.path (conftest)
+
+    raw = _score_cache_path(tmp_path, "16a", normalized=False)
+    norm = _score_cache_path(tmp_path, "16a", normalized=True)
+    assert raw.name == "_scores_cache_16a.npy"
+    assert norm.name == "_scores_cache_16a_norm.npy"
+    assert raw != norm
+
+
+def test_ensemble_stale_raw_cache_cannot_satisfy_normalized_run(tmp_path: Path) -> None:
+    """A pre-fix cache (scored on raw obs, legacy filename) is invisible to a
+    run that resolves an obs normalizer for the member."""
+    from _ensemble_eval import _score_cache_path
+
+    np.save(tmp_path / "_scores_cache_m1.npy", np.zeros((3, 4), dtype=np.float32))
+    assert not _score_cache_path(tmp_path, "m1", normalized=True).exists()
+    assert _score_cache_path(tmp_path, "m1", normalized=False).exists()

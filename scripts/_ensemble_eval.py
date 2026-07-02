@@ -94,6 +94,19 @@ def _load_panel_aligned(args, factor_names: list[str], stock_codes: list[str]):
     return panel
 
 
+def _score_cache_path(output_dir: Path, label: str, normalized: bool) -> Path:
+    """Cache file for a member's score matrix, keyed on normalization state.
+
+    C8: normalized runs use a distinct ``_norm`` cache name so score caches
+    written by pre-fix runs (which scored VecNormalize-trained members on RAW
+    obs) can never silently satisfy a run that now normalizes — and vice
+    versa. Non-normalized members keep the legacy name so their caches stay
+    valid.
+    """
+    suffix = "_norm" if normalized else ""
+    return output_dir / f"_scores_cache_{label}{suffix}.npy"
+
+
 def _score_member(zip_path: Path, panel_t: torch.Tensor, device: str) -> np.ndarray:
     """Run the policy over every date; return (n_dates, n_stocks) score matrix."""
     custom_objects = {"rollout_buffer_class": RolloutBuffer}
@@ -250,18 +263,21 @@ def main() -> int:
         if not zp.exists():
             print(f"  [skip] {label}: model missing at {zp}")
             continue
-        cache_path = args.output_dir / f"_scores_cache_{label}.npy"
+        # C8: if this member was trained with VecNormalize, apply its saved
+        # obs stats (vec_normalize.pkl next to the member zip); hard-error if
+        # its metadata says normalized but no pkl is found. Resolved BEFORE
+        # the cache check: the normalization state is part of the cache key,
+        # so pre-fix caches (scored on raw obs) can never satisfy a
+        # normalized run.
+        member_meta = json.loads(mp.read_text(encoding="utf-8")) if mp.exists() else {}
+        normalizer = resolve_obs_normalizer(zp.parent, member_meta)
+        cache_path = _score_cache_path(args.output_dir, label, normalizer is not None)
         if cache_path.exists():
             arr = np.load(cache_path)
             if arr.shape == (n_dates, n_stocks):
                 print(f"  [cache] {label}: loaded {arr.shape}")
                 per_member[label] = arr
                 continue
-        # C8: if this member was trained with VecNormalize, apply its saved
-        # obs stats (vec_normalize.pkl next to the member zip); hard-error if
-        # its metadata says normalized but no pkl is found.
-        member_meta = json.loads(mp.read_text(encoding="utf-8")) if mp.exists() else {}
-        normalizer = resolve_obs_normalizer(zp.parent, member_meta)
         if normalizer is not None:
             print(f"  [norm] {label}: applying VecNormalize obs stats from {zp.parent}")
             member_panel_t = torch.from_numpy(
