@@ -7,6 +7,8 @@ import pytest
 
 from aurumq_rl.reward_functions import (
     ANNUALIZATION_FACTOR,
+    MIN_RISK_WINDOW,
+    VOLATILITY_FLOOR,
     mean_variance_reward,
     sharpe_reward,
     simple_return_reward,
@@ -56,12 +58,12 @@ def test_simple_return_cost_bps_applied_only_when_trading() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sharpe_constant_returns_uses_min_std() -> None:
-    # Constant portfolio returns → std == 0 → guarded by _MIN_STD
+def test_sharpe_constant_returns_uses_volatility_floor() -> None:
+    # Constant portfolio returns → std == 0 → guarded by VOLATILITY_FLOOR
     weights_history = np.tile(np.array([1.0, 0.0]), (10, 1))
     return_panel = np.full((10, 2), [0.01, 0.0])
     s = sharpe_reward(weights_history, return_panel, rolling_window=10)
-    # mean = 0.01, std ~ 0 → very large positive Sharpe
+    # mean = 0.01, std == 0 → floored denominator, large but bounded Sharpe
     assert s > 0
     assert np.isfinite(s)
 
@@ -121,6 +123,84 @@ def test_sortino_target_return_shifts_score() -> None:
     s_high = sortino_reward(weights_history, panel, target_return=0.02)
     # raising target_return above the actual return reduces the numerator
     assert s_low > s_high
+
+
+# ---------------------------------------------------------------------------
+# C5: div-zero guards (warm-up window + volatility floor)
+# ---------------------------------------------------------------------------
+
+
+def test_sharpe_single_sample_history_returns_zero() -> None:
+    """Episode step 0: one-sample history → neutral 0.0, not mu/1e-8 spike."""
+    weights_history = np.array([[1.0, 0.0]])
+    panel = np.array([[0.001, 0.0]])
+    assert sharpe_reward(weights_history, panel) == 0.0
+
+
+def test_sortino_single_sample_history_returns_zero() -> None:
+    """Episode step 0: one-sample history → neutral 0.0, not mu/1e-8 spike."""
+    weights_history = np.array([[1.0, 0.0]])
+    panel = np.array([[0.001, 0.0]])
+    assert sortino_reward(weights_history, panel) == 0.0
+
+
+def test_warmup_below_min_risk_window_returns_zero() -> None:
+    """Every history length below MIN_RISK_WINDOW yields neutral 0.0 reward."""
+    for t in range(1, MIN_RISK_WINDOW):
+        weights_history = np.tile(np.array([1.0, 0.0]), (t, 1))
+        panel = np.tile(np.array([0.01, 0.0]), (t, 1))
+        assert sharpe_reward(weights_history, panel) == 0.0
+        assert sortino_reward(weights_history, panel) == 0.0
+
+
+def test_sortino_all_nonnegative_window_bounded_by_floor() -> None:
+    """Window >= MIN_RISK_WINDOW with no downside → floored denominator.
+
+    downside_std == 0 whenever all window returns >= target; the reward must
+    equal the closed form mu / VOLATILITY_FLOOR * sqrt(annualization), not
+    a mu/1e-8 explosion.
+    """
+    returns = np.array([0.01, 0.0, 0.02, 0.005, 0.0, 0.015])
+    weights_history = np.tile(np.array([1.0, 0.0]), (6, 1))
+    panel = np.column_stack([returns, np.zeros(6)])
+    s = sortino_reward(weights_history, panel, rolling_window=6, target_return=0.0)
+    expected = returns.mean() / VOLATILITY_FLOOR * np.sqrt(ANNUALIZATION_FACTOR)
+    assert np.isfinite(s)
+    assert s == pytest.approx(expected)
+    assert abs(s) <= 0.1 / VOLATILITY_FLOOR * np.sqrt(ANNUALIZATION_FACTOR)
+
+
+def test_sharpe_zero_variance_window_bounded_by_floor() -> None:
+    """Constant returns (zero variance) → finite reward equal to floored form."""
+    weights_history = np.tile(np.array([1.0, 0.0]), (10, 1))
+    panel = np.tile(np.array([0.01, 0.0]), (10, 1))
+    s = sharpe_reward(weights_history, panel, rolling_window=10)
+    expected = 0.01 / VOLATILITY_FLOOR * np.sqrt(ANNUALIZATION_FACTOR)
+    assert np.isfinite(s)
+    assert s == pytest.approx(expected)
+
+
+def test_sharpe_normal_case_unchanged_by_floor() -> None:
+    """Genuine variance (std >> floor): value identical to the pre-fix formula."""
+    returns = np.array([0.01, -0.02, 0.015, -0.005, 0.02])
+    weights_history = np.tile(np.array([1.0, 0.0]), (5, 1))
+    panel = np.column_stack([returns, np.zeros(5)])
+    s = sharpe_reward(weights_history, panel, rolling_window=5)
+    expected = returns.mean() / returns.std(ddof=1) * np.sqrt(ANNUALIZATION_FACTOR)
+    assert s == pytest.approx(expected)
+    assert s == pytest.approx(3.8824, abs=1e-3)  # pinned pre-fix value
+
+
+def test_sortino_normal_case_unchanged_by_floor() -> None:
+    """Genuine downside variance: value identical to the pre-fix formula."""
+    returns = np.array([0.01, -0.02, 0.015, -0.005, 0.02])
+    weights_history = np.tile(np.array([1.0, 0.0]), (5, 1))
+    panel = np.column_stack([returns, np.zeros(5)])
+    s = sortino_reward(weights_history, panel, rolling_window=5, target_return=0.0)
+    downside_std = np.sqrt(np.mean(np.minimum(returns, 0.0) ** 2))
+    expected = returns.mean() / downside_std * np.sqrt(ANNUALIZATION_FACTOR)
+    assert s == pytest.approx(expected)
+    assert s == pytest.approx(6.8873, abs=1e-3)  # pinned pre-fix value
 
 
 # ---------------------------------------------------------------------------
