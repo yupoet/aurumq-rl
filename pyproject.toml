@@ -39,7 +39,9 @@ classifiers = [
 # 核心依赖（推理 only，~50MB，CPU 即可跑通 smoke test 和 inference）
 dependencies = [
     "numpy>=1.24",
-    "polars>=0.20",
+    # >=1.42: Expr.rolling_rank (factor library, ~106 call sites) and
+    # nested-window expressions require modern polars; 0.20-era APIs differ.
+    "polars>=1.42",
     "pyarrow>=14.0",
     "duckdb>=0.10",
     "onnxruntime>=1.17",
