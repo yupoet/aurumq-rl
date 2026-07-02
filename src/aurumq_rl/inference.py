@@ -33,6 +33,11 @@ class RlAgentMetadata(BaseModel):
     factor_count: int = 0
     git_sha: str = "unknown"
     exported_at: datetime | None = None
+    # C7: training-time input layout. scripts/infer.py REQUIRES both to map
+    # scores back to stock codes; they are None only in legacy exports, which
+    # infer.py rejects with a hard error (retrain / re-export to fix).
+    factor_names: list[str] | None = None
+    stock_codes: list[str] | None = None
 
     @field_validator("obs_shape", "action_shape", mode="before")
     @classmethod

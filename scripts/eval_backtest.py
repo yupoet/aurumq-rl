@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     from aurumq_rl.data_loader import (
         FactorPanelLoader,
         UniverseFilter,
-        align_panel_to_stock_list,
+        align_panel_to_training_universe,
         build_tradeable_mask,
     )
 
@@ -140,16 +140,13 @@ def main(argv: list[str] | None = None) -> int:
     # Align to the training universe (order + count) so the model's fixed
     # observation space matches. Missing stocks become zero-padded rows
     # marked is_st/is_suspended=True; new stocks (in val but not train)
-    # are dropped. This is the OOS contract.
+    # are dropped. This is the OOS contract — shared with scripts/infer.py (C7).
     if train_stock_codes is not None:
-        raw_codes = set(panel.stock_codes)
-        kept = sum(1 for c in train_stock_codes if c in raw_codes)
-        missing = len(train_stock_codes) - kept
-        dropped = raw_n_stocks - kept
-        panel = align_panel_to_stock_list(panel, train_stock_codes)
+        panel, drift = align_panel_to_training_universe(panel, train_stock_codes)
         print(
-            f"[backtest] aligned to training universe: kept {kept}/{len(train_stock_codes)}, "
-            f"zero-padded {missing} missing, dropped {dropped} new"
+            f"[backtest] aligned to training universe: kept "
+            f"{drift['kept']}/{len(train_stock_codes)}, "
+            f"zero-padded {drift['missing']} missing, dropped {drift['dropped']} new"
         )
 
     n_dates, n_stocks, n_factors = panel.factor_array.shape

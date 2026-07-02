@@ -300,6 +300,34 @@ def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str])
     )
 
 
+def align_panel_to_training_universe(
+    panel: FactorPanel, train_stock_codes: list[str]
+) -> tuple[FactorPanel, dict[str, int]]:
+    """Align a panel to the training-time stock universe and report drift.
+
+    Shared by the eval/infer entry points (C7: scripts/eval_backtest.py and
+    scripts/infer.py) so universe alignment cannot diverge between them —
+    infer.py's original flatten/pad path skipped alignment entirely and
+    attached scores to the wrong stocks under any universe drift.
+
+    Returns ``(aligned_panel, stats)`` where ``stats`` counts:
+
+    * ``kept``: stocks present in both the panel and the training list;
+    * ``missing``: in the training list but absent from the panel
+      (zero-padded rows marked ST + suspended, so they can never be picked);
+    * ``dropped``: in the panel but not in the training list — the model has
+      no obs slot for them, so they cannot be scored and are not candidates.
+    """
+    panel_codes = set(panel.stock_codes)
+    kept = sum(1 for c in train_stock_codes if c in panel_codes)
+    stats = {
+        "kept": kept,
+        "missing": len(train_stock_codes) - kept,
+        "dropped": len(panel.stock_codes) - kept,
+    }
+    return align_panel_to_stock_list(panel, train_stock_codes), stats
+
+
 def build_tradeable_mask(panel: FactorPanel) -> np.ndarray:
     """(T, S) bool mask of cells eligible for ENTRY at decision date t.
 
@@ -1102,5 +1130,6 @@ __all__ = [
     "filter_universe",
     "pivot_adjusted_close",
     "align_panel_to_stock_list",
+    "align_panel_to_training_universe",
     "build_tradeable_mask",
 ]
