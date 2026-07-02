@@ -158,6 +158,9 @@ def _apply_trading_mask(
     mask &= ~is_st.astype(bool)
     mask &= ~is_suspended.astype(bool)
     mask &= days_since_ipo >= NEW_STOCK_PROTECT_DAYS
+    # NaN forward returns (missing cells / delisted before t+fp) must not
+    # leak into the portfolio dot-product — treat them as untradeable.
+    mask &= np.isfinite(returns)
 
     masked = returns.copy()
     masked[~mask] = 0.0

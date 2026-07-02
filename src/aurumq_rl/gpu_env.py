@@ -138,6 +138,11 @@ class GPUStockPickingEnv(VecEnv):
         #    same indexing: row t is the realized return for action at t.
         return_source = self.hold_returns if self.hold_returns is not None else self.returns
         fwd_rets = return_source[self.t].gather(1, top_idx)  # (n_envs, K)
+        # NaN guard: missing (date, stock) cells carry NaN forward returns.
+        # valid_mask normally excludes them, but when < top_k stocks are
+        # valid on a date, topk can still select a masked stock — treat its
+        # return as 0 (the pre-C2 semantics) instead of poisoning the mean.
+        fwd_rets = torch.nan_to_num(fwd_rets, nan=0.0)
         rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
         # 4. turnover penalty (Jaccard-style)
         if self.turnover_coef > 0.0:

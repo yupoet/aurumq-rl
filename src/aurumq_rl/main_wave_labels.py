@@ -184,6 +184,7 @@ def compute_main_wave_labels(
     vol: np.ndarray,
     valid_mask_basic: np.ndarray,  # ~is_st & ~is_suspended & days_since_ipo>=60
     cfg: MainWaveConfig | None = None,
+    amount: np.ndarray | None = None,
 ) -> MainWaveLabels:
     """Compute every label needed for main-wave eval.
 
@@ -200,6 +201,11 @@ def compute_main_wave_labels(
         days_since_ipo>=60. We AND in the liquidity filter on top.
     cfg : MainWaveConfig
         See dataclass. Default mirrors the user's Phase 22 spec.
+    amount : (T, S) float, optional
+        Daily turnover amount in 元. When ``close`` is ADJUSTED
+        (close * adj_factor), pass the RAW ``close * vol`` here so the
+        liquidity filter is not scaled by the adjustment factor.
+        Defaults to ``close * vol`` (legacy behavior).
 
     Returns
     -------
@@ -214,7 +220,9 @@ def compute_main_wave_labels(
     assert valid_mask_basic.shape == (T, S)
 
     # ---------- Liquidity ----------
-    amount = close * vol  # (T, S), 元
+    if amount is None:
+        amount = close * vol  # (T, S), 元
+    assert amount.shape == (T, S)
     amount_ma20 = _rolling_mean_2d(amount, cfg.amount_ma_window)
     liquid_mask = amount_ma20 > cfg.amount_ma_min
 

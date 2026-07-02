@@ -496,7 +496,12 @@ def _apply_feature_group_weights(
 
 
 def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray:
-    """Compute log return with NaN/zero-price safety."""
+    """Compute log return; invalid prices (NaN / <= 0) yield NaN, not 0.
+
+    Returning 0.0 for missing prices used to make absent (date, stock) cells
+    look like tradeable zero-return observations, biasing rewards/backtests.
+    Downstream consumers mask on ``np.isfinite`` (or nan-guard) instead.
+    """
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(
             (price_now > 0) & (price_fwd > 0),
@@ -506,9 +511,63 @@ def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray
         log_ret = np.where(
             np.isfinite(ratio) & (ratio > 0),
             np.log(ratio),
-            0.0,
+            np.nan,
         )
     return log_ret.astype(np.float32)
+
+
+def pivot_adjusted_close(
+    df: pl.DataFrame,
+    stock_codes: list[str],
+    dates: list[datetime.date],
+) -> np.ndarray:
+    """Pivot close (× ``adj_factor`` when present) to a dense (T, S) array.
+
+    Shared by the wave-label scripts (``train_v2.py``,
+    ``_eval_main_wave_v1.py``, ``_eval_main_wave_episode.py``) so their
+    label / MA computations run on ADJUSTED close and stay correct across
+    corporate actions. When the parquet lacks ``adj_factor`` the raw close
+    is used (legacy behavior; the loader-level warning covers the bias).
+
+    Parameters
+    ----------
+    df:
+        Long-format frame with ``trade_date, ts_code, close`` and optionally
+        ``adj_factor`` (already date-filtered by the caller).
+    stock_codes:
+        Column order of the output; codes absent from ``df`` yield zeros.
+    dates:
+        Row order of the output; dates absent from ``df`` are skipped
+        (mirrors the scripts' historical re-alignment behavior).
+
+    Returns
+    -------
+    float32 array of shape (len(dates present in df), len(stock_codes)),
+    missing cells filled with 0.0 (legacy script convention).
+    """
+    if "adj_factor" in df.columns:
+        df = df.with_columns((pl.col("close") * pl.col("adj_factor")).alias("_adj_close"))
+        field = "_adj_close"
+    else:
+        field = "close"
+    piv = (
+        df.select(["trade_date", "ts_code", field])
+        .pivot(values=field, index="trade_date", on="ts_code")
+        .sort("trade_date")
+    )
+    existing = {c for c in piv.columns if c != "trade_date"}
+    arrs: list[np.ndarray] = []
+    for code in stock_codes:
+        if code in existing:
+            col = piv.get_column(code).fill_null(0.0).to_numpy()
+        else:
+            col = np.zeros(piv.height, dtype=np.float32)
+        arrs.append(col.astype(np.float32, copy=False))
+    stacked = np.stack(arrs, axis=1)
+    piv_dates = piv.get_column("trade_date").to_list()
+    d2r = {d: i for i, d in enumerate(piv_dates)}
+    idx = [d2r[d] for d in dates if d in d2r]
+    return stacked[idx]
 
 
 def discover_factor_columns(
@@ -708,17 +767,30 @@ class FactorPanelLoader:
         date_index = {d: i for i, d in enumerate(dates)}
         stock_index = {s: j for j, s in enumerate(stock_codes)}
 
-        factor_array = np.zeros((n_dates, n_stocks, n_factors_actual), dtype=np.float32)
-        close_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
+        # Missing (date, stock) cells must NOT look like tradeable zeros:
+        # factor / close default to NaN (excluded from z-score stats, NaN
+        # forward return), is_suspended defaults to True and days_since_ipo
+        # to 0 (fails the 60-day IPO gate) — mirroring the semantics
+        # `align_panel_to_stock_list` uses for whole-stock misses. Cells with
+        # actual rows overwrite these defaults below.
+        factor_array = np.full((n_dates, n_stocks, n_factors_actual), np.nan, dtype=np.float32)
+        close_array = np.full((n_dates, n_stocks), np.nan, dtype=np.float32)
         pct_change_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         is_st_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
-        is_suspended_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
-        days_since_ipo_array = np.full(
-            (n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32
-        )
+        is_suspended_array = np.ones((n_dates, n_stocks), dtype=np.bool_)
+        days_since_ipo_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
 
         has_is_st = "is_st" in df.columns
         has_days_ipo = "days_since_ipo" in df.columns
+        # `adj_factor` is optional: when present, forward returns are computed
+        # on adjusted close (close * adj_factor) so corporate actions
+        # (dividends / splits) don't fabricate large fake returns. The raw
+        # `close` array is kept UNCHANGED — price-limit logic, pct_chg and
+        # amount stay on raw prices.
+        has_adj_factor = "adj_factor" in df.columns
+        adj_close_array = (
+            np.full((n_dates, n_stocks), np.nan, dtype=np.float32) if has_adj_factor else None
+        )
 
         for row in df.iter_rows(named=True):
             t = date_index.get(row["trade_date"])
@@ -734,6 +806,10 @@ class FactorPanelLoader:
             close_v = row.get("close")
             if close_v is not None:
                 close_array[t, j] = float(close_v)
+            if adj_close_array is not None:
+                adj_v = row.get("adj_factor")
+                if close_v is not None and adj_v is not None:
+                    adj_close_array[t, j] = float(close_v) * float(adj_v)
             pct_v = row.get("pct_chg")
             if pct_v is not None:
                 pct_change_array[t, j] = float(pct_v)
@@ -742,15 +818,33 @@ class FactorPanelLoader:
 
             if has_is_st:
                 is_st_array[t, j] = bool(row.get("is_st") or False)
-            if has_days_ipo:
-                days_v = row.get("days_since_ipo")
-                if days_v is not None:
-                    days_since_ipo_array[t, j] = float(days_v)
+            # Rows that exist but carry no days_since_ipo info are treated as
+            # mature (legacy default); only ABSENT cells keep the 0 default.
+            days_v = row.get("days_since_ipo") if has_days_ipo else None
+            days_since_ipo_array[t, j] = (
+                float(days_v) if days_v is not None else NEW_STOCK_PROTECT_DAYS * 2
+            )
 
-        # Forward return
+        # Forward return — on ADJUSTED close when adj_factor is available.
+        # The per-stock scaling constant cancels in the ratio, so no
+        # rebasing is needed.
+        if adj_close_array is not None:
+            price_for_returns = adj_close_array
+        else:
+            warnings.warn(
+                "Panel parquet has no 'adj_factor' column: forward returns are "
+                "computed on UNADJUSTED close prices and are CORRUPTED around "
+                "corporate actions (dividends/splits/rights). Re-export the "
+                "panel with adj_factor (scripts/export_factor_panel.py).",
+                UserWarning,
+                stacklevel=2,
+            )
+            price_for_returns = close_array
         return_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         for t in range(n_dates - forward_period):
-            return_array[t] = _safe_log_return(close_array[t], close_array[t + forward_period])
+            return_array[t] = _safe_log_return(
+                price_for_returns[t], price_for_returns[t + forward_period]
+            )
 
         # Cross-section z-score
         factor_array = _cross_section_zscore(factor_array)
@@ -879,4 +973,5 @@ __all__ = [
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",
     "filter_universe",
+    "pivot_adjusted_close",
 ]

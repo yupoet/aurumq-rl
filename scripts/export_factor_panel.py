@@ -107,7 +107,8 @@ SELECT
     ts_code,
     close,
     pct_chg,
-    vol
+    vol,
+    adj_factor
 FROM daily_quotes
 WHERE trade_date >= :start_date
   AND trade_date <= :end_date

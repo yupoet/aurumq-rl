@@ -113,6 +113,25 @@ def test_vecenv_required_methods():
 
 
 @cuda
+def test_nan_returns_do_not_poison_rewards():
+    """C2: NaN forward returns (missing cells) must not produce NaN rewards."""
+    syn = make_synthetic_panel(n_dates=60, n_stocks=50, n_factors=20)
+    ret = syn.return_array.copy()
+    ret[:] = np.nan  # worst case: every selected stock has a NaN return
+    panel = torch.from_numpy(syn.factor_array).to("cuda")
+    returns = torch.from_numpy(ret).to("cuda")
+    valid_mask = torch.ones(panel.shape[:2], dtype=torch.bool, device="cuda")
+    env = GPUStockPickingEnv(
+        panel, returns, valid_mask, n_envs=2, episode_length=10,
+        forward_period=5, top_k=5, cost_bps=0.0, seed=0,
+    )
+    env.reset()
+    env.step_async(np.zeros((2, 50), dtype=np.float32))
+    _, rewards, _, _ = env.step_wait()
+    assert np.isfinite(rewards).all(), "NaN returns must be nan-guarded to 0"
+
+
+@cuda
 def test_sb3_ppo_one_rollout():
     """Smoke: SB3 PPO can collect one rollout against our VecEnv without crashing."""
     from stable_baselines3 import PPO

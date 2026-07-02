@@ -34,6 +34,7 @@ SELECT
     q.close,
     q.pct_chg,           -- expected as decimal (+10% = 0.10)
     q.vol,               -- 0 ⇒ suspended
+    q.adj_factor,        -- adjusted-close forward returns (close * adj_factor)
 
     -------------------------------------------------------------------------
     -- Optional metadata columns (used if present, defaulted otherwise)
