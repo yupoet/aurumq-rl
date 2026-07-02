@@ -543,10 +543,24 @@ def pivot_adjusted_close(
     Returns
     -------
     float32 array of shape (len(dates present in df), len(stock_codes)),
-    missing cells filled with 0.0 (legacy script convention).
+    missing cells filled with 0.0 (legacy script convention). Cells with a
+    present close but a null adj_factor are NaN (invalid — matches the
+    loader, which never mixes raw and adjusted prices in one series).
     """
     if "adj_factor" in df.columns:
-        df = df.with_columns((pl.col("close") * pl.col("adj_factor")).alias("_adj_close"))
+        # Loader-matching null semantics: a null CLOSE is a missing quote and
+        # keeps the legacy 0.0 pivot convention (null propagates through the
+        # product into the post-pivot fill_null). A present close with a null
+        # ADJ_FACTOR must NOT become a raw-price or 0.0 point inside an
+        # otherwise adjusted series (that fabricates returns / MA values) —
+        # emit float NaN, which fill_null leaves alone, so downstream treats
+        # the cell as invalid.
+        df = df.with_columns(
+            pl.when(pl.col("adj_factor").is_null())
+            .then(pl.lit(float("nan")))
+            .otherwise(pl.col("close") * pl.col("adj_factor"))
+            .alias("_adj_close")
+        )
         field = "_adj_close"
     else:
         field = "close"

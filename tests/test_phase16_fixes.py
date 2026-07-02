@@ -73,6 +73,7 @@ def _build_min_panel(tmp_path: Path) -> Path:
                     "ts_code": code,
                     "trade_date": d,
                     "close": 10.0 + hash((code, d)) % 7,
+                    "adj_factor": 1.0,  # no corporate actions in the fixture
                     "pct_chg": 0.01,
                     "vol": 1000.0,
                     "alpha_001": float(hash((code, d, "a1")) % 100) / 100.0,

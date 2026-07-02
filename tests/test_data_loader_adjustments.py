@@ -263,6 +263,43 @@ def test_pivot_adjusted_close_raw_fallback_without_adj_factor() -> None:
     np.testing.assert_allclose(arr[:, 1], [20.0, 21.0])
 
 
+def test_pivot_adjusted_close_null_adj_factor_propagates_nan() -> None:
+    """A present close with a NULL adj_factor must NOT become a 0-price point.
+
+    Mixing a raw-price fallback (or a fake 0.0) into an otherwise adjusted
+    series fabricates returns / MA values. Loader semantics: the cell is
+    invalid → NaN.
+    """
+    d0, d1 = datetime.date(2022, 1, 3), datetime.date(2022, 1, 4)
+    df = pl.DataFrame(
+        {
+            "trade_date": [d0, d1],
+            "ts_code": ["SYN_A", "SYN_A"],
+            "close": [10.0, 11.0],
+            "adj_factor": [2.0, None],
+        }
+    )
+    arr = pivot_adjusted_close(df, ["SYN_A"], [d0, d1])
+    assert arr[0, 0] == pytest.approx(20.0)
+    assert np.isnan(arr[1, 0])
+
+
+def test_pivot_adjusted_close_null_close_fills_zero() -> None:
+    """A NULL close (missing quote) keeps the legacy 0.0 pivot convention."""
+    d0, d1 = datetime.date(2022, 1, 3), datetime.date(2022, 1, 4)
+    df = pl.DataFrame(
+        {
+            "trade_date": [d0, d1],
+            "ts_code": ["SYN_A", "SYN_A"],
+            "close": [10.0, None],
+            "adj_factor": [2.0, 2.0],
+        }
+    )
+    arr = pivot_adjusted_close(df, ["SYN_A"], [d0, d1])
+    assert arr[0, 0] == pytest.approx(20.0)
+    assert arr[1, 0] == 0.0
+
+
 def test_pivot_adjusted_close_missing_code_zero_and_row_alignment() -> None:
     df, dates = _pivot_df(with_adj=True)
     # Unknown code → zero column; rows follow the requested date order.

@@ -328,6 +328,11 @@ def main(argv: list[str] | None = None) -> int:
                         "score_model": float(preds[t, j]),
                         "main_wave_score": float(labels.main_wave_score[t, j]),
                         "hit_main_wave": bool(labels.hit_main_wave[t, j]),
+                        # NOTE: since the C1 fix, entry/exit prices are the
+                        # ADJUSTED close (close * adj_factor) whenever the
+                        # parquet carries adj_factor — correct for return
+                        # math, but NOT the raw quoted price. Field names
+                        # are kept for downstream picks.jsonl consumers.
                         "entry_price": float(labels.entry_price[t, j]),
                         "exit_price": float(labels.exit_price[t, j]),
                         "holding_days": int(labels.holding_days[t, j]),

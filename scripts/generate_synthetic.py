@@ -263,6 +263,10 @@ def build_synthetic_dataframe(
         "ts_code": code_col,
         "trade_date": date_col,
         "close": close.reshape(n_rows),
+        # Synthetic prices have no corporate actions → adj_factor is 1.0.
+        # Carrying the column keeps demo/test panels on the adjusted-close
+        # return path (and silences the loader's no-adj_factor warning).
+        "adj_factor": np.ones(n_rows, dtype=np.float32),
         "pct_chg": pct_chg.reshape(n_rows),
         "vol": vol.reshape(n_rows),
         "is_st": is_st_col,
