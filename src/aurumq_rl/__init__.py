@@ -45,6 +45,8 @@ __all__ = [
     # Data
     "FactorPanelLoader",
     "FactorPanel",
+    # Cross-validation
+    "PurgedWalkForwardCV",
     # Constants
     "StockBoard",
     "identify_board",
@@ -53,6 +55,7 @@ __all__ = [
 ]
 
 # Always-available imports (no PyTorch required)
+from aurumq_rl.cv import PurgedWalkForwardCV
 from aurumq_rl.data_loader import FactorPanel, FactorPanelLoader
 from aurumq_rl.inference import RlAgentInference, RlAgentMetadata
 from aurumq_rl.price_limits import (
