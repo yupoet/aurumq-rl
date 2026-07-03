@@ -166,6 +166,7 @@ def main():
                         print(f"  [WARN] {exp_id} train pos_rate={pos_rate_train:.4f} unusual (expect ~0.17-0.20)")
 
                     t = time.time()
+                    # M4 NOTE: unsorted row-position split, kept as-is for v12's frozen results — v13+ uses kronos_matrix_v13_lib.date_embargo_split (date-sorted + 30d embargo).
                     val_size = max(500, int(len(train) * 0.10))
                     val = train.tail(val_size)
                     train_fit = train.head(len(train) - val_size)

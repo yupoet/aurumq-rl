@@ -64,6 +64,24 @@ class BacktestResult:
         return cls(**data)
 
 
+def _apply_tradeable_mask(predictions: np.ndarray, tradeable_mask: np.ndarray | None) -> np.ndarray:
+    """NaN-out predictions for untradeable (date, stock) cells (M5).
+
+    Semantics: cells where ``tradeable_mask`` is False are excluded from
+    BOTH top-k selection and IC computation (every helper already drops
+    non-finite predictions), matching the training-side valid_mask built by
+    ``data_loader.build_tradeable_mask``.
+    """
+    if tradeable_mask is None:
+        return predictions
+    mask = np.asarray(tradeable_mask, dtype=bool)
+    if mask.shape != predictions.shape:
+        raise ValueError(
+            f"tradeable_mask shape {mask.shape} != predictions shape {predictions.shape}"
+        )
+    return np.where(mask, predictions, np.nan)
+
+
 def _per_date_ics(predictions: np.ndarray, returns: np.ndarray) -> list[float]:
     if predictions.shape != returns.shape:
         raise ValueError(
@@ -214,19 +232,24 @@ def random_baseline(
     n_simulations: int = 100,
     seed: int = 0,
     forward_period: int = 1,
+    tradeable_mask: np.ndarray | None = None,
 ) -> dict[str, float]:
     """Sharpe distribution of random top-K portfolios over the same dates.
 
     Phase 16 reports legacy / adjusted / non-overlap percentiles. The
     legacy fields are kept because existing dashboards consume them; for
     the production "vs random" comparison use the ``*_adjusted`` keys.
+
+    ``tradeable_mask`` (M5): random portfolios sample from the SAME
+    tradeable set as the policy, otherwise the "vs random" comparison is
+    skewed (random could buy limit-up/suspended stocks the policy cannot).
     """
     rng = np.random.default_rng(seed)
     legacy: list[float] = []
     adjusted: list[float] = []
     non_overlap: list[float] = []
     for _ in range(n_simulations):
-        preds = rng.normal(size=returns.shape)
+        preds = _apply_tradeable_mask(rng.normal(size=returns.shape), tradeable_mask)
         d = compute_top_k_sharpes(
             preds,
             returns,
@@ -276,6 +299,7 @@ def run_backtest(
     n_random_simulations: int = 100,
     random_seed: int = 0,
     forward_period: int = 1,
+    tradeable_mask: np.ndarray | None = None,
 ) -> BacktestResult:
     """One-shot evaluation: IC + IR + top-K Sharpe trio + random baseline.
 
@@ -284,10 +308,18 @@ def run_backtest(
     so the trailing all-zero rows produced by
     :class:`FactorPanelLoader` (which has no future close to compute the
     forward log-return) do not drag down the Sharpe mean.
+
+    ``tradeable_mask`` (M5): optional (n_dates, n_stocks) bool. False cells
+    (suspended / ST / at price limit / IPO window) are excluded from top-k
+    selection AND from IC (predictions set to NaN), matching the training
+    valid_mask convention. The random baseline samples from the same set.
     """
+    predictions = _apply_tradeable_mask(predictions, tradeable_mask)
     if forward_period > 1 and predictions.shape[0] > forward_period:
         predictions = predictions[: predictions.shape[0] - forward_period]
         returns = returns[: returns.shape[0] - forward_period]
+        if tradeable_mask is not None:
+            tradeable_mask = tradeable_mask[: tradeable_mask.shape[0] - forward_period]
     sharpes = compute_top_k_sharpes(
         predictions,
         returns,
@@ -305,6 +337,7 @@ def run_backtest(
             n_simulations=n_random_simulations,
             seed=random_seed,
             forward_period=forward_period,
+            tradeable_mask=tradeable_mask,
         ),
         n_dates=predictions.shape[0],
         n_stocks=predictions.shape[1],
@@ -353,11 +386,18 @@ def _per_date_top_k_returns(
     return out
 
 
-def _random_sharpes(returns: np.ndarray, top_k: int, n_simulations: int, seed: int) -> list[float]:
+def _random_sharpes(
+    returns: np.ndarray,
+    top_k: int,
+    n_simulations: int,
+    seed: int,
+    tradeable_mask: np.ndarray | None = None,
+) -> list[float]:
     rng = np.random.default_rng(seed)
     out: list[float] = []
     for _ in range(n_simulations):
-        preds = rng.normal(size=returns.shape)
+        # M5: random portfolios sample from the same tradeable set.
+        preds = _apply_tradeable_mask(rng.normal(size=returns.shape), tradeable_mask)
         out.append(compute_top_k_sharpe(preds, returns, top_k=top_k))
     return out
 
@@ -370,6 +410,7 @@ def run_backtest_with_series(
     n_random_simulations: int = 100,
     random_seed: int = 0,
     forward_period: int = 1,
+    tradeable_mask: np.ndarray | None = None,
 ) -> tuple[BacktestResult, BacktestSeries]:
     """One-shot evaluation that also returns per-date / per-simulation series.
 
@@ -378,6 +419,9 @@ def run_backtest_with_series(
     across both code paths. The per-date series, by contrast, must align to
     every entry in ``dates``; degenerate days are filled with 0.0 in the
     series so chart positions line up with the date axis.
+
+    ``tradeable_mask`` (M5): see :func:`run_backtest` — applied to top-k
+    selection, IC and the random baseline alike.
     """
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
@@ -392,9 +436,11 @@ def run_backtest_with_series(
         n_random_simulations=n_random_simulations,
         random_seed=random_seed,
         forward_period=forward_period,
+        tradeable_mask=tradeable_mask,
     )
 
     # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
+    predictions = _apply_tradeable_mask(predictions, tradeable_mask)
     ic_per_date = _per_date_ics_aligned(predictions, returns)
     top_k_rets = _per_date_top_k_returns(predictions, returns, top_k)
 
@@ -405,7 +451,11 @@ def run_backtest_with_series(
         equity.append(cum)
 
     random_sharpes = _random_sharpes(
-        returns, top_k=top_k, n_simulations=n_random_simulations, seed=random_seed
+        returns,
+        top_k=top_k,
+        n_simulations=n_random_simulations,
+        seed=random_seed,
+        tradeable_mask=tradeable_mask,
     )
 
     series = BacktestSeries(

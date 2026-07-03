@@ -33,6 +33,11 @@ class RlAgentMetadata(BaseModel):
     factor_count: int = 0
     git_sha: str = "unknown"
     exported_at: datetime | None = None
+    # C7: training-time input layout. scripts/infer.py REQUIRES both to map
+    # scores back to stock codes; they are None only in legacy exports, which
+    # infer.py rejects with a hard error (retrain / re-export to fix).
+    factor_names: list[str] | None = None
+    stock_codes: list[str] | None = None
 
     @field_validator("obs_shape", "action_shape", mode="before")
     @classmethod
@@ -112,8 +117,9 @@ class RlAgentInference:
             Shape must match ``metadata.obs_shape``. Accepts 1D or 2D
             (with batch dim). Auto-converted to float32.
         deterministic:
-            True: deterministic policy output (default).
-            False: preserve any distribution sampling in the model.
+            Accepted for backward compatibility only. Since C6 the exported
+            graph IS the deterministic action (the distribution mean is
+            baked in at export time), so this flag has no runtime effect.
 
         Returns
         -------

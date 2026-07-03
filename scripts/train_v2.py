@@ -19,7 +19,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter
+from aurumq_rl.data_loader import FactorPanelLoader, UniverseFilter, build_tradeable_mask
 from aurumq_rl.gpu_env import GPUStockPickingEnv
 from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
 from aurumq_rl.policy import PerStockEncoderPolicy
@@ -347,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 dates=list(panel.dates),
                 stock_codes=list(panel.stock_codes),
                 factor_names=[panel.factor_names[i] for i in keep_idx],
+                close_array=panel.close_array,
             )
             n_dates, n_stocks, n_factors = panel.factor_array.shape
             print(f"[train_v2] dropped {len(dropped_factors)} factor cols matching {prefixes}: "
@@ -373,10 +374,29 @@ def main(argv: list[str] | None = None) -> int:
         _gb = panel_t.element_size() * panel_t.numel() / 1e9
         print(f"[train_v2] panel kept as fp32 ({_gb:.2f} GB on cuda)")
     returns_t = torch.from_numpy(panel.return_array).to("cuda")
+    # C4: entry eligibility comes from the SHARED tradeable mask
+    # (~ST & ~suspended & IPO gate & ~limit-up & ~limit-down at decision
+    # date) — the same function the backtest eval scripts use, so training
+    # and evaluation agree exactly. PARITY RULE: matches the CPU env's
+    # _apply_trading_mask (both limit directions are untradeable). A stock
+    # that closed limit-up at t is an unexecutable fill whose forward
+    # return must never be credited.
+    tradeable_np = build_tradeable_mask(panel)
+    n_limit_masked = int(
+        (
+            (~panel.is_st_array)
+            & (~panel.is_suspended_array)
+            & (panel.days_since_ipo_array >= 60)
+            & ~tradeable_np
+        ).sum()
+    )
+    print(f"[train_v2] tradeable mask: {int(tradeable_np.sum()):,}/{tradeable_np.size:,} "
+          f"cells eligible ({n_limit_masked:,} masked by price limits)")
     valid_basic_np = (
-        (~panel.is_st_array)
-        & (~panel.is_suspended_array)
-        & (panel.days_since_ipo_array >= 60)
+        tradeable_np
+        # Missing cells carry NaN forward returns (C2) — exclude them so
+        # the reward never averages a NaN.
+        & np.isfinite(panel.return_array)
     )
     valid_mask = torch.from_numpy(valid_basic_np).to("cuda")
 
@@ -420,9 +440,15 @@ def main(argv: list[str] | None = None) -> int:
             idx = [d2r[d] for d in panel.dates if d in d2r]
             return stacked[idx]
 
-        close_arr = _pivot_to_array("close")
+        close_arr = _pivot_to_array("close")  # RAW close — keeps amount/liquidity unscaled
         vol_arr = _pivot_to_array("vol")
         pct_arr = _pivot_to_array("pct_chg")
+        # C1: label/MA computations use ADJUSTED close (close * adj_factor)
+        # when the parquet carries it, so corporate actions don't fabricate
+        # fake waves. Falls back to raw close when adj_factor is absent.
+        from aurumq_rl.data_loader import pivot_adjusted_close
+        adj_close_arr = pivot_adjusted_close(df_raw, train_codes, panel.dates)
+        amount_arr = close_arr * vol_arr  # RAW amount for the liquidity gate
 
         if args.reward_mode == "main_wave_hold":
             cfg = MainWaveConfig(
@@ -435,8 +461,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             print("[train_v2] computing main-wave hold labels for training reward...")
             labels = compute_main_wave_labels(
-                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
-                valid_mask_basic=valid_basic_np, cfg=cfg,
+                close=adj_close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=cfg, amount=amount_arr,
             )
             hold_returns_t = torch.from_numpy(labels.hold_return).to("cuda")
             valid_mask = torch.from_numpy(
@@ -459,7 +485,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             ep_cfg = EpisodeConfig()
             print("[train_v2] Phase 23: scanning main-wave episodes for training targets...")
-            episodes = find_main_wave_episodes(close_arr, vol_arr, valid_basic_np, ep_cfg)
+            episodes = find_main_wave_episodes(
+                adj_close_arr, vol_arr, valid_basic_np, ep_cfg, amount=amount_arr,
+            )
             n_episodes_train = len(episodes)
             print(f"[train_v2] found {n_episodes_train:,} episodes "
                   f"in train window")
@@ -478,8 +506,8 @@ def main(argv: list[str] | None = None) -> int:
                 amount_ma_min=args.mwl_amount_ma_min,
             )
             mwl_labels = compute_main_wave_labels(
-                close=close_arr, pct_chg=pct_arr, vol=vol_arr,
-                valid_mask_basic=valid_basic_np, cfg=mwl_cfg,
+                close=adj_close_arr, pct_chg=pct_arr, vol=vol_arr,
+                valid_mask_basic=valid_basic_np, cfg=mwl_cfg, amount=amount_arr,
             )
             valid_mask = torch.from_numpy(mwl_labels.entry_eligible_mask).to("cuda")
             n_t1 = int((targets.proximity == 1).sum())
@@ -665,6 +693,11 @@ def main(argv: list[str] | None = None) -> int:
         "n_envs": args.n_envs,
         "obs_shape": [n_stocks, n_factors],
         "action_shape": [n_stocks],
+        # C8: train_v2 never wraps VecNormalize — the model consumes raw
+        # (z-scored) panel obs. Recorded explicitly so eval loaders
+        # (aurumq_rl.vecnorm_eval.resolve_obs_normalizer) never mistake a
+        # gpu_v2 run for a VecNormalize-trained one.
+        "obs_normalized": False,
         "factor_count": n_factors,
         "stock_codes": panel.stock_codes,
         "factor_names": panel.factor_names,

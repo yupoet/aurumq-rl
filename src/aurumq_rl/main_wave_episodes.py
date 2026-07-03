@@ -111,6 +111,7 @@ def find_main_wave_episodes(
     vol: np.ndarray,
     valid_basic: np.ndarray,
     cfg: EpisodeConfig | None = None,
+    amount: np.ndarray | None = None,
 ) -> list[MainWaveEpisode]:
     """Scan the panel for main-wave episodes per stock.
 
@@ -122,6 +123,11 @@ def find_main_wave_episodes(
     close, vol : (T, S) float
     valid_basic : (T, S) bool
     cfg : EpisodeConfig
+    amount : (T, S) float, optional
+        Daily turnover amount in 元. When ``close`` is ADJUSTED
+        (close * adj_factor), pass the RAW ``close * vol`` so the
+        liquidity filter is not scaled by the adjustment factor.
+        Defaults to ``close * vol`` (legacy behavior).
 
     Returns
     -------
@@ -132,7 +138,9 @@ def find_main_wave_episodes(
     assert vol.shape == (T, S)
     assert valid_basic.shape == (T, S)
 
-    amount = close * vol
+    if amount is None:
+        amount = close * vol
+    assert amount.shape == (T, S)
     amount_ma = _rolling_mean_2d(amount, cfg.amount_ma_window)
     liquid_mask = amount_ma > cfg.amount_ma_min
 

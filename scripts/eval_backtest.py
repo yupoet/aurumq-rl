@@ -49,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     from aurumq_rl.data_loader import (
         FactorPanelLoader,
         UniverseFilter,
-        align_panel_to_stock_list,
+        align_panel_to_training_universe,
+        build_tradeable_mask,
     )
 
     args = parse_args(argv)
@@ -67,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Read training metadata first so we know the locked stock universe.
     meta_path = args.run_dir / "metadata.json"
+    meta: dict = {}
     train_stock_codes: list[str] | None = None
     train_factor_names: list[str] | None = None
     expected_obs_dim: int | None = None
@@ -138,16 +140,13 @@ def main(argv: list[str] | None = None) -> int:
     # Align to the training universe (order + count) so the model's fixed
     # observation space matches. Missing stocks become zero-padded rows
     # marked is_st/is_suspended=True; new stocks (in val but not train)
-    # are dropped. This is the OOS contract.
+    # are dropped. This is the OOS contract — shared with scripts/infer.py (C7).
     if train_stock_codes is not None:
-        raw_codes = set(panel.stock_codes)
-        kept = sum(1 for c in train_stock_codes if c in raw_codes)
-        missing = len(train_stock_codes) - kept
-        dropped = raw_n_stocks - kept
-        panel = align_panel_to_stock_list(panel, train_stock_codes)
+        panel, drift = align_panel_to_training_universe(panel, train_stock_codes)
         print(
-            f"[backtest] aligned to training universe: kept {kept}/{len(train_stock_codes)}, "
-            f"zero-padded {missing} missing, dropped {dropped} new"
+            f"[backtest] aligned to training universe: kept "
+            f"{drift['kept']}/{len(train_stock_codes)}, "
+            f"zero-padded {drift['missing']} missing, dropped {drift['dropped']} new"
         )
 
     n_dates, n_stocks, n_factors = panel.factor_array.shape
@@ -156,16 +155,28 @@ def main(argv: list[str] | None = None) -> int:
     if expected_obs_dim is None:
         expected_obs_dim = n_stocks * n_factors
 
+    from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
+
     if use_sb3_zip:
         # train_v2 / GPU framework path: load SB3 PPO with PerStockEncoderPolicy
         # and run inference on 2D obs (n_dates, n_stocks, n_factors) on cuda.
         import torch
         from stable_baselines3 import PPO
 
+        # C8: a --vec-normalize run only ever saw VecNormalize'd obs. Apply
+        # the saved train-time stats (vec_normalize.pkl next to the
+        # checkpoint); hard-error if metadata says the model was trained on
+        # normalized obs but the pkl is gone.
+        normalizer = resolve_obs_normalizer(args.run_dir, meta)
+        factor_input = panel.factor_array
+        if normalizer is not None:
+            print("[backtest] applying VecNormalize obs stats from vec_normalize.pkl (C8)")
+            factor_input = normalizer.normalize_obs(factor_input)
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = PPO.load(str(zip_paths[0]), device=device)
         model.policy.eval()
-        panel_t = torch.from_numpy(panel.factor_array).to(device)
+        panel_t = torch.from_numpy(factor_input).to(device)
         scores = []
         with torch.no_grad():
             for t in range(n_dates):
@@ -192,6 +203,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 3
 
+        # C8: exports with obs_normalized=true have the VecNormalize stats
+        # BAKED into the graph — feed raw obs. Legacy vecnorm-trained exports
+        # have no baking; if their vec_normalize.pkl is present, apply it here.
+        if not meta.get("obs_normalized"):
+            normalizer = resolve_obs_normalizer(args.run_dir, meta)
+            if normalizer is not None:
+                print(
+                    "[backtest] applying VecNormalize obs stats to ONNX input "
+                    "(legacy un-baked export, C8)"
+                )
+                obs = normalizer.normalize_obs(obs)
+
         raw_out = sess.run(None, {input_name: obs})[0]
 
     if raw_out.ndim == 1:
@@ -203,6 +226,18 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[backtest] predictions shape: {out.shape}")
 
+    # C3+M5: enforce per-date eligibility through the SHARED tradeable mask
+    # (~suspended & ~ST & IPO gate & ~limit-up & ~limit-down) — the same
+    # data_loader.build_tradeable_mask the GPU training path uses, so
+    # training and eval agree exactly. This subsumes the earlier ST-only
+    # prediction NaN-ing (Task B/C3); the mask is applied to top-K
+    # selection, IC AND the random baseline inside the backtest helpers.
+    tradeable = build_tradeable_mask(panel)
+    print(
+        f"[backtest] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} "
+        f"cells eligible (ST/suspended/IPO/price-limit excluded)"
+    )
+
     result, series = run_backtest_with_series(
         predictions=out,
         returns=panel.return_array,
@@ -211,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         n_random_simulations=args.n_random_simulations,
         random_seed=args.seed,
         forward_period=args.forward_period,
+        tradeable_mask=tradeable,
     )
 
     out_path = args.run_dir / "backtest.json"

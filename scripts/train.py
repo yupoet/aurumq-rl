@@ -449,6 +449,9 @@ def make_env(
                 is_suspended_panel=panel.is_suspended_array,
                 days_since_ipo_panel=panel.days_since_ipo_array,
                 stock_codes=panel.stock_codes,
+                # M7: raw close prices enable rounded-limit-price detection
+                # in _apply_trading_mask (None → pct-epsilon fallback).
+                close_panel=panel.close_array,
             )
         else:
             from aurumq_rl.portfolio_weight_env import (
@@ -720,6 +723,10 @@ def run_training(args: argparse.Namespace) -> int:
         vec_env.save(str(stats_path))
         print(f"[train] VecNormalize stats saved: {stats_path}")
 
+    # C8: keep a handle on the VecNormalize wrapper so its obs stats can be
+    # baked into the ONNX export below (close() does not drop obs_rms).
+    vecnorm_for_export = vec_env if args.vec_normalize else None
+
     vec_env.close()
 
     # 8) Save final model
@@ -754,6 +761,10 @@ def run_training(args: argparse.Namespace) -> int:
         obs_shape=obs_shape,
         training_timesteps=args.total_timesteps,
         final_reward=final_reward,
+        # C8: bake the train-time VecNormalize obs stats into the graph so
+        # the exported model accepts RAW observations (metadata records
+        # obs_normalized: true).
+        vec_normalize=vecnorm_for_export,
         extra_metadata={
             "universe": args.universe_filter,
             "env_type": args.env_type,

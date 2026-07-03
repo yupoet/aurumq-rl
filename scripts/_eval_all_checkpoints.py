@@ -37,7 +37,9 @@ from aurumq_rl.data_loader import (
     FactorPanelLoader,
     UniverseFilter,
     align_panel_to_stock_list,
+    build_tradeable_mask,
 )
+from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
 
 _CKPT_RE = re.compile(r"ppo_(\d+)_steps\.zip$")
 
@@ -112,7 +114,23 @@ def main() -> int:
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[eval] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
-    panel_t = torch.from_numpy(panel.factor_array).to(args.device)
+    # C3+M5: shared tradeable mask (~suspended & ~ST & IPO gate &
+    # ~limit-up & ~limit-down) — same data_loader.build_tradeable_mask as
+    # the training valid_mask, applied to top-K, IC and random baseline.
+    # Subsumes the earlier per-date ST-only prediction NaN-ing.
+    tradeable = build_tradeable_mask(panel)
+    print(f"[eval] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} cells eligible")
+
+    # C8: apply train-time VecNormalize obs stats (vec_normalize.pkl in the
+    # run dir, shared by every checkpoint of the run); hard-error if metadata
+    # says the model was trained on normalized obs but the pkl is gone.
+    normalizer = resolve_obs_normalizer(args.run_dir, meta)
+    factor_input = panel.factor_array
+    if normalizer is not None:
+        print("[eval] applying VecNormalize obs stats from vec_normalize.pkl (C8)")
+        factor_input = normalizer.normalize_obs(factor_input)
+
+    panel_t = torch.from_numpy(factor_input).to(args.device)
 
     custom_objects = {"rollout_buffer_class": RolloutBuffer}
 
@@ -138,6 +156,7 @@ def main() -> int:
                 n_random_simulations=args.n_random_simulations,
                 random_seed=0,
                 forward_period=forward_period,
+                tradeable_mask=tradeable,
             )
             label = f"{step}" if step >= 0 else "final"
             rb = result.random_baseline

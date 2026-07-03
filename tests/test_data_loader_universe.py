@@ -50,14 +50,20 @@ def test_hs300_falls_back_to_main_board_when_column_missing():
     assert out["ts_code"].to_list() == ["600519.SH"]
 
 
-def test_main_board_non_st_unchanged():
+def test_main_board_non_st_keeps_st_rows_for_per_date_masking():
+    """C3: ST-named/flagged rows are no longer dropped at load time.
+
+    The row survives the universe filter; its per-date `is_st` flag drives
+    the downstream eligibility masks instead (dropping the whole history by
+    current name is survivorship bias).
+    """
     df = pl.DataFrame(
         [("600519.SH", "Mao", False), ("600000.SH", "*ST X", True)],
         schema=["ts_code", "name", "is_st"],
         orient="row",
     )
     out = filter_universe(df, mode=UniverseFilter.MAIN_BOARD_NON_ST)
-    assert out["ts_code"].to_list() == ["600519.SH"]
+    assert out["ts_code"].to_list() == ["600519.SH", "600000.SH"]
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,7 @@ from aurumq_rl.data_loader import (
     FactorPanelLoader,
     UniverseFilter,
     align_panel_to_stock_list,
+    pivot_adjusted_close,
 )
 from aurumq_rl.gpu_env import GPUStockPickingEnv  # noqa: F401
 from aurumq_rl.gpu_rollout_buffer import GPURolloutBuffer
@@ -211,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         close_arr = close_arr[idx]
         vol_arr = vol_arr[idx]
 
+    # C1: episode scan runs on ADJUSTED close (close * adj_factor when the
+    # parquet carries it); raw close_arr stays for the RAW amount gate.
+    adj_close_arr = pivot_adjusted_close(df, train_stock_codes, panel.dates)
+    amount_arr = close_arr * vol_arr
+
     valid_basic = (
         (~panel.is_st_array)
         & (~panel.is_suspended_array)
@@ -220,7 +226,9 @@ def main(argv: list[str] | None = None) -> int:
     # ---- Run episode scanner on the EVAL window ----
     ep_cfg = EpisodeConfig()
     print("[ep_eval] scanning OOS episodes...")
-    episodes = find_main_wave_episodes(close_arr, vol_arr, valid_basic, ep_cfg)
+    episodes = find_main_wave_episodes(
+        adj_close_arr, vol_arr, valid_basic, ep_cfg, amount=amount_arr,
+    )
     summary = episodes_summary(episodes)
     n_eps = len(episodes)
     print(f"[ep_eval] {n_eps:,} episodes; "

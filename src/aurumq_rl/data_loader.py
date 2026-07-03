@@ -28,12 +28,18 @@ because of missing factor groups; the model just sees those positions as 0.
 
 Universe filter
 ---------------
-Default ``UniverseFilter.MAIN_BOARD_NON_ST`` excludes:
+Default ``UniverseFilter.MAIN_BOARD_NON_ST`` excludes at load time:
 
 * BSE (.BJ, codes 8/4)
 * STAR market (688)
 * ChiNext (300/301)
-* ST/*ST stocks
+
+ST/退 exclusion is PER DATE, not load time (C3): rows stay in the panel and
+``is_st_array`` (from the ``is_st`` column, or the row-level ``name`` as a
+fallback) flags the dates a stock is actually ST. Downstream eligibility
+masks — the env trading mask, train_v2's valid mask, the eval scripts —
+exclude those (date, stock) cells. Dropping a stock's whole history because
+its *current* name contains ST/退 is survivorship bias.
 
 Other modes: ``ALL_A`` (no filter), ``HS300``, ``ZZ500``, ``ZZ1000``.
 
@@ -152,6 +158,15 @@ _LEGACY_ALIAS = {
 
 
 # Static universes use just stock_code, trade_date is NULL.
+#
+# LIMITATION (C3, disclosed — not fixed): these are date-less membership
+# snapshots locked on ``STATIC_UNIVERSE_LOCK_DATE`` and applied to FULL
+# history. Stocks that delisted before the lock date are absent from every
+# historical date, which inflates historical labels/backtests (survivorship
+# bias). True point-in-time membership (as CSI300/CSI500 already have) needs
+# upstream data this repo does not ship; until then :func:`filter_universe`
+# emits a UserWarning whenever a static universe is applied to a panel that
+# starts meaningfully before the lock date.
 _STATIC_UNIVERSES = frozenset(
     {
         UniverseFilter.MAIN_BOARD,
@@ -161,6 +176,14 @@ _STATIC_UNIVERSES = frozenset(
         UniverseFilter.GROWTH_BOARDS,
     }
 )
+
+# Membership lock date of the static universes (paris `2026-05-14-5-universe-lock`
+# / `2026-05-14-npf-v2-1-main-board` bundles).
+STATIC_UNIVERSE_LOCK_DATE = datetime.date(2026, 5, 14)
+
+# Panels starting more than this many days before the lock date trigger the
+# survivorship disclosure warning ("meaningfully before" the lock).
+_SURVIVORSHIP_WARN_GRACE_DAYS = 30
 
 # Point-in-time universes use (stock_code, trade_date) — index membership rebalances quarterly.
 _PIT_UNIVERSES = frozenset({UniverseFilter.CSI300, UniverseFilter.CSI500})
@@ -194,6 +217,13 @@ class FactorPanel(NamedTuple):
         list[str], length n_stocks.
     factor_names:
         list[str], length n_factors.
+    close_array:
+        shape (n_dates, n_stocks), RAW (unadjusted) close prices with NaN
+        for missing cells, or ``None`` when the source has no prices
+        (e.g. the synthetic panel). Used by
+        :func:`aurumq_rl.price_limits.compute_at_limit_masks` to
+        reconstruct rounded limit prices (M7); price-limit rules operate
+        on raw exchange prices, so this stays unadjusted.
     """
 
     factor_array: np.ndarray
@@ -205,6 +235,7 @@ class FactorPanel(NamedTuple):
     dates: list[datetime.date]
     stock_codes: list[str]
     factor_names: list[str]
+    close_array: np.ndarray | None = None
 
 
 def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str]) -> FactorPanel:
@@ -252,6 +283,8 @@ def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str])
     is_st_array = _gather(panel.is_st_array, True)  # missing → ST (un-tradeable)
     is_suspended_array = _gather(panel.is_suspended_array, True)  # missing → suspended
     days_since_ipo_array = _gather(panel.days_since_ipo_array, 0)
+    # missing → NaN close (price-limit detection falls back to pct epsilon)
+    close_array = _gather(panel.close_array, np.nan) if panel.close_array is not None else None
 
     return FactorPanel(
         factor_array=factor_array,
@@ -263,6 +296,67 @@ def align_panel_to_stock_list(panel: FactorPanel, target_stock_codes: list[str])
         dates=list(panel.dates),
         stock_codes=list(target_stock_codes),
         factor_names=list(panel.factor_names),
+        close_array=close_array,
+    )
+
+
+def align_panel_to_training_universe(
+    panel: FactorPanel, train_stock_codes: list[str]
+) -> tuple[FactorPanel, dict[str, int]]:
+    """Align a panel to the training-time stock universe and report drift.
+
+    Shared by the eval/infer entry points (C7: scripts/eval_backtest.py and
+    scripts/infer.py) so universe alignment cannot diverge between them —
+    infer.py's original flatten/pad path skipped alignment entirely and
+    attached scores to the wrong stocks under any universe drift.
+
+    Returns ``(aligned_panel, stats)`` where ``stats`` counts:
+
+    * ``kept``: stocks present in both the panel and the training list;
+    * ``missing``: in the training list but absent from the panel
+      (zero-padded rows marked ST + suspended, so they can never be picked);
+    * ``dropped``: in the panel but not in the training list — the model has
+      no obs slot for them, so they cannot be scored and are not candidates.
+    """
+    panel_codes = set(panel.stock_codes)
+    kept = sum(1 for c in train_stock_codes if c in panel_codes)
+    stats = {
+        "kept": kept,
+        "missing": len(train_stock_codes) - kept,
+        "dropped": len(panel.stock_codes) - kept,
+    }
+    return align_panel_to_stock_list(panel, train_stock_codes), stats
+
+
+def build_tradeable_mask(panel: FactorPanel) -> np.ndarray:
+    """(T, S) bool mask of cells eligible for ENTRY at decision date t.
+
+    ``~suspended & ~ST & (days_since_ipo >= 60) & ~at_limit_up & ~at_limit_down``
+
+    SINGLE SOURCE OF TRUTH (C4/M5): the GPU training valid_mask
+    (scripts/train_v2.py) and the backtest eval scripts
+    (eval_backtest / _eval_all_checkpoints / _ensemble_eval) must both use
+    this function so training and evaluation agree exactly.
+
+    Parity rule: matches the CPU env's ``env._apply_trading_mask`` — BOTH
+    limit-up and limit-down closes are untradeable (a limit-up close cannot
+    be bought; a limit-down close is treated symmetrically per the CPU env).
+    """
+    from aurumq_rl.price_limits import compute_at_limit_masks
+
+    at_up, at_down = compute_at_limit_masks(
+        pct_chg=panel.pct_change_array,
+        stock_codes=list(panel.stock_codes),
+        is_st=panel.is_st_array,
+        days_since_ipo=panel.days_since_ipo_array,
+        close=panel.close_array,
+    )
+    return (
+        (~panel.is_st_array)
+        & (~panel.is_suspended_array)
+        & (panel.days_since_ipo_array >= NEW_STOCK_PROTECT_DAYS)
+        & ~at_up
+        & ~at_down
     )
 
 
@@ -317,6 +411,35 @@ def _load_pit_universe(name: str) -> pl.DataFrame:
     return df
 
 
+def _warn_static_membership_survivorship(df: pl.DataFrame, mode: UniverseFilter) -> None:
+    """Emit the C3 survivorship disclosure for static membership snapshots.
+
+    Fires when a date-less locked membership set is applied to a panel whose
+    date range starts meaningfully before ``STATIC_UNIVERSE_LOCK_DATE``:
+    stocks delisted before the lock date are absent from ALL dates, so
+    historical windows carry survivorship bias.
+    """
+    if "trade_date" not in df.columns or df.is_empty():
+        return
+    start = df["trade_date"].min()
+    if isinstance(start, datetime.datetime):
+        start = start.date()
+    if not isinstance(start, datetime.date):
+        return
+    grace = datetime.timedelta(days=_SURVIVORSHIP_WARN_GRACE_DAYS)
+    if start >= STATIC_UNIVERSE_LOCK_DATE - grace:
+        return
+    warnings.warn(
+        f"Universe '{mode.value}' is a static membership snapshot locked on "
+        f"{STATIC_UNIVERSE_LOCK_DATE}; stocks delisted before the lock date are "
+        f"absent from ALL dates, so this panel (starts {start}) carries "
+        "survivorship bias in historical windows. Point-in-time membership "
+        "(as CSI300/CSI500 have) is the real fix.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def filter_universe(
     df: pl.DataFrame,
     mode: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
@@ -331,8 +454,11 @@ def filter_universe(
     mode:
         Filter mode (see :class:`UniverseFilter`).
     name_col:
-        Column holding stock name (used for ST detection). If absent,
-        ST filtering is skipped.
+        Unused; retained for backward compatibility. ST exclusion is no
+        longer name-based at load time — it is enforced PER DATE via the
+        panel's ``is_st`` column and the downstream eligibility masks (C3:
+        dropping a stock's whole history for a *current* ST/退 name is
+        survivorship bias).
 
     Returns
     -------
@@ -344,21 +470,18 @@ def filter_universe(
     # Resolve legacy aliases (HS300 → CSI300, ZZ500 → CSI500, MAIN_BOARD_NON_ST → MAIN_BOARD)
     mode = _LEGACY_ALIAS.get(mode, mode)
 
-    # Static universe filter from paris's locked membership parquets
+    # Static universe filter from paris's locked membership parquets.
+    # NOTE: board membership (code patterns / locked sets) is applied at load
+    # time; ST-ness is NOT — rows stay in the panel and `is_st_array` carries
+    # the per-date flag for the env/train/eval eligibility masks.
     if mode in _STATIC_UNIVERSES:
         codes = _load_static_universe(mode.value.upper())
         if codes:
-            df = df.filter(pl.col("ts_code").is_in(list(codes)))
-            # For MAIN_BOARD: also exclude ST if name col present (defensive — paris's
-            # membership parquet already excludes ST/退, but legacy panels may not).
-            if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
-                df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
-            return df
-        # Fall back to regex when membership parquet missing (synthetic / pre-lock data)
-        df = df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
-        if mode == UniverseFilter.MAIN_BOARD and name_col in df.columns:
-            df = df.filter(~pl.col(name_col).cast(pl.Utf8).str.contains(r"\*?ST|退"))
-        return df
+            _warn_static_membership_survivorship(df, mode)
+            return df.filter(pl.col("ts_code").is_in(list(codes)))
+        # Fall back to regex when membership parquet missing (synthetic / pre-lock
+        # data). Code-based board patterns are time-invariant — no snapshot bias.
+        return df.filter(pl.col("ts_code").map_elements(_is_main_board, return_dtype=pl.Boolean))
 
     # Point-in-time universe (CSI300 / CSI500): require trade_date column for proper
     # per-day membership. Prefer explicit `is_csi300` boolean column if present
@@ -496,7 +619,12 @@ def _apply_feature_group_weights(
 
 
 def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray:
-    """Compute log return with NaN/zero-price safety."""
+    """Compute log return; invalid prices (NaN / <= 0) yield NaN, not 0.
+
+    Returning 0.0 for missing prices used to make absent (date, stock) cells
+    look like tradeable zero-return observations, biasing rewards/backtests.
+    Downstream consumers mask on ``np.isfinite`` (or nan-guard) instead.
+    """
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(
             (price_now > 0) & (price_fwd > 0),
@@ -506,9 +634,77 @@ def _safe_log_return(price_now: np.ndarray, price_fwd: np.ndarray) -> np.ndarray
         log_ret = np.where(
             np.isfinite(ratio) & (ratio > 0),
             np.log(ratio),
-            0.0,
+            np.nan,
         )
     return log_ret.astype(np.float32)
+
+
+def pivot_adjusted_close(
+    df: pl.DataFrame,
+    stock_codes: list[str],
+    dates: list[datetime.date],
+) -> np.ndarray:
+    """Pivot close (× ``adj_factor`` when present) to a dense (T, S) array.
+
+    Shared by the wave-label scripts (``train_v2.py``,
+    ``_eval_main_wave_v1.py``, ``_eval_main_wave_episode.py``) so their
+    label / MA computations run on ADJUSTED close and stay correct across
+    corporate actions. When the parquet lacks ``adj_factor`` the raw close
+    is used (legacy behavior; the loader-level warning covers the bias).
+
+    Parameters
+    ----------
+    df:
+        Long-format frame with ``trade_date, ts_code, close`` and optionally
+        ``adj_factor`` (already date-filtered by the caller).
+    stock_codes:
+        Column order of the output; codes absent from ``df`` yield zeros.
+    dates:
+        Row order of the output; dates absent from ``df`` are skipped
+        (mirrors the scripts' historical re-alignment behavior).
+
+    Returns
+    -------
+    float32 array of shape (len(dates present in df), len(stock_codes)),
+    missing cells filled with 0.0 (legacy script convention). Cells with a
+    present close but a null adj_factor are NaN (invalid — matches the
+    loader, which never mixes raw and adjusted prices in one series).
+    """
+    if "adj_factor" in df.columns:
+        # Loader-matching null semantics: a null CLOSE is a missing quote and
+        # keeps the legacy 0.0 pivot convention (null propagates through the
+        # product into the post-pivot fill_null). A present close with a null
+        # ADJ_FACTOR must NOT become a raw-price or 0.0 point inside an
+        # otherwise adjusted series (that fabricates returns / MA values) —
+        # emit float NaN, which fill_null leaves alone, so downstream treats
+        # the cell as invalid.
+        df = df.with_columns(
+            pl.when(pl.col("adj_factor").is_null())
+            .then(pl.lit(float("nan")))
+            .otherwise(pl.col("close") * pl.col("adj_factor"))
+            .alias("_adj_close")
+        )
+        field = "_adj_close"
+    else:
+        field = "close"
+    piv = (
+        df.select(["trade_date", "ts_code", field])
+        .pivot(values=field, index="trade_date", on="ts_code")
+        .sort("trade_date")
+    )
+    existing = {c for c in piv.columns if c != "trade_date"}
+    arrs: list[np.ndarray] = []
+    for code in stock_codes:
+        if code in existing:
+            col = piv.get_column(code).fill_null(0.0).to_numpy()
+        else:
+            col = np.zeros(piv.height, dtype=np.float32)
+        arrs.append(col.astype(np.float32, copy=False))
+    stacked = np.stack(arrs, axis=1)
+    piv_dates = piv.get_column("trade_date").to_list()
+    d2r = {d: i for i, d in enumerate(piv_dates)}
+    idx = [d2r[d] for d in dates if d in d2r]
+    return stacked[idx]
 
 
 def discover_factor_columns(
@@ -708,17 +904,44 @@ class FactorPanelLoader:
         date_index = {d: i for i, d in enumerate(dates)}
         stock_index = {s: j for j, s in enumerate(stock_codes)}
 
-        factor_array = np.zeros((n_dates, n_stocks, n_factors_actual), dtype=np.float32)
-        close_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
+        # Missing (date, stock) cells must NOT look like tradeable zeros:
+        # factor / close default to NaN (excluded from z-score stats, NaN
+        # forward return), is_suspended defaults to True and days_since_ipo
+        # to 0 (fails the 60-day IPO gate) — mirroring the semantics
+        # `align_panel_to_stock_list` uses for whole-stock misses. Cells with
+        # actual rows overwrite these defaults below.
+        factor_array = np.full((n_dates, n_stocks, n_factors_actual), np.nan, dtype=np.float32)
+        close_array = np.full((n_dates, n_stocks), np.nan, dtype=np.float32)
         pct_change_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         is_st_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
-        is_suspended_array = np.zeros((n_dates, n_stocks), dtype=np.bool_)
-        days_since_ipo_array = np.full(
-            (n_dates, n_stocks), NEW_STOCK_PROTECT_DAYS * 2, dtype=np.float32
-        )
+        is_suspended_array = np.ones((n_dates, n_stocks), dtype=np.bool_)
+        days_since_ipo_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
 
         has_is_st = "is_st" in df.columns
+        if not has_is_st and "name" in df.columns:
+            # Per-date ST fallback (C3): with no `is_st` column, derive the
+            # flag per ROW from the name. When the exporter stores historical
+            # names this is point-in-time; with current-name snapshots it
+            # degrades to the old name-based behavior, but confined to the
+            # eligibility mask instead of erasing pre-ST history from the panel.
+            df = df.with_columns(
+                pl.col("name")
+                .cast(pl.Utf8)
+                .str.contains(_ST_NAME_PATTERN.pattern)
+                .fill_null(False)
+                .alias("is_st")
+            )
+            has_is_st = True
         has_days_ipo = "days_since_ipo" in df.columns
+        # `adj_factor` is optional: when present, forward returns are computed
+        # on adjusted close (close * adj_factor) so corporate actions
+        # (dividends / splits) don't fabricate large fake returns. The raw
+        # `close` array is kept UNCHANGED — price-limit logic, pct_chg and
+        # amount stay on raw prices.
+        has_adj_factor = "adj_factor" in df.columns
+        adj_close_array = (
+            np.full((n_dates, n_stocks), np.nan, dtype=np.float32) if has_adj_factor else None
+        )
 
         for row in df.iter_rows(named=True):
             t = date_index.get(row["trade_date"])
@@ -734,6 +957,10 @@ class FactorPanelLoader:
             close_v = row.get("close")
             if close_v is not None:
                 close_array[t, j] = float(close_v)
+            if adj_close_array is not None:
+                adj_v = row.get("adj_factor")
+                if close_v is not None and adj_v is not None:
+                    adj_close_array[t, j] = float(close_v) * float(adj_v)
             pct_v = row.get("pct_chg")
             if pct_v is not None:
                 pct_change_array[t, j] = float(pct_v)
@@ -742,15 +969,33 @@ class FactorPanelLoader:
 
             if has_is_st:
                 is_st_array[t, j] = bool(row.get("is_st") or False)
-            if has_days_ipo:
-                days_v = row.get("days_since_ipo")
-                if days_v is not None:
-                    days_since_ipo_array[t, j] = float(days_v)
+            # Rows that exist but carry no days_since_ipo info are treated as
+            # mature (legacy default); only ABSENT cells keep the 0 default.
+            days_v = row.get("days_since_ipo") if has_days_ipo else None
+            days_since_ipo_array[t, j] = (
+                float(days_v) if days_v is not None else NEW_STOCK_PROTECT_DAYS * 2
+            )
 
-        # Forward return
+        # Forward return — on ADJUSTED close when adj_factor is available.
+        # The per-stock scaling constant cancels in the ratio, so no
+        # rebasing is needed.
+        if adj_close_array is not None:
+            price_for_returns = adj_close_array
+        else:
+            warnings.warn(
+                "Panel parquet has no 'adj_factor' column: forward returns are "
+                "computed on UNADJUSTED close prices and are CORRUPTED around "
+                "corporate actions (dividends/splits/rights). Re-export the "
+                "panel with adj_factor (scripts/export_factor_panel.py).",
+                UserWarning,
+                stacklevel=2,
+            )
+            price_for_returns = close_array
         return_array = np.zeros((n_dates, n_stocks), dtype=np.float32)
         for t in range(n_dates - forward_period):
-            return_array[t] = _safe_log_return(close_array[t], close_array[t + forward_period])
+            return_array[t] = _safe_log_return(
+                price_for_returns[t], price_for_returns[t + forward_period]
+            )
 
         # Cross-section z-score
         factor_array = _cross_section_zscore(factor_array)
@@ -772,6 +1017,9 @@ class FactorPanelLoader:
             dates=dates,
             stock_codes=stock_codes,
             factor_names=factor_cols,
+            # RAW close (NaN for missing cells) — price limits use exchange
+            # prices, never adjusted ones.
+            close_array=close_array,
         )
 
     def get_date_range(self) -> tuple[datetime.date | None, datetime.date | None]:
@@ -873,10 +1121,15 @@ class FactorPanelLoader:
 __all__ = [
     "FactorPanel",
     "FactorPanelLoader",
+    "STATIC_UNIVERSE_LOCK_DATE",
     "UniverseFilter",
     "FACTOR_COL_PREFIXES",
     "REQUIRED_COLUMNS",
     "OPTIONAL_COLUMNS",
     "discover_factor_columns",
     "filter_universe",
+    "pivot_adjusted_close",
+    "align_panel_to_stock_list",
+    "align_panel_to_training_universe",
+    "build_tradeable_mask",
 ]

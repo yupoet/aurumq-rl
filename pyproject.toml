@@ -39,7 +39,9 @@ classifiers = [
 # 核心依赖（推理 only，~50MB，CPU 即可跑通 smoke test 和 inference）
 dependencies = [
     "numpy>=1.24",
-    "polars>=0.20",
+    # >=1.42: Expr.rolling_rank (factor library, ~106 call sites) and
+    # nested-window expressions require modern polars; 0.20-era APIs differ.
+    "polars>=1.42",
     "pyarrow>=14.0",
     "duckdb>=0.10",
     "onnxruntime>=1.17",
@@ -86,6 +88,8 @@ dev = [
     "pre-commit>=3.5",
     # Used by p3 ensemble scripts + their tests (isotonic calibration)
     "scikit-learn>=1.3",
+    # Used by gtja191 ops tests + p3 matrix-lib tests
+    "pandas>=2.0",
 ]
 
 [project.scripts]

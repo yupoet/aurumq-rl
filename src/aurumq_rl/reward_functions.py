@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import numpy as np
 
-# Numerical guards
-_MIN_STD: float = 1e-8
+# Numerical guards (C5)
+# Warm-up: below this many samples a rolling std/downside-std is degenerate
+# (1 sample → std=0), so risk-adjusted rewards return neutral 0.0 instead.
+MIN_RISK_WINDOW: int = 5
+# Realistic daily-return volatility floor for Sharpe/Sortino denominators;
+# keeps rewards bounded (~1e2) when a window has zero (downside) variance,
+# instead of mu/1e-8 spikes (~1e7) that wreck the value-target/GAE scale.
+VOLATILITY_FLOOR: float = 1e-4
 
 # Trading-day annualization factor
 ANNUALIZATION_FACTOR: float = 252.0
@@ -64,7 +70,10 @@ def sharpe_reward(
         window = min(rolling_window, T)
         mu     = mean(port_returns[-window:])
         sigma  = std(port_returns[-window:], ddof=1)
-        Sharpe = mu / max(sigma, _MIN_STD) * sqrt(annualization_factor)
+        Sharpe = mu / max(sigma, VOLATILITY_FLOOR) * sqrt(annualization_factor)
+
+    Returns neutral 0.0 while the window holds fewer than MIN_RISK_WINDOW
+    samples (warm-up), since the risk estimate is degenerate there.
     """
     if weights_history.ndim != 2 or return_panel.ndim != 2:
         raise ValueError("weights_history and return_panel must be 2D (T, n_stocks)")
@@ -78,9 +87,12 @@ def sharpe_reward(
     w = min(rolling_window, len(port_returns))
     recent = port_returns[-w:]
 
+    if len(recent) < MIN_RISK_WINDOW:  # warm-up: risk estimate degenerate (C5)
+        return 0.0
+
     mu = float(np.mean(recent))
-    sigma = float(np.std(recent, ddof=min(1, len(recent) - 1)))
-    return mu / max(sigma, _MIN_STD) * float(np.sqrt(annualization_factor))
+    sigma = float(np.std(recent, ddof=1))
+    return mu / max(sigma, VOLATILITY_FLOOR) * float(np.sqrt(annualization_factor))
 
 
 def sortino_reward(
@@ -94,7 +106,11 @@ def sortino_reward(
 
     Formula:
         downside_std = sqrt(mean(min(port_returns - target, 0)^2))
-        Sortino = (mu - target) / max(downside_std, _MIN_STD) * sqrt(annualization)
+        Sortino = (mu - target) / max(downside_std, VOLATILITY_FLOOR) * sqrt(annualization)
+
+    Returns neutral 0.0 while the window holds fewer than MIN_RISK_WINDOW
+    samples (warm-up). The VOLATILITY_FLOOR also bounds the reward when the
+    window has no downside returns (downside_std == 0, common in rallies).
     """
     if weights_history.ndim != 2 or return_panel.ndim != 2:
         raise ValueError("weights_history and return_panel must be 2D (T, n_stocks)")
@@ -108,12 +124,19 @@ def sortino_reward(
     w = min(rolling_window, len(port_returns))
     recent = port_returns[-w:]
 
+    if len(recent) < MIN_RISK_WINDOW:  # warm-up: risk estimate degenerate (C5)
+        return 0.0
+
     mu = float(np.mean(recent))
     excess = recent - target_return
     downside = np.minimum(excess, 0.0)
     downside_std = float(np.sqrt(np.mean(downside**2)))
 
-    return (mu - target_return) / max(downside_std, _MIN_STD) * float(np.sqrt(annualization_factor))
+    return (
+        (mu - target_return)
+        / max(downside_std, VOLATILITY_FLOOR)
+        * float(np.sqrt(annualization_factor))
+    )
 
 
 def mean_variance_reward(
@@ -153,6 +176,8 @@ def mean_variance_reward(
 
 __all__ = [
     "ANNUALIZATION_FACTOR",
+    "MIN_RISK_WINDOW",
+    "VOLATILITY_FLOOR",
     "simple_return_reward",
     "sharpe_reward",
     "sortino_reward",

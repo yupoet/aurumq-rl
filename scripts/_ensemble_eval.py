@@ -52,7 +52,9 @@ from aurumq_rl.data_loader import (
     FactorPanelLoader,
     UniverseFilter,
     align_panel_to_stock_list,
+    build_tradeable_mask,
 )
+from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,6 +92,19 @@ def _load_panel_aligned(args, factor_names: list[str], stock_codes: list[str]):
     )
     panel = align_panel_to_stock_list(panel, stock_codes)
     return panel
+
+
+def _score_cache_path(output_dir: Path, label: str, normalized: bool) -> Path:
+    """Cache file for a member's score matrix, keyed on normalization state.
+
+    C8: normalized runs use a distinct ``_norm`` cache name so score caches
+    written by pre-fix runs (which scored VecNormalize-trained members on RAW
+    obs) can never silently satisfy a run that now normalizes — and vice
+    versa. Non-normalized members keep the legacy name so their caches stay
+    valid.
+    """
+    suffix = "_norm" if normalized else ""
+    return output_dir / f"_scores_cache_{label}{suffix}.npy"
 
 
 def _score_member(zip_path: Path, panel_t: torch.Tensor, device: str) -> np.ndarray:
@@ -233,23 +248,45 @@ def main() -> int:
     n_dates, n_stocks, n_factors = panel.factor_array.shape
     print(f"[ensemble] panel: dates={n_dates} stocks={n_stocks} factors={n_factors}")
 
+    # C3+M5: shared tradeable mask (~suspended & ~ST & IPO gate &
+    # ~limit-up & ~limit-down) — same data_loader.build_tradeable_mask as
+    # the training valid_mask, applied to top-K, IC and random baseline.
+    # Subsumes the earlier per-date ST-only prediction NaN-ing.
+    tradeable = build_tradeable_mask(panel)
+    print(f"[ensemble] tradeable mask: {int(tradeable.sum()):,}/{tradeable.size:,} cells eligible")
+
     panel_t = torch.from_numpy(panel.factor_array).to(args.device)
 
     # Score each member once, cache to disk for re-use across variants.
     per_member: dict[str, np.ndarray] = {}
-    for label, zp, _ in members:
+    for label, zp, mp in members:
         if not zp.exists():
             print(f"  [skip] {label}: model missing at {zp}")
             continue
-        cache_path = args.output_dir / f"_scores_cache_{label}.npy"
+        # C8: if this member was trained with VecNormalize, apply its saved
+        # obs stats (vec_normalize.pkl next to the member zip); hard-error if
+        # its metadata says normalized but no pkl is found. Resolved BEFORE
+        # the cache check: the normalization state is part of the cache key,
+        # so pre-fix caches (scored on raw obs) can never satisfy a
+        # normalized run.
+        member_meta = json.loads(mp.read_text(encoding="utf-8")) if mp.exists() else {}
+        normalizer = resolve_obs_normalizer(zp.parent, member_meta)
+        cache_path = _score_cache_path(args.output_dir, label, normalizer is not None)
         if cache_path.exists():
             arr = np.load(cache_path)
             if arr.shape == (n_dates, n_stocks):
                 print(f"  [cache] {label}: loaded {arr.shape}")
                 per_member[label] = arr
                 continue
+        if normalizer is not None:
+            print(f"  [norm] {label}: applying VecNormalize obs stats from {zp.parent}")
+            member_panel_t = torch.from_numpy(
+                normalizer.normalize_obs(panel.factor_array)
+            ).to(args.device)
+        else:
+            member_panel_t = panel_t
         print(f"  [score] {label}: scoring {n_dates} dates...")
-        scores = _score_member(zp, panel_t, args.device)
+        scores = _score_member(zp, member_panel_t, args.device)
         np.save(cache_path, scores)
         per_member[label] = scores
     if not per_member:
@@ -287,6 +324,7 @@ def main() -> int:
             n_random_simulations=args.n_random_simulations,
             random_seed=0,
             forward_period=args.forward_period,
+            tradeable_mask=tradeable,
         )
         rb = result.random_baseline
         rand_p50_adj = rb.get("p50_sharpe_adjusted", 0.0)

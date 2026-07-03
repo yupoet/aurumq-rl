@@ -39,15 +39,20 @@ class GPUStockPickingEnv(VecEnv):
         # the reward for action taken at t.
         hold_returns: torch.Tensor | None = None,  # (T, S) fp32 cuda
     ) -> None:
-        if panel.device.type != "cuda":
-            raise ValueError("panel must be a cuda tensor")
+        # Residency guard: the panel must live on the env device. With the
+        # default device="cuda" this keeps the original protection against
+        # accidentally-CPU panels in training; device="cpu" allows the
+        # masking/reward logic to be tested without CUDA.
+        expected_device = torch.device(device).type
+        if panel.device.type != expected_device:
+            raise ValueError(f"panel must be a {expected_device} tensor")
         if panel.shape[0] != returns.shape[0] or panel.shape[1] != returns.shape[1]:
             raise ValueError("panel and returns date/stock dims must match")
         if panel.shape[:2] != valid_mask.shape:
             raise ValueError("panel and valid_mask date/stock dims must match")
         if hold_returns is not None:
-            if hold_returns.device.type != "cuda":
-                raise ValueError("hold_returns must be a cuda tensor")
+            if hold_returns.device.type != expected_device:
+                raise ValueError(f"hold_returns must be a {expected_device} tensor")
             if hold_returns.shape != returns.shape:
                 raise ValueError(
                     f"hold_returns shape {tuple(hold_returns.shape)} must match "
@@ -76,6 +81,11 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done = torch.zeros(n_envs, dtype=torch.long, device=self.device)
         self.episode_returns = torch.zeros(n_envs, dtype=torch.float32, device=self.device)
         self.prev_top_idx = torch.zeros(n_envs, top_k, dtype=torch.long, device=self.device)
+        # Which prev_top_idx entries were REAL picks (finite masked score).
+        # When valid_count < top_k, topk pads with -inf picks whose indices
+        # must not create spurious Jaccard overlap in the turnover term
+        # (C4 follow-up). All-False start = "no previous holdings".
+        self.prev_top_valid = torch.zeros(n_envs, top_k, dtype=torch.bool, device=self.device)
         # ``last_obs_t`` mirrors the t-index of the obs most recently emitted
         # by ``reset()`` / ``step_wait()``. The IndexOnlyRolloutBuffer reads
         # this snapshot inside ``add()`` to record which panel slice produced
@@ -107,6 +117,7 @@ class GPUStockPickingEnv(VecEnv):
         self.steps_done.zero_()
         self.episode_returns.zero_()
         self.prev_top_idx.zero_()
+        self.prev_top_valid.zero_()
         # Snapshot the t-index of the obs we are about to emit so the
         # index-only rollout buffer can reference it without copying obs.
         self.last_obs_t = self.t.clone()
@@ -128,27 +139,51 @@ class GPUStockPickingEnv(VecEnv):
         # corrupting evaluate_actions during PPO updates.
         self.last_obs_t = self.t.clone()
 
-        # 1. mask invalid stocks (they can never enter top-K)
+        # 1. mask invalid stocks (they can never enter top-K).
+        #    PARITY RULE (C4): valid_mask is built by the caller
+        #    (scripts/train_v2.py via data_loader.build_tradeable_mask) with
+        #    the same semantics as the CPU env's _apply_trading_mask —
+        #    ~ST & ~suspended & IPO gate & neither limit-up NOR limit-down
+        #    at the decision date, plus finite forward returns.
         action = action.masked_fill(~self.valid_mask[self.t], float("-inf"))
         # 2. top-K
-        top_idx = torch.topk(action, k=self.top_k, dim=-1).indices  # (n_envs, K)
+        top_scores, top_idx = torch.topk(action, k=self.top_k, dim=-1)  # (n_envs, K)
         # 3. realized return. Phase 22: prefer hold_returns (per-stock realized
         #    hold_return under MA5/MA10 signal exit, capped at 5 days) when
         #    provided; else fall back to V1's 10d forward mean. Both use the
         #    same indexing: row t is the realized return for action at t.
         return_source = self.hold_returns if self.hold_returns is not None else self.returns
         fwd_rets = return_source[self.t].gather(1, top_idx)  # (n_envs, K)
-        rewards = fwd_rets.mean(dim=-1) - self.cost_bps / 1e4
-        # 4. turnover penalty (Jaccard-style)
+        # NaN guard: missing (date, stock) cells carry NaN forward returns.
+        # valid_mask normally excludes them, but when < top_k stocks are
+        # valid on a date, topk can still select a masked stock — treat its
+        # return as 0 (the pre-C2 semantics) instead of poisoning the mean.
+        fwd_rets = torch.nan_to_num(fwd_rets, nan=0.0)
+        # C4 fix: when a date has fewer than top_k valid stocks, topk pads
+        # with -inf-scored (invalid) picks whose REAL returns would otherwise
+        # enter the mean. Zero those picks and average over real picks only
+        # (clamp avoids 0/0 on dates with no valid stock → reward = -cost).
+        real_pick = torch.isfinite(top_scores)  # (n_envs, K)
+        fwd_rets = fwd_rets * real_pick
+        n_real = real_pick.sum(dim=-1).clamp(min=1)
+        rewards = fwd_rets.sum(dim=-1) / n_real - self.cost_bps / 1e4
+        # 4. turnover penalty (Jaccard-style). C4 follow-up: compare only
+        #    REAL picks — padded -inf indices (valid_count < top_k) and the
+        #    zeroed prev_top_idx after reset must not create spurious
+        #    overlap. Denominator = current real-pick count (== top_k in the
+        #    normal fully-valid case, so behaviour there is unchanged).
         if self.turnover_coef > 0.0:
             overlap = torch.zeros_like(rewards)
+            denom = torch.ones_like(rewards)
             for i in range(self.num_envs):
-                overlap[i] = float(
-                    len(set(top_idx[i].tolist()) & set(self.prev_top_idx[i].tolist()))
-                )
-            jaccard_dist = 1.0 - overlap / float(self.top_k)
+                cur = set(top_idx[i][real_pick[i]].tolist())
+                prev = set(self.prev_top_idx[i][self.prev_top_valid[i]].tolist())
+                overlap[i] = float(len(cur & prev))
+                denom[i] = float(max(len(cur), 1))
+            jaccard_dist = 1.0 - overlap / denom
             rewards = rewards - self.turnover_coef * jaccard_dist
         self.prev_top_idx = top_idx
+        self.prev_top_valid = real_pick
         self.episode_returns += rewards
 
         # 5. advance time
@@ -192,6 +227,7 @@ class GPUStockPickingEnv(VecEnv):
         )
         # Zero prev_top_idx for done envs only
         self.prev_top_idx[dones] = 0
+        self.prev_top_valid[dones] = False
 
     def close(self) -> None:
         pass
