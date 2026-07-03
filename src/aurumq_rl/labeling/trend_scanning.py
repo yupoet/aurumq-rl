@@ -193,6 +193,12 @@ def detect_events_trend_scanning(
         always uses the raw t-stat — the transform only affects the reported
         `event_quality`.
     """
+    # Validate eagerly: a typo'd mode must fail immediately, not silently
+    # pass on a zero-event run and only raise once some event happens to fire.
+    if tstat_transform not in ("raw", "tanh", "clip"):
+        raise ValueError(
+            f"Unknown tstat_transform {tstat_transform!r}; expected 'raw', 'tanh', or 'clip'"
+        )
     events: list[Event] = []
     for j, ts_code in enumerate(panel.ts_codes):
         evs = _detect_events_one_stock(

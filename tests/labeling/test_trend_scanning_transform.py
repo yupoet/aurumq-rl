@@ -86,3 +86,16 @@ def test_tstat_transform_invalid_mode_raises():
         pass
     else:
         raise AssertionError("expected ValueError for unknown tstat_transform")
+
+
+def test_tstat_transform_invalid_mode_raises_even_with_zero_events():
+    # Eager validation: a flat panel fires no events, so a lazy per-event
+    # check would silently accept a typo'd mode. Must raise regardless.
+    flat = _make_panel(60, np.full(60, 10.0))
+    assert detect_events_trend_scanning(flat) == []
+    try:
+        detect_events_trend_scanning(flat, tstat_transform="bogus")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError even when no events fire")
