@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
 from p3.kronos_matrix_v13_lib import (
     build_lookback_window,
     d1_leakage_selfcheck,
@@ -21,7 +20,6 @@ from p3.kronos_matrix_v13_lib import (
     select_cell_embeddings,
     v13_artifact_path,
 )
-
 
 # =============================================================================
 # C9 — which embeddings frame does cell X train/score on

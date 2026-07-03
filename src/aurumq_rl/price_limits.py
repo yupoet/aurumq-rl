@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
@@ -290,7 +291,7 @@ _LEGACY_THRESHOLD: float = 0.095  # legacy fallback for unidentifiable boards
 @lru_cache(maxsize=8)
 def _classify_boards(
     stock_codes: tuple[str, ...],
-) -> tuple["np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray", "np.ndarray"]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-stock board classification arrays, cached per universe.
 
     The CPU env calls :func:`compute_at_limit_masks` every ``env.step`` with
@@ -331,13 +332,13 @@ def _classify_boards(
 
 
 def compute_at_limit_masks(
-    pct_chg: "np.ndarray",
+    pct_chg: np.ndarray,
     stock_codes: Sequence[str],
-    is_st: "np.ndarray | None" = None,
-    days_since_ipo: "np.ndarray | None" = None,
-    close: "np.ndarray | None" = None,
+    is_st: np.ndarray | None = None,
+    days_since_ipo: np.ndarray | None = None,
+    close: np.ndarray | None = None,
     epsilon: float = 1e-3,
-) -> tuple["np.ndarray", "np.ndarray"]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Vectorized per-(date, stock) limit-up / limit-down detection.
 
     SINGLE SOURCE OF TRUTH for panel-wide at-limit masks: the GPU training

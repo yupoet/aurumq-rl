@@ -31,7 +31,7 @@ def _make_panel(
     pct: np.ndarray | None = None,
     close: np.ndarray | None = None,
 ) -> FactorPanel:
-    codes = codes or ["600000.SH", "000001.SZ", "300750.SZ"]
+    codes = codes or ["600000.SH", "000001.SZ", "300888.SZ"]
     n_stocks = len(codes)
     shape = (n_dates, n_stocks)
     return FactorPanel(
@@ -120,9 +120,9 @@ def test_loader_populates_close_array(tmp_path: Path) -> None:
 def test_align_panel_carries_close_array() -> None:
     close = np.arange(6, dtype=np.float32).reshape(2, 3) + 1.0
     panel = _make_panel(n_dates=2, close=close)
-    aligned = align_panel_to_stock_list(panel, ["300750.SZ", "600000.SH", "688001.SH"])
+    aligned = align_panel_to_stock_list(panel, ["300888.SZ", "600000.SH", "688001.SH"])
     assert aligned.close_array is not None
-    # 300750.SZ was column 2, 600000.SH column 0; 688001.SH missing → NaN.
+    # 300888.SZ was column 2, 600000.SH column 0; 688001.SH missing → NaN.
     assert aligned.close_array[0, 0] == close[0, 2]
     assert aligned.close_array[0, 1] == close[0, 0]
     assert np.isnan(aligned.close_array[0, 2])
