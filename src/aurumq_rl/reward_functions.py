@@ -202,16 +202,31 @@ class DifferentialSharpe:
     NeurIPS 1998), so maximizing cumulative DSR reward directly targets
     end-of-episode Sharpe.
 
-    Numerical guards mirror sharpe_reward/sortino_reward's C5 fix exactly:
-    (a) warm-up — fewer than MIN_RISK_WINDOW updates observed (A/B have not
-    stabilized) — returns neutral 0.0; (b) past warm-up, the variance
-    B - A^2 denominator is floored at VOLATILITY_FLOOR^2 (never gated to a
-    hard 0.0), so a degenerate/near-constant return stream yields a bounded
-    finite value instead of a division-by-near-zero spike — the same
-    floor-the-denominator strategy sharpe_reward/sortino_reward use, rather
-    than a separate variance-based zero-gate (which would still let a
-    transient "phantom variance" hump from the zero-initialized EMA escape
-    unbounded for a genuinely constant stream near the guard boundary).
+    Numerical safety (the whole point vs. the C5 spike):
+
+    * **Warm-starting A, B from the first observation** (``A_1 = R_1``,
+      ``B_1 = R_1^2``; the seeding step itself returns 0.0). This is the
+      standard EMA cold-start-bias fix, and it is what keeps DSR bounded on
+      a constant stream. Zero-initializing A, B instead (the naive choice)
+      makes the EMA-estimated variance ``B - A^2`` decay from its cold-start
+      value; on a constant-return stream it crosses VOLATILITY_FLOOR^2 mid-
+      trajectory (≈ step 179 at eta=0.05), and right there |DSR| peaks at
+      ≈ 0.5 * |R| / VOLATILITY_FLOOR — a *transient* spike that scales
+      LINEARLY with |R| (~49 at R=1%, but ~990 at R=20%, exceeding 1e3 at
+      A-share limit-up magnitudes). Flooring the denominator does NOT remove
+      this peak (it occurs while the apparent variance is above the floor).
+      Warm-starting does: a constant stream then has ``A = R``, ``B = R^2``
+      exactly from step 1, so every ``dA = dB = 0`` → numerator is exactly
+      0 → DSR is exactly 0.0 forever, at ANY magnitude, with no transient.
+    * **MIN_RISK_WINDOW warm-up gate**: the first MIN_RISK_WINDOW updates
+      return 0.0 (A/B have not accumulated enough history), mirroring
+      sharpe_reward/sortino_reward.
+    * **VOLATILITY_FLOOR on the denominator**: floors the variance^1.5 term
+      so an exactly-constant stream yields 0 / floor = 0.0 instead of a
+      0 / 0 NaN, and a genuinely near-degenerate window stays finite —
+      the same max(..., VOLATILITY_FLOOR) guard sharpe_reward/sortino_reward
+      use. With warm-starting this floor is a belt-and-braces guard, not the
+      primary defence (which is the warm-start itself).
     """
 
     def __init__(self, eta: float = DEFAULT_DSR_ETA) -> None:
@@ -248,17 +263,28 @@ class DifferentialSharpe:
             Realized portfolio return for this step (same quantity fed to
             sharpe_reward/sortino_reward's per-step return series).
         """
+        self._n += 1
+
+        # Warm-start: seed A, B from the first observation instead of from
+        # zero. Avoids the cold-start-bias transient that would otherwise
+        # spike |DSR| ≈ 0.5*|R|/VOLATILITY_FLOOR mid-trajectory on a
+        # constant stream (see class docstring). The seeding step emits 0.0.
+        if self._n == 1:
+            self.a = r
+            self.b = r * r
+            return 0.0
+
         a_prev, b_prev = self.a, self.b
         d_a = r - a_prev
         d_b = r * r - b_prev
-        self._n += 1
 
         if self._n <= MIN_RISK_WINDOW:
             dsr = 0.0  # warm-up: A/B have not accumulated enough history
         else:
             variance = b_prev - a_prev * a_prev
-            # Floor (not zero-gate) the denominator: identical strategy to
-            # sharpe_reward/sortino_reward's max(sigma, VOLATILITY_FLOOR).
+            # Floor the denominator so an exactly-constant stream gives
+            # 0 / floor = 0.0 rather than a 0 / 0 NaN. With warm-starting
+            # this is a belt-and-braces guard, not the primary defence.
             denom = max(variance, VOLATILITY_FLOOR**2) ** 1.5
             dsr = (b_prev * d_a - 0.5 * a_prev * d_b) / denom
 

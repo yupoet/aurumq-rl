@@ -258,11 +258,12 @@ _DSR_RETURNS = [0.01, -0.02, 0.015, 0.03, -0.01, 0.02, 0.005, -0.015]
 def test_differential_sharpe_matches_hand_computed_recurrence() -> None:
     """DSR.update reproduces the Moody & Saffell recurrence for post-warm-up steps.
 
-    A_t, B_t evolve every step regardless of the warm-up gate; only the
-    *returned* reward is gated. We recompute the recurrence independently in
-    the test and compare against DifferentialSharpe's output for the steps
-    past MIN_RISK_WINDOW, where the guard is inactive and the raw formula
-    applies.
+    The first update warm-starts A, B from the seeding observation
+    (``A_1 = R_1``, ``B_1 = R_1^2``) and returns 0.0; thereafter A_t, B_t
+    evolve via the EMA recurrence every step, but only the reward past the
+    MIN_RISK_WINDOW gate is compared here (that is where the raw formula
+    applies). We recompute the recurrence — with the same warm-start
+    seeding — independently in the test.
     """
     eta = 0.05
     dsr = DifferentialSharpe(eta=eta)
@@ -271,9 +272,14 @@ def test_differential_sharpe_matches_hand_computed_recurrence() -> None:
     a, b = 0.0, 0.0
     expected: list[float] = []
     for i, r in enumerate(_DSR_RETURNS):
+        n = i + 1
+        if n == 1:  # warm-start seeding step: emit 0.0, seed A/B, no EMA step
+            expected.append(0.0)
+            a, b = r, r * r
+            continue
         d_a = r - a
         d_b = r * r - b
-        if i + 1 <= MIN_RISK_WINDOW:
+        if n <= MIN_RISK_WINDOW:
             expected.append(0.0)
         else:
             variance = b - a * a
@@ -285,13 +291,13 @@ def test_differential_sharpe_matches_hand_computed_recurrence() -> None:
     for i in range(MIN_RISK_WINDOW, len(_DSR_RETURNS)):
         assert actual[i] == pytest.approx(expected[i])
     # Pinned reference values (guards against silent formula drift).
-    assert actual[5] == pytest.approx(1.9040749737866718, rel=1e-6)
-    assert actual[6] == pytest.approx(0.4046549824137689, rel=1e-6)
-    assert actual[7] == pytest.approx(-2.144393833232199, rel=1e-6)
+    assert actual[5] == pytest.approx(0.9626651786208611, rel=1e-6)
+    assert actual[6] == pytest.approx(-0.10059759195011124, rel=1e-6)
+    assert actual[7] == pytest.approx(-6.292455580242512, rel=1e-6)
 
 
 def test_differential_sharpe_single_sample_returns_zero() -> None:
-    """First update (A=B=0 history) is degenerate → neutral 0.0, not a spike."""
+    """The seeding update returns 0.0 (no DSR on the warm-start sample)."""
     dsr = DifferentialSharpe()
     assert dsr.update(0.05) == 0.0
 
@@ -302,22 +308,28 @@ def test_differential_sharpe_warmup_below_min_risk_window_returns_zero() -> None
         assert dsr.update(0.01) == 0.0
 
 
-def test_differential_sharpe_constant_stream_bounded_by_variance_floor() -> None:
+@pytest.mark.parametrize("r", [0.01, 0.20, -0.20, 0.44])
+def test_differential_sharpe_constant_stream_stays_zero_at_any_magnitude(r: float) -> None:
     """Pathological all-equal return stream: true variance is 0 throughout.
 
     This is the C5 failure class (mu / near-zero-sigma spike) applied to the
-    recurrent DSR form. Mirroring sharpe_reward/sortino_reward's own
-    zero-variance-window test (test_sharpe_zero_variance_window_bounded_by_floor,
-    which floors to a finite nonzero value rather than forcing exactly 0.0),
-    DSR must stay finite and bounded (never a >1e3 C5-class spike) even
-    though the zero-initialized EMA has a transient "phantom variance" hump
-    before settling — it must never diverge like the pre-fix mu/1e-8 case.
+    recurrent DSR form. The warm-start (A=R, B=R^2 from the seeding step)
+    makes every subsequent dA = dB = 0, so DSR is *exactly* 0.0 forever — at
+    ANY magnitude, including A-share limit-up levels (±20%, and the ±44%
+    first-day-after-IPO / ST-band extremes).
+
+    Regression guard: the earlier zero-initialized-EMA implementation left a
+    phantom-variance transient whose peak |DSR| ≈ 0.5*|R|/VOLATILITY_FLOOR
+    scaled LINEARLY with |R| — ≈49 at R=1% but ≈990 at R=20% and >1e3 above,
+    which is exactly the C5-class spike this reward mode exists to avoid. The
+    r=0.20 case below is the one that would have caught it; it is well under
+    1.0 (in fact exactly 0.0) now.
     """
     dsr = DifferentialSharpe()
-    values = [dsr.update(0.01) for _ in range(500)]
-    assert all(v == 0.0 for v in values[:MIN_RISK_WINDOW])  # warm-up
+    values = [dsr.update(r) for _ in range(400)]
     assert all(np.isfinite(v) for v in values)
-    assert max(abs(v) for v in values) < 1e3
+    assert all(v == 0.0 for v in values)  # exact 0.0, no transient
+    assert max(abs(v) for v in values) < 1.0
 
 
 def test_differential_sharpe_varying_stream_is_finite_and_bounded() -> None:
@@ -331,21 +343,37 @@ def test_differential_sharpe_varying_stream_is_finite_and_bounded() -> None:
 
 
 def test_differential_sharpe_cumulative_sum_tracks_sharpe_direction() -> None:
-    """sum(DSR_t) is positive for a stream with a good risk-adjusted profile
-    and negative for a symmetric bad one — the algorithmic justification for
-    using DSR as a per-step reward instead of a rolling Sharpe snapshot.
+    """sum(DSR_t) tracks the *change* in the batch Sharpe ratio — the
+    algorithmic justification for DSR as a per-step reward instead of a
+    rolling-Sharpe snapshot.
+
+    The correct property is about Sharpe *change*, not level: a stream whose
+    risk-adjusted profile IMPROVES over the episode (a poor first half, a
+    strong second half) has a positive cumulative DSR; one that DEGRADES
+    (strong then poor) has a negative one. (A stationary stream, by contrast,
+    has no Sharpe change and a cumulative DSR of ~0 ± noise — which is why an
+    earlier version of this test, asserting the sign of a *stationary* good vs
+    bad stream, was actually measuring a zero-init cold-start artifact rather
+    than the real property; warm-starting removes that artifact.)
+
+    Aggregated over a seed ensemble to stay robust, not brittle.
     """
-    rng = np.random.default_rng(7)
-    good = rng.normal(0.01, 0.01, 80)
-    bad = rng.normal(-0.01, 0.01, 80)
+    improving_sums = []
+    degrading_sums = []
+    for seed in range(30):
+        rng = np.random.default_rng(seed)
+        improving = np.concatenate([rng.normal(-0.01, 0.01, 100), rng.normal(0.01, 0.01, 100)])
+        rng2 = np.random.default_rng(1000 + seed)
+        degrading = np.concatenate([rng2.normal(0.01, 0.01, 100), rng2.normal(-0.01, 0.01, 100)])
+        d_imp = DifferentialSharpe(eta=0.05)
+        d_deg = DifferentialSharpe(eta=0.05)
+        improving_sums.append(sum(d_imp.update(float(r)) for r in improving))
+        degrading_sums.append(sum(d_deg.update(float(r)) for r in degrading))
 
-    dsr_good = DifferentialSharpe(eta=0.05)
-    dsr_bad = DifferentialSharpe(eta=0.05)
-    sum_good = sum(dsr_good.update(float(r)) for r in good)
-    sum_bad = sum(dsr_bad.update(float(r)) for r in bad)
-
-    assert sum_good > 0
-    assert sum_bad < 0
+    # Aggregate sign is unambiguous (improving positive, degrading negative).
+    assert float(np.sum(improving_sums)) > 0
+    assert float(np.sum(degrading_sums)) < 0
+    assert float(np.mean(improving_sums)) > float(np.mean(degrading_sums))
 
 
 def test_differential_sharpe_reset_clears_state() -> None:
