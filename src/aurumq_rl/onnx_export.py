@@ -303,9 +303,7 @@ def _build_deterministic_export_module(policy: Any, norm_stats: dict[str, Any] |
                     torch.as_tensor(norm_stats["mean"], dtype=torch.float32),
                 )
                 std = np.sqrt(norm_stats["var"] + norm_stats["epsilon"])
-                self.register_buffer(
-                    "obs_std", torch.as_tensor(std, dtype=torch.float32)
-                )
+                self.register_buffer("obs_std", torch.as_tensor(std, dtype=torch.float32))
                 self.clip_obs = float(norm_stats["clip_obs"])
 
         def forward(self, obs: Any) -> Any:

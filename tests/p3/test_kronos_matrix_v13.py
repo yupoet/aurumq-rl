@@ -32,12 +32,32 @@ def _frames(*keys: str) -> dict:
 
 
 class TestSelectCellEmbeddings:
-    FT_CELL = {"univ": "MAIN_BOARD", "anchor": "T3", "spec": "alpha", "is_null": False, "is_base": False}
-    NULL_CELL = {"univ": "MAIN_BOARD", "anchor": "T3", "spec": "alpha", "is_null": True, "is_base": False}
-    BASE_CELL = {"univ": "MAIN_BOARD", "anchor": "T3", "spec": "alpha", "is_null": False, "is_base": True}
+    FT_CELL = {
+        "univ": "MAIN_BOARD",
+        "anchor": "T3",
+        "spec": "alpha",
+        "is_null": False,
+        "is_base": False,
+    }
+    NULL_CELL = {
+        "univ": "MAIN_BOARD",
+        "anchor": "T3",
+        "spec": "alpha",
+        "is_null": True,
+        "is_base": False,
+    }
+    BASE_CELL = {
+        "univ": "MAIN_BOARD",
+        "anchor": "T3",
+        "spec": "alpha",
+        "is_null": False,
+        "is_base": True,
+    }
 
     def test_finetuned_cell_uses_label_and_eval(self):
-        assert select_cell_embeddings(self.FT_CELL, _frames("label", "eval", "base", "base_eval")) == (
+        assert select_cell_embeddings(
+            self.FT_CELL, _frames("label", "eval", "base", "base_eval")
+        ) == (
             "label",
             "eval",
         )
@@ -50,7 +70,9 @@ class TestSelectCellEmbeddings:
         assert select_cell_embeddings(self.FT_CELL, _frames("label")) == ("label", "eval")
 
     def test_base_cell_uses_base_and_base_eval(self):
-        assert select_cell_embeddings(self.BASE_CELL, _frames("label", "eval", "base", "base_eval")) == (
+        assert select_cell_embeddings(
+            self.BASE_CELL, _frames("label", "eval", "base", "base_eval")
+        ) == (
             "base",
             "base_eval",
         )
@@ -177,8 +199,12 @@ class TestArtifactPaths:
 
     def test_pred_full_vs_smoke(self):
         cid = "alpha_T3_MAIN_BOARD_BASE"
-        full = v13_artifact_path("pred", smoke=False, out_dir=self.OUT, results_dir=self.RES, cid=cid)
-        smoke = v13_artifact_path("pred", smoke=True, out_dir=self.OUT, results_dir=self.RES, cid=cid)
+        full = v13_artifact_path(
+            "pred", smoke=False, out_dir=self.OUT, results_dir=self.RES, cid=cid
+        )
+        smoke = v13_artifact_path(
+            "pred", smoke=True, out_dir=self.OUT, results_dir=self.RES, cid=cid
+        )
         assert full == self.OUT / f"pred_{cid}.parquet"
         assert smoke == self.OUT / f"pred_{cid}_smoke.parquet"
 

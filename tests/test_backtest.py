@@ -97,12 +97,19 @@ def test_tradeable_mask_excludes_best_stock_from_top_k():
     mask[:, 0] = False  # e.g. limit-up at t → not buyable
 
     _, series_unmasked = run_backtest_with_series(
-        preds, returns, dates=list(range(returns.shape[0])), top_k=2,
+        preds,
+        returns,
+        dates=list(range(returns.shape[0])),
+        top_k=2,
         n_random_simulations=3,
     )
     _, series_masked = run_backtest_with_series(
-        preds, returns, dates=list(range(returns.shape[0])), top_k=2,
-        n_random_simulations=3, tradeable_mask=mask,
+        preds,
+        returns,
+        dates=list(range(returns.shape[0])),
+        top_k=2,
+        n_random_simulations=3,
+        tradeable_mask=mask,
     )
     # Without mask: (0.10 + 0.001) / 2. With mask: (0.001 + 0.001) / 2.
     assert all(r == pytest.approx((0.10 + 0.001) / 2) for r in series_unmasked.top_k_returns)
@@ -114,9 +121,7 @@ def test_tradeable_mask_applies_to_scalar_result_and_ic():
     mask = np.ones_like(returns, dtype=bool)
     mask[:, 0] = False
     res_unmasked = run_backtest(preds, returns, top_k=2, n_random_simulations=3)
-    res_masked = run_backtest(
-        preds, returns, top_k=2, n_random_simulations=3, tradeable_mask=mask
-    )
+    res_masked = run_backtest(preds, returns, top_k=2, n_random_simulations=3, tradeable_mask=mask)
     assert res_masked.top_k_cumret < res_unmasked.top_k_cumret
     assert np.isfinite(res_masked.ic)
 
@@ -125,8 +130,7 @@ def test_tradeable_mask_shape_mismatch_raises():
     preds, returns = _best_stock_setup()
     bad_mask = np.ones((5, 5), dtype=bool)
     with pytest.raises(ValueError):
-        run_backtest(preds, returns, top_k=2, n_random_simulations=3,
-                     tradeable_mask=bad_mask)
+        run_backtest(preds, returns, top_k=2, n_random_simulations=3, tradeable_mask=bad_mask)
 
 
 def test_random_baseline_respects_tradeable_mask():
@@ -136,9 +140,7 @@ def test_random_baseline_respects_tradeable_mask():
     mask = np.ones_like(returns, dtype=bool)
     mask[:, 0] = False
     rb_unmasked = random_baseline(returns, top_k=3, n_simulations=20, seed=1)
-    rb_masked = random_baseline(
-        returns, top_k=3, n_simulations=20, seed=1, tradeable_mask=mask
-    )
+    rb_masked = random_baseline(returns, top_k=3, n_simulations=20, seed=1, tradeable_mask=mask)
     # Unmasked simulations sometimes pick stock 0 → non-degenerate Sharpe.
     assert rb_unmasked["mean_sharpe"] != 0.0
     # Masked simulations can never pick stock 0 → all returns 0 → Sharpe 0.

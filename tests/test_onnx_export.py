@@ -105,9 +105,7 @@ def _make_vecnorm(clip_obs: float = 5.0) -> VecNormalize:
 
 def _assert_parity(sess: ort.InferenceSession, model, obs: np.ndarray, sb3_obs=None) -> None:
     """ONNX(obs) must match policy.predict(sb3_obs or obs, deterministic=True)."""
-    sb3_actions, _ = model.policy.predict(
-        obs if sb3_obs is None else sb3_obs, deterministic=True
-    )
+    sb3_actions, _ = model.policy.predict(obs if sb3_obs is None else sb3_obs, deterministic=True)
     # Precondition: predict() clips to the (-1, 1) action space while the
     # export is the RAW mean — value parity is only meaningful in-bounds.
     assert np.all(np.abs(sb3_actions) < 1.0)
@@ -115,9 +113,7 @@ def _assert_parity(sess: ort.InferenceSession, model, obs: np.ndarray, sb3_obs=N
     np.testing.assert_allclose(onnx_actions, sb3_actions, rtol=1e-4, atol=1e-5)
     # Downstream consumers rank scores for top-k selection: the ranking must
     # be IDENTICAL between the SB3 eval path and the exported graph.
-    assert np.array_equal(
-        np.argsort(-onnx_actions, axis=1), np.argsort(-sb3_actions, axis=1)
-    )
+    assert np.array_equal(np.argsort(-onnx_actions, axis=1), np.argsort(-sb3_actions, axis=1))
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +202,7 @@ def test_vecnorm_baked_parity(tiny_ppo, tmp_path: Path) -> None:
 
 def test_metadata_obs_normalized_false_without_stats(tiny_ppo, tmp_path: Path) -> None:
     _, model_path = tiny_ppo
-    export_sb3_policy_to_onnx(
-        model_path=model_path, output_dir=tmp_path, obs_shape=(OBS_DIM,)
-    )
+    export_sb3_policy_to_onnx(model_path=model_path, output_dir=tmp_path, obs_shape=(OBS_DIM,))
     meta = load_metadata(tmp_path)
     assert meta["obs_normalized"] is False
 
@@ -219,9 +213,7 @@ def test_vecnorm_shape_mismatch_raises(tiny_ppo, tmp_path: Path) -> None:
     _, model_path = tiny_ppo
     bad = SimpleNamespace(
         norm_obs=True,
-        obs_rms=SimpleNamespace(
-            mean=np.zeros(OBS_DIM + 1), var=np.ones(OBS_DIM + 1)
-        ),
+        obs_rms=SimpleNamespace(mean=np.zeros(OBS_DIM + 1), var=np.ones(OBS_DIM + 1)),
         epsilon=1e-8,
         clip_obs=10.0,
     )

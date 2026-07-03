@@ -379,9 +379,7 @@ def compute_at_limit_masks(
     if len(stock_codes) != n_stocks:
         raise ValueError(f"stock_codes length {len(stock_codes)} != n_stocks {n_stocks}")
 
-    up_base, down_base, st_capable, no_limit_5d, bj, known = _classify_boards(
-        tuple(stock_codes)
-    )
+    up_base, down_base, st_capable, no_limit_5d, bj, known = _classify_boards(tuple(stock_codes))
 
     up_pct = np.broadcast_to(up_base, (n_dates, n_stocks)).copy()
     down_pct = np.broadcast_to(down_base, (n_dates, n_stocks)).copy()

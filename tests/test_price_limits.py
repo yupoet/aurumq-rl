@@ -337,12 +337,16 @@ def test_rounded_limit_detection_float32_high_price(
     pct = np.float32((limit_close - prev_close) / prev_close)
     # Scalar API with float32 inputs.
     assert is_at_limit_up(
-        "600519.SH", float(pct),
-        prev_close=float(np.float32(prev_close)), close=float(np.float32(limit_close)),
+        "600519.SH",
+        float(pct),
+        prev_close=float(np.float32(prev_close)),
+        close=float(np.float32(limit_close)),
     )
     assert not is_at_limit_up(
-        "600519.SH", float(np.float32((below_close - prev_close) / prev_close)),
-        prev_close=float(np.float32(prev_close)), close=float(np.float32(below_close)),
+        "600519.SH",
+        float(np.float32((below_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)),
+        close=float(np.float32(below_close)),
     )
     # Vectorized API fed float32 arrays end-to-end.
     close32 = np.array([[limit_close, below_close]], dtype=np.float32)
@@ -359,12 +363,16 @@ def test_rounded_limit_down_detection_float32_high_price() -> None:
     # prev 91.00 → down limit round(81.90) = 81.90; float32 81.90 ≈ 81.900002.
     prev_close, limit_close, above_close = 91.00, 81.90, 81.91
     assert is_at_limit_down(
-        "600519.SH", float(np.float32((limit_close - prev_close) / prev_close)),
-        prev_close=float(np.float32(prev_close)), close=float(np.float32(limit_close)),
+        "600519.SH",
+        float(np.float32((limit_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)),
+        close=float(np.float32(limit_close)),
     )
     assert not is_at_limit_down(
-        "600519.SH", float(np.float32((above_close - prev_close) / prev_close)),
-        prev_close=float(np.float32(prev_close)), close=float(np.float32(above_close)),
+        "600519.SH",
+        float(np.float32((above_close - prev_close) / prev_close)),
+        prev_close=float(np.float32(prev_close)),
+        close=float(np.float32(above_close)),
     )
 
 

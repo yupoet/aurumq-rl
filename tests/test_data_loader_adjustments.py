@@ -222,9 +222,7 @@ def test_safe_log_return_invalid_prices_are_nan() -> None:
 
 
 def test_safe_log_return_valid_prices() -> None:
-    out = _safe_log_return(
-        np.array([10.0], dtype=np.float32), np.array([20.0], dtype=np.float32)
-    )
+    out = _safe_log_return(np.array([10.0], dtype=np.float32), np.array([20.0], dtype=np.float32))
     assert np.allclose(out, np.log(2.0), atol=1e-6)
 
 
@@ -327,9 +325,7 @@ def test_main_wave_labels_amount_override() -> None:
     labels_default = compute_main_wave_labels(close, pct, vol, valid, cfg)
     assert not labels_default.liquid_mask.any()
 
-    labels_amt = compute_main_wave_labels(
-        close, pct, vol, valid, cfg, amount=np.full((T, S), 2e8)
-    )
+    labels_amt = compute_main_wave_labels(close, pct, vol, valid, cfg, amount=np.full((T, S), 2e8))
     assert labels_amt.liquid_mask[cfg.amount_ma_window :].all()
 
 
@@ -340,9 +336,7 @@ def test_find_main_wave_episodes_accepts_amount_override() -> None:
     close = np.full((T, S), 10.0)
     vol = np.full((T, S), 1e3)
     valid = np.ones((T, S), dtype=bool)
-    eps = find_main_wave_episodes(
-        close, vol, valid, EpisodeConfig(), amount=np.full((T, S), 2e8)
-    )
+    eps = find_main_wave_episodes(close, vol, valid, EpisodeConfig(), amount=np.full((T, S), 2e8))
     assert isinstance(eps, list)
 
 

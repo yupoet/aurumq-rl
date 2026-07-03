@@ -37,9 +37,7 @@ def _make_panel(
     return FactorPanel(
         factor_array=np.zeros((n_dates, n_stocks, 2), dtype=np.float32),
         return_array=np.full(shape, 0.01, dtype=np.float32),
-        pct_change_array=(
-            pct if pct is not None else np.zeros(shape, dtype=np.float32)
-        ),
+        pct_change_array=(pct if pct is not None else np.zeros(shape, dtype=np.float32)),
         is_st_array=np.zeros(shape, dtype=np.bool_),
         is_suspended_array=np.zeros(shape, dtype=np.bool_),
         days_since_ipo_array=np.full(shape, 1000.0, dtype=np.float32),
@@ -99,16 +97,24 @@ def test_loader_populates_close_array(tmp_path: Path) -> None:
     dates = [datetime.date(2022, 1, 3) + datetime.timedelta(days=i) for i in range(3)]
     recs = []
     for i, d in enumerate(dates):
-        recs.append({
-            "trade_date": d, "ts_code": "600000.SH", "close": 10.0 + i,
-            "pct_chg": 0.0, "vol": 1000.0, "alpha_x": float(i),
-            "adj_factor": 1.0,
-        })
+        recs.append(
+            {
+                "trade_date": d,
+                "ts_code": "600000.SH",
+                "close": 10.0 + i,
+                "pct_chg": 0.0,
+                "vol": 1000.0,
+                "alpha_x": float(i),
+                "adj_factor": 1.0,
+            }
+        )
     path = tmp_path / "panel.parquet"
     pl.DataFrame(recs).write_parquet(path)
     loader = FactorPanelLoader(parquet_path=path)
     panel = loader.load_panel(
-        start_date=dates[0], end_date=dates[-1], forward_period=1,
+        start_date=dates[0],
+        end_date=dates[-1],
+        forward_period=1,
         universe_filter=UniverseFilter.ALL_A,
     )
     assert panel.close_array is not None

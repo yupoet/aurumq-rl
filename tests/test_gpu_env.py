@@ -122,8 +122,15 @@ def test_nan_returns_do_not_poison_rewards():
     returns = torch.from_numpy(ret).to("cuda")
     valid_mask = torch.ones(panel.shape[:2], dtype=torch.bool, device="cuda")
     env = GPUStockPickingEnv(
-        panel, returns, valid_mask, n_envs=2, episode_length=10,
-        forward_period=5, top_k=5, cost_bps=0.0, seed=0,
+        panel,
+        returns,
+        valid_mask,
+        n_envs=2,
+        episode_length=10,
+        forward_period=5,
+        top_k=5,
+        cost_bps=0.0,
+        seed=0,
     )
     env.reset()
     env.step_async(np.zeros((2, 50), dtype=np.float32))
@@ -227,9 +234,7 @@ def test_turnover_penalty_ignores_padding_picks():
     valid_np[0, [0, 1]] = True  # t=0: only stocks {0, 1} valid; top_k=4
     valid_np[1, [2, 3]] = True  # t=1: portfolio flips completely to {2, 3}
     valid_np[2:] = True
-    env = _make_cpu_env(
-        returns_np, valid_np, top_k=4, n_stocks=n_stocks, turnover_coef=1.0
-    )
+    env = _make_cpu_env(returns_np, valid_np, top_k=4, n_stocks=n_stocks, turnover_coef=1.0)
     action = np.zeros((1, n_stocks), dtype=np.float32)
     env.step_async(action)
     _, rewards_1, _, _ = env.step_wait()

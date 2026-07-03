@@ -64,9 +64,7 @@ class BacktestResult:
         return cls(**data)
 
 
-def _apply_tradeable_mask(
-    predictions: np.ndarray, tradeable_mask: np.ndarray | None
-) -> np.ndarray:
+def _apply_tradeable_mask(predictions: np.ndarray, tradeable_mask: np.ndarray | None) -> np.ndarray:
     """NaN-out predictions for untradeable (date, stock) cells (M5).
 
     Semantics: cells where ``tradeable_mask`` is False are excluded from
