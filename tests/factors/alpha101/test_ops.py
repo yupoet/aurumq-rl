@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -32,6 +33,7 @@ from aurumq_rl.factors.alpha101._ops import (
     delta,
     if_then_else,
     ind_neutralize,
+    ind_neutralize_regression,
     log1p,
     log_,
     power,
@@ -464,6 +466,119 @@ class TestIndNeutralize:
         out = _apply(df, ind_neutralize(pl.col("x"), pl.col("industry")))
         # Both in same cell, mean=3 → [-1, 1]
         assert out == [-1.0, 1.0]
+
+
+class TestIndNeutralizeRegression:
+    """Discriminating tests for the opt-in regression-based neutralizer.
+
+    ``ind_neutralize_regression`` regresses ``col`` per-day on industry
+    dummies (+ optional ``log_cap``) and returns residuals — unlike
+    ``ind_neutralize`` (plain per-group demean), the size confound is
+    explicitly controlled for when ``log_cap`` is supplied.
+    """
+
+    @staticmethod
+    def _size_confounded_panel(
+        n_per_industry: int = 20, n_days: int = 2, seed: int = 0
+    ) -> pl.DataFrame:
+        """Two industries whose ``log_cap`` distributions differ systematically,
+        and whose ``x`` value is a linear function of ``log_cap`` plus an
+        industry-specific offset — i.e. industry and size are correlated by
+        construction, exactly the confound the regression neutralizer must
+        remove that plain demeaning cannot.
+        """
+        rng = np.random.default_rng(seed)
+        rows = []
+        for day in range(n_days):
+            for industry, offset, cap_loc in (("Tech", 10.0, 6.0), ("Fin", -5.0, 3.0)):
+                for i in range(n_per_industry):
+                    log_cap = float(rng.normal(loc=cap_loc, scale=1.0))
+                    x = offset + 0.8 * log_cap + float(rng.normal(scale=0.05))
+                    rows.append((day, f"{industry}{i}", industry, x, log_cap))
+        return pl.DataFrame(
+            rows,
+            schema=["trade_date", "stock_code", "industry", "x", "log_cap"],
+            orient="row",
+        )
+
+    def test_residuals_uncorrelated_with_log_cap(self):
+        panel = self._size_confounded_panel()
+        out = panel.with_columns(
+            ind_neutralize_regression(pl.col("x"), "industry", log_cap=pl.col("log_cap")).alias(
+                "resid"
+            )
+        )
+        resid = out["resid"].to_numpy()
+        log_cap = out["log_cap"].to_numpy()
+        corr = np.corrcoef(resid, log_cap)[0, 1]
+        assert abs(corr) < 0.05, f"residuals still correlated with log_cap: corr={corr}"
+
+    def test_plain_demean_residuals_remain_correlated_with_log_cap(self):
+        """Sanity/contrast: the OLD ``ind_neutralize`` (no size control) does
+        NOT remove the size confound on the same panel — this is the gap
+        ``ind_neutralize_regression`` exists to close."""
+        panel = self._size_confounded_panel()
+        out = panel.with_columns(ind_neutralize(pl.col("x"), "industry").alias("demeaned"))
+        demeaned = out["demeaned"].to_numpy()
+        log_cap = out["log_cap"].to_numpy()
+        corr = np.corrcoef(demeaned, log_cap)[0, 1]
+        assert abs(corr) > 0.5, f"expected plain demean to stay confounded, corr={corr}"
+
+    def test_single_stock_group_left_unchanged_not_zeroed(self):
+        # industry "Y" has exactly one member on this date -> below
+        # min_group_size=2, so its residual must equal its original value,
+        # NOT be forced to 0 (the documented min_group_size guard).
+        df = pl.DataFrame(
+            {
+                "stock_code": ["a", "b", "c"],
+                "trade_date": [1, 1, 1],
+                "x": [1.0, 2.0, 42.0],
+                "industry": ["X", "X", "Y"],
+                "log_cap": [1.0, 2.0, 3.0],
+            }
+        )
+        out = df.with_columns(
+            ind_neutralize_regression(
+                pl.col("x"), "industry", log_cap=pl.col("log_cap"), min_group_size=2
+            ).alias("resid")
+        )
+        row_c = out.filter(pl.col("stock_code") == "c")
+        assert row_c["resid"][0] == pytest.approx(42.0)
+        # And it is NOT forced to 0 (the bug this guard prevents).
+        assert row_c["resid"][0] != 0.0
+
+    def test_null_industry_produces_nan(self):
+        df = pl.DataFrame(
+            {
+                "stock_code": ["a", "b", "c"],
+                "trade_date": [1, 1, 1],
+                "x": [1.0, 2.0, 3.0],
+                "industry": ["X", "X", None],
+            }
+        )
+        out = df.with_columns(ind_neutralize_regression(pl.col("x"), "industry").alias("resid"))
+        row_c = out.filter(pl.col("stock_code") == "c")
+        val = row_c["resid"][0]
+        assert val is None or val != val  # None or NaN
+
+    def test_works_without_log_cap(self, synthetic_panel):
+        # Industry-only regression (no continuous control) must still run
+        # cleanly end-to-end on the real fixture.
+        out = synthetic_panel.with_columns(
+            ind_neutralize_regression(pl.col("close"), "industry").alias("resid")
+        )
+        assert out["resid"].dtype == pl.Float64
+        assert len(out["resid"]) == synthetic_panel.height
+        assert out["resid"].drop_nulls().drop_nans().shape[0] > 0
+
+    def test_dtype_and_length(self, synthetic_panel):
+        out = synthetic_panel.with_columns(
+            ind_neutralize_regression(
+                pl.col("close"), "industry", log_cap=pl.col("cap").log()
+            ).alias("resid")
+        )
+        assert out["resid"].dtype == pl.Float64
+        assert len(out["resid"]) == synthetic_panel.height
 
 
 # ===========================================================================

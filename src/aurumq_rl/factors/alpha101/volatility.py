@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import math
+
 import polars as pl
 
 from aurumq_rl.factors.registry import FactorEntry, register_alpha101
 
 from ._ops import (
+    TS_PART,
     cs_rank,
+    delay,
     delta,
     signed_power,
     ts_argmax,
@@ -261,6 +265,160 @@ def alpha_custom_kurt_filter(panel: pl.DataFrame) -> pl.Series:
     ).to_series()
 
 
+# ---------------------------------------------------------------------------
+# Part 2 — Yang-Zhang / Garman-Klass volatility estimators (new custom
+# factors, no parity constraint). Existing custom volatility factors above
+# only look at close-to-close returns (ts_std); these consume the OHLC
+# already present in the panel for a drift-independent range estimator.
+# ---------------------------------------------------------------------------
+
+YZ_GK_DEFAULT_WINDOW: int = 20
+"""Rolling window (trading days) used by the default-registered YZ/GK factors."""
+
+
+def yang_zhang_volatility(window: int = YZ_GK_DEFAULT_WINDOW) -> pl.Expr:
+    """Yang-Zhang drift-independent volatility estimator (per-stock rolling).
+
+    Combines the overnight (close-to-open), open-to-close, and
+    Rogers-Satchell components:
+
+        V_o  = rolling_var(ln(open / prev_close), window)
+        V_c  = rolling_var(ln(close / open), window)
+        V_rs = rolling_mean(RS, window)   where
+               RS = ln(high/close)*ln(high/open) + ln(low/close)*ln(low/open)
+        k    = 0.34 / (1.34 + (window + 1) / (window - 1))
+        YZ   = sqrt(V_o + k*V_c + (1 - k)*V_rs)
+
+    Reference: Yang & Zhang (2000), "Drift-Independent Volatility Estimation
+    Based on High, Low, Open, and Close Prices".
+
+    Limit-locked day handling
+    --------------------------
+    Days where ``high == low`` (一字板 / limit-locked — no intraday range
+    traded) make the Rogers-Satchell range term degenerate (it collapses
+    toward an artificial value that is not reflective of true volatility,
+    biasing the window average). Those days' RS contribution is set to
+    null and skipped by the rolling mean (``min_samples=1`` — a handful of
+    limit-locked days inside the window do not null out the whole
+    estimate; the ``V_o``/``V_c`` terms still require a full window of
+    non-degenerate history via ``ts_std``'s ``min_samples=window``, so the
+    usual "first ``window - 1`` rows are null" warm-up convention holds).
+
+    Required columns: ``open``, ``high``, ``low``, ``close``, ``stock_code``.
+    Output is clipped to ``>= 0`` before the square root as a defensive
+    guard against a (theoretically rare) negative combined-variance
+    estimate from sampling noise.
+    """
+    if window < 2:
+        raise ValueError(f"window={window} must be >= 2")
+
+    prev_close = delay(pl.col("close"), 1)
+    log_overnight = (pl.col("open") / prev_close).log()
+    log_open_close = (pl.col("close") / pl.col("open")).log()
+    limit_locked = pl.col("high") == pl.col("low")
+    rogers_satchell = (
+        pl.when(limit_locked)
+        .then(None)
+        .otherwise(
+            (pl.col("high") / pl.col("close")).log() * (pl.col("high") / pl.col("open")).log()
+            + (pl.col("low") / pl.col("close")).log() * (pl.col("low") / pl.col("open")).log()
+        )
+    )
+
+    v_o = ts_std(log_overnight, window).pow(2.0)
+    v_c = ts_std(log_open_close, window).pow(2.0)
+    v_rs = rogers_satchell.rolling_mean(window_size=window, min_samples=1).over(TS_PART)
+
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
+    yz_var = v_o + k * v_c + (1.0 - k) * v_rs
+    return yz_var.clip(lower_bound=0.0).sqrt()
+
+
+def garman_klass_volatility(window: int = YZ_GK_DEFAULT_WINDOW) -> pl.Expr:
+    """Garman-Klass range-based volatility estimator (per-stock rolling).
+
+        GK = 0.5*ln(high/low)^2 - (2*ln(2) - 1)*ln(close/open)^2
+        estimate = sqrt(rolling_mean(GK, window))
+
+    Reference: Garman & Klass (1980), "On the Estimation of Security Price
+    Volatilities from Historical Data".
+
+    Limit-locked day handling
+    --------------------------
+    Same rationale as :func:`yang_zhang_volatility`: ``high == low`` days
+    are excluded from the ``GK`` rolling mean (null, skipped) rather than
+    contributing an artificial low-range observation. Because this
+    estimator has no separate overnight/open-close term to gate warm-up
+    (unlike Yang-Zhang), an explicit "calendar readiness" flag — a count
+    of the last ``window`` rows via ``close.is_not_null()`` — enforces the
+    usual "first ``window - 1`` rows are null" convention independently of
+    how many of those rows happened to be limit-locked.
+
+    Required columns: ``open``, ``high``, ``low``, ``close``, ``stock_code``.
+    Output is clipped to ``>= 0`` before the square root as a defensive
+    guard against sampling noise.
+    """
+    if window < 2:
+        raise ValueError(f"window={window} must be >= 2")
+
+    ln2_term = 2.0 * math.log(2.0) - 1.0
+    limit_locked = pl.col("high") == pl.col("low")
+    gk_raw = (
+        pl.when(limit_locked)
+        .then(None)
+        .otherwise(
+            0.5 * (pl.col("high") / pl.col("low")).log().pow(2.0)
+            - ln2_term * (pl.col("close") / pl.col("open")).log().pow(2.0)
+        )
+    )
+    raw_mean = gk_raw.rolling_mean(window_size=window, min_samples=1).over(TS_PART)
+    calendar_ready = (
+        pl.col("close")
+        .is_not_null()
+        .cast(pl.Float64)
+        .rolling_sum(window_size=window, min_samples=window)
+        .over(TS_PART)
+    )
+    gk_var = pl.when(calendar_ready.is_not_null()).then(raw_mean).otherwise(None)
+    return gk_var.clip(lower_bound=0.0).sqrt()
+
+
+def alpha_custom_yang_zhang_vol(panel: pl.DataFrame) -> pl.Series:
+    """AurumQ custom — Yang-Zhang drift-independent volatility (20-day).
+
+    See :func:`yang_zhang_volatility` for the formula and the
+    limit-locked-day exclusion rule.
+
+    Required panel columns: ``open``, ``high``, ``low``, ``close``,
+    ``stock_code``, ``trade_date``
+
+    Direction: ``normal``
+    Category: ``volatility``
+    """
+    staged = panel.with_columns(
+        yang_zhang_volatility(YZ_GK_DEFAULT_WINDOW).alias("alpha_custom_yang_zhang_vol")
+    )
+    return staged.select("alpha_custom_yang_zhang_vol").to_series()
+
+
+def alpha_custom_garman_klass_vol(panel: pl.DataFrame) -> pl.Series:
+    """AurumQ custom — Garman-Klass range-based volatility (20-day).
+
+    See :func:`garman_klass_volatility` for the formula and the
+    limit-locked-day exclusion rule.
+
+    Required panel columns: ``open``, ``high``, ``low``, ``close``,
+    ``stock_code``, ``trade_date``
+
+    Direction: ``normal``
+    Category: ``volatility``
+    """
+    staged = panel.with_columns(
+        garman_klass_volatility(YZ_GK_DEFAULT_WINDOW).alias("alpha_custom_garman_klass_vol")
+    )
+    return staged.select("alpha_custom_garman_klass_vol").to_series()
+
+
 _ENTRIES_EXTRA: tuple[FactorEntry, ...] = (
     FactorEntry(
         id="alpha018",
@@ -314,6 +472,35 @@ _ENTRIES_EXTRA: tuple[FactorEntry, ...] = (
         category="volatility",
         description="Negative CS rank of 20-day rolling kurtosis of returns",
         legacy_aqml_expr="-1 * Rank(Ts_Kurt(returns, 20))",
+    ),
+    FactorEntry(
+        id="alpha_custom_yang_zhang_vol",
+        impl=alpha_custom_yang_zhang_vol,
+        direction="normal",
+        category="volatility",
+        description=(
+            "Yang-Zhang drift-independent volatility estimator (20-day; "
+            "overnight + open-close + Rogers-Satchell, limit-locked days excluded)"
+        ),
+        legacy_aqml_expr=None,
+        references=(
+            "Yang & Zhang (2000), 'Drift-Independent Volatility Estimation "
+            "Based on High, Low, Open, and Close Prices', Journal of Business",
+        ),
+    ),
+    FactorEntry(
+        id="alpha_custom_garman_klass_vol",
+        impl=alpha_custom_garman_klass_vol,
+        direction="normal",
+        category="volatility",
+        description=(
+            "Garman-Klass range-based volatility estimator (20-day; limit-locked days excluded)"
+        ),
+        legacy_aqml_expr=None,
+        references=(
+            "Garman & Klass (1980), 'On the Estimation of Security Price "
+            "Volatilities from Historical Data', Journal of Business",
+        ),
     ),
 )
 

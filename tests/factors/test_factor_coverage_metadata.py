@@ -88,7 +88,9 @@ def test_alpha101_numbered_coverage_is_complete(refreshed_registries):
         if factor_id.startswith("alpha") and factor_id.removeprefix("alpha").isdigit()
     }
     assert numbered == expected_numbered
-    assert len(alpha_registry) == 107
+    # 107 numbered/custom alphas + 2 new opt-in custom volatility factors
+    # (alpha_custom_yang_zhang_vol, alpha_custom_garman_klass_vol — issue #9).
+    assert len(alpha_registry) == 109
 
 
 @pytest.mark.parametrize("factor_id", sorted(INDCLASS_ALPHA101_IDS))
