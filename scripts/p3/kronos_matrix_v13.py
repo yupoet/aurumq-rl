@@ -17,7 +17,8 @@ Cells (22 total):
   - 1  = null-embedding control (random 1536-dim, MAIN_BOARD T-3 α label)
 
 CRITICAL: D-1 leakage guard — embedding(D) = encoder(OHLCV[D-seq_len : D-1])
-  Unit test: assert not np.allclose(emb(d-60:d-1), emb(d-60:d))
+  Enforced by kronos_matrix_v13_lib.build_lookback_window (the real extraction
+  slice) + d1_leakage_selfcheck, unit-tested in tests/p3/test_kronos_matrix_v13.py.
 
 Usage:
   # Phase 2: extract embeddings (~3-4h GPU)
@@ -57,6 +58,16 @@ from kronos_matrix_v12 import (
     LGB_BINARY_PARAMS, ANCHORS, FIX_INBOX,
     ANCHOR_DIR_BETA, ANCHOR_DIR_ALPHA, load_anchor_label,
 )
+try:  # package import (tests: p3.kronos_matrix_v13) — share one module object with p3.kronos_matrix_v13_lib
+    from .kronos_matrix_v13_lib import (
+        EMBARGO_DAYS, build_lookback_window, d1_leakage_selfcheck,
+        date_embargo_split, is_cell_done, select_cell_embeddings, v13_artifact_path,
+    )
+except ImportError:  # direct script execution: python scripts/p3/kronos_matrix_v13.py
+    from kronos_matrix_v13_lib import (
+        EMBARGO_DAYS, build_lookback_window, d1_leakage_selfcheck,
+        date_embargo_split, is_cell_done, select_cell_embeddings, v13_artifact_path,
+    )
 
 KRONOS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "kronos" / "repo"
 sys.path.insert(0, str(KRONOS_DIR / "finetune"))
@@ -71,6 +82,7 @@ FEATURE_DIM = EMB_DIM_TOTAL + 1  # 1025, +1 for log(free_float_mv)
 
 OUT_DIR = Path("data/kronos/outputs/matrix_v13")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR = OUT_DIR.parent  # data/kronos/outputs — phase-3 checkpoint + phase-4 results json
 EMB_DIR = OUT_DIR / "embeddings"
 EMB_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -311,19 +323,14 @@ def phase2_extract_embeddings(dry_run: bool = False, smoke: bool = False, eval_w
     ohlcv_by_code = {sym: sub.reset_index(drop=True) for sym, sub in ohlcv.groupby("ts_code")}
     print(f"  {len(ohlcv_by_code):,} symbols, {len(ohlcv):,} total rows")
 
-    # Step 4: D-1 leakage guard unit test
-    print("\n[phase 2.4] D-1 leakage guard unit test ...")
-    sample_sym = next(iter(ohlcv_by_code.keys()))
-    sample_sub = ohlcv_by_code[sample_sym]
-    if len(sample_sub) >= 65:
-        # Build 2 windows: D-60:D-1 and D-60:D (with D-day data)
-        d_idx = 60
-        win_correct = sample_sub.iloc[d_idx - 60: d_idx][["open", "high", "low", "close", "vol", "amt"]].values
-        win_leaky = sample_sub.iloc[d_idx - 60 + 1: d_idx + 1][["open", "high", "low", "close", "vol", "amt"]].values
-        assert win_correct.shape == win_leaky.shape == (60, 6)
-        # Sanity: their OHLCV arrays should differ
-        assert not np.allclose(win_correct, win_leaky), "D-1 windows identical — bug in slicing!"
-        print(f"  [pass] {sample_sym} D-1 vs D windows differ (last row OHLCV: {win_leaky[-1, :4]} vs {win_correct[-1, :4]})")
+    # Step 4: D-1 leakage guard self-check (M20) — asserts on build_lookback_window,
+    # the SAME function the extraction loop below uses, over a strictly increasing
+    # synthetic series where any off-by-one is detectable. Also unit-tested in
+    # tests/p3/test_kronos_matrix_v13.py.
+    print("\n[phase 2.4] D-1 leakage guard self-check ...")
+    d1_leakage_selfcheck(SEQ_LEN_SHORT)
+    d1_leakage_selfcheck(SEQ_LEN_LONG)
+    print(f"  [pass] build_lookback_window is strictly D-1 for seq_len {SEQ_LEN_SHORT} + {SEQ_LEN_LONG}")
 
     # Step 5: batched extraction loop
     print("\n[phase 2.5] batched embedding extraction ...")
@@ -347,8 +354,10 @@ def phase2_extract_embeddings(dry_run: bool = False, smoke: bool = False, eval_w
         if sym not in ohlcv_date_idx: skipped_pairs.append((sym, d, "no_stock")); continue
         idx = ohlcv_date_idx[sym].get(d)
         if idx is None: skipped_pairs.append((sym, d, "no_date")); continue
-        # Need at least SEQ_LEN_LONG days BEFORE anchor_date (window = [idx-LONG : idx-1] inclusive)
-        if idx - 1 < SEQ_LEN_LONG: skipped_pairs.append((sym, d, "insufficient_history")); continue
+        # Need SEQ_LEN_LONG rows BEFORE anchor_date: window = [idx-LONG, idx) → idx >= LONG
+        # suffices (the old `idx - 1 < LONG` demanded one extra bar and silently dropped
+        # each stock's first eligible anchor date — M20 boundary off-by-one).
+        if idx < SEQ_LEN_LONG: skipped_pairs.append((sym, d, "insufficient_history")); continue
         tasks.append((sym, idx, d))
     print(f"  {len(tasks):,} valid (sym, anchor) tasks ({len(skipped_pairs):,} skipped)")
     if skipped_pairs[:3]:
@@ -366,17 +375,16 @@ def phase2_extract_embeddings(dry_run: bool = False, smoke: bool = False, eval_w
         stamp_120 = np.zeros((len(batch_tasks), SEQ_LEN_LONG, 5), dtype=np.int64)
         for bi, (sym, idx, d) in enumerate(batch_tasks):
             sub = ohlcv_by_code[sym]
-            # STRICT D-1 cutoff: window = [idx - seq_len : idx] exclusive at right → ends at idx-1
-            sl_60 = slice(idx - SEQ_LEN_SHORT, idx)
-            sl_120 = slice(idx - SEQ_LEN_LONG, idx)
-            x_60 = sub.iloc[sl_60][OHLCV_COLS].values.astype(np.float32)
-            x_120 = sub.iloc[sl_120][OHLCV_COLS].values.astype(np.float32)
-            win_60[bi] = normalize_window(x_60)
-            win_120[bi] = normalize_window(x_120)
-            dates_60 = pd.to_datetime(sub["trade_date"].values[sl_60])
-            dates_120 = pd.to_datetime(sub["trade_date"].values[sl_120])
-            stamp_60[bi] = build_stamp(dates_60)
-            stamp_120[bi] = build_stamp(dates_120)
+            # STRICT D-1 cutoff via the guarded pure function (M20): rows
+            # [idx - seq_len, idx) — ends at idx-1, never includes the anchor day.
+            sub_vals = sub[OHLCV_COLS].values
+            sub_dates = sub["trade_date"].values
+            x_60, dates_60 = build_lookback_window(sub_vals, sub_dates, idx, SEQ_LEN_SHORT)
+            x_120, dates_120 = build_lookback_window(sub_vals, sub_dates, idx, SEQ_LEN_LONG)
+            win_60[bi] = normalize_window(x_60.astype(np.float32))
+            win_120[bi] = normalize_window(x_120.astype(np.float32))
+            stamp_60[bi] = build_stamp(pd.to_datetime(dates_60))
+            stamp_120[bi] = build_stamp(pd.to_datetime(dates_120))
 
         emb_60 = extract_kronos_hidden_batch(model, tok, win_60, stamp_60, device)
         emb_120 = extract_kronos_hidden_batch(model, tok, win_120, stamp_120, device)
@@ -470,23 +478,56 @@ def phase3_train_lgb_heads(smoke: bool = False):
     else:
         print(f"  [WARN] no eval embeddings ({eval_emb_path.name}) — Phase 4 scoring will skip")
 
-    # Optional base-model embeddings (paris ACK v13 smoke §3 3-way control)
-    base_emb_path = OUT_DIR / f"embeddings_{SEQ_LEN_SHORT}d_{SEQ_LEN_LONG}d_base{suffix}.parquet"
-    base_embs = decode_emb_parquet(base_emb_path) if base_emb_path.exists() else None
-    if base_embs is not None:
-        print(f"  base-model embeddings loaded: {len(base_embs):,} rows (will use for *_BASE cells)")
-
     feat_cols = [f"emb_{j}" for j in range(EMB_DIM_TOTAL)] + ["log_size"]
     matrix_v13_partial = {}
-    CHECKPOINT = Path("data/kronos/outputs/matrix_v13_phase3_checkpoint.json")
+    # M19: smoke runs get their own checkpoint (and pred parquets below) so a
+    # smoke run can never make a full run silently skip every cell.
+    CHECKPOINT = v13_artifact_path("checkpoint", smoke, out_dir=OUT_DIR, results_dir=RESULTS_DIR)
     if CHECKPOINT.exists():
         matrix_v13_partial = json.loads(CHECKPOINT.read_text())
-        print(f"  [resume] {len(matrix_v13_partial)} cells in checkpoint")
+        n_done = sum(1 for v in matrix_v13_partial.values() if is_cell_done(v))
+        print(f"  [resume] {len(matrix_v13_partial)} cells in checkpoint "
+              f"({n_done} done; skipped entries are retried)")
+
+    # Optional base-model embeddings (paris ACK v13 smoke §3 3-way control).
+    # C9: *_BASE cells must train AND score on base-model embeddings — scoring
+    # them on the fine-tuned eval embeddings invalidated the 3-way control.
+    # Only decoded when a *_BASE cell is actually pending.
+    base_embs = base_eval_embs = None
+    base_pending = any(s.get("is_base") and not is_cell_done(matrix_v13_partial.get(cell_id(s)))
+                       for s in CELL_SPEC)
+    if base_pending:
+        base_emb_path = OUT_DIR / f"embeddings_{SEQ_LEN_SHORT}d_{SEQ_LEN_LONG}d_base{suffix}.parquet"
+        base_embs = decode_emb_parquet(base_emb_path) if base_emb_path.exists() else None
+        if base_embs is not None:
+            print(f"  base-model embeddings loaded: {len(base_embs):,} rows (train source for *_BASE cells)")
+        base_eval_emb_path = OUT_DIR / f"embeddings_{SEQ_LEN_SHORT}d_{SEQ_LEN_LONG}d_base_eval{suffix}.parquet"
+        base_eval_embs = decode_emb_parquet(base_eval_emb_path) if base_eval_emb_path.exists() else None
+        if base_eval_embs is not None:
+            print(f"  base-model eval embeddings loaded: {len(base_eval_embs):,} rows (scoring source for *_BASE cells)")
+
+    available_embs = {"label": label_embs}
+    if eval_embs is not None:
+        available_embs["eval"] = eval_embs
+    if base_embs is not None:
+        available_embs["base"] = base_embs
+    if base_eval_embs is not None:
+        available_embs["base_eval"] = base_eval_embs
+
+    # C9 fail-fast: validate every pending cell's embedding sources BEFORE any LGB
+    # fit — a pending *_BASE cell without base/base_eval parquets raises here with
+    # the exact phase-2 command, instead of wasting hours of training first.
+    for spec_dict in CELL_SPEC:
+        if not is_cell_done(matrix_v13_partial.get(cell_id(spec_dict))):
+            select_cell_embeddings(spec_dict, available_embs)
 
     for spec_dict in CELL_SPEC:
         cid = cell_id(spec_dict)
-        if cid in matrix_v13_partial:
-            print(f"  [skip] {cid} in checkpoint"); continue
+        prev_entry = matrix_v13_partial.get(cid)
+        if is_cell_done(prev_entry):
+            print(f"  [skip] {cid} done in checkpoint"); continue
+        if prev_entry is not None:
+            print(f"  [retry] {cid} previously skipped: {prev_entry}")
 
         # Load anchor labels
         if spec_dict.get("is_null") or spec_dict.get("is_base"):
@@ -500,15 +541,11 @@ def phase3_train_lgb_heads(smoke: bool = False):
         label_df["trade_date"] = pd.to_datetime(label_df["trade_date"])  # match label_embs dtype
         label_df = label_df.rename(columns={"y_binary": "y"} if "y_binary" in label_df.columns else {})
 
-        # Choose embeddings source per cell type
-        if spec_dict.get("is_base"):
-            if base_embs is None:
-                print(f"  [SKIP] {cid}: --base-model embeddings missing — run `--phase 2 --base-model` first")
-                matrix_v13_partial[cid] = {"skipped": "no_base_embeddings"}
-                continue
-            embs_to_use = base_embs
-        else:
-            embs_to_use = label_embs
+        # Choose embeddings source per cell type (C9: base cells train on base
+        # embeddings AND score on base-model eval embeddings, never fine-tuned ones)
+        train_key, eval_key = select_cell_embeddings(spec_dict, available_embs)
+        embs_to_use = available_embs[train_key]
+        eval_frame = available_embs.get(eval_key)
 
         # Join labels with embeddings + size
         joined = label_df.merge(embs_to_use, on=["ts_code", "trade_date"], how="inner")
@@ -517,6 +554,7 @@ def phase3_train_lgb_heads(smoke: bool = False):
         if len(joined) < 500:
             print(f"  [SKIP] {cid}: joined train rows {len(joined)} < 500")
             matrix_v13_partial[cid] = {"skipped": True, "n_train": len(joined)}
+            CHECKPOINT.write_text(json.dumps(matrix_v13_partial, indent=2, default=str))
             continue
 
         # Null cell: replace emb cols with random (paris ACK Q1 control)
@@ -532,10 +570,25 @@ def phase3_train_lgb_heads(smoke: bool = False):
         if len(train) < 500:
             print(f"  [SKIP] {cid}: train window rows {len(train)} < 500")
             matrix_v13_partial[cid] = {"skipped": True, "n_train": len(train)}
+            CHECKPOINT.write_text(json.dumps(matrix_v13_partial, indent=2, default=str))
             continue
-        val_size = max(200, int(len(train) * 0.10))
-        val = train.tail(val_size).reset_index(drop=True)
-        train_fit = train.head(len(train) - val_size).reset_index(drop=True)
+        # M4: early-stopping split by DATE with a trading-day embargo. The old
+        # row-position tail(10%) on the per-year-concat (unsorted) frame put same-date
+        # cross-sectional twins in fit+val AND shared forward label event windows
+        # (anchor horizon + ~20-25d wave extension) across the boundary.
+        try:
+            train_fit, val = date_embargo_split(train, val_frac=0.10, embargo_days=EMBARGO_DAYS)
+        except ValueError as e:
+            print(f"  [SKIP] {cid}: split failed — {e}")
+            matrix_v13_partial[cid] = {"skipped": "split_failed", "n_train": len(train)}
+            CHECKPOINT.write_text(json.dumps(matrix_v13_partial, indent=2, default=str))
+            continue
+        if len(train_fit) < 500 or len(val) == 0:
+            print(f"  [SKIP] {cid}: post-embargo fit rows {len(train_fit)} < 500 or empty val ({len(val)})")
+            matrix_v13_partial[cid] = {"skipped": "embargo_split_too_small",
+                                       "n_train_fit": len(train_fit), "n_val": len(val)}
+            CHECKPOINT.write_text(json.dumps(matrix_v13_partial, indent=2, default=str))
+            continue
         pos_rate = (train_fit["y"] > 0).mean()
 
         t = time.time()
@@ -548,10 +601,12 @@ def phase3_train_lgb_heads(smoke: bool = False):
         best_iter = model.best_iteration_ or LGB_BINARY_PARAMS["n_estimators"]
         train_time = time.time() - t
 
-        # Score eval windows (if eval embeddings exist)
-        pred_path = OUT_DIR / f"pred_{cid}.parquet"
-        if eval_embs is not None:
-            eval_with_size = eval_embs.merge(size_df, on=["ts_code", "trade_date"], how="left")
+        # Score eval windows (if eval embeddings exist). C9: eval_frame is the
+        # cell-appropriate source (base_eval for *_BASE cells); M19: smoke preds
+        # are suffixed so phase 4 never evaluates smoke-trained predictions.
+        pred_path = v13_artifact_path("pred", smoke, out_dir=OUT_DIR, results_dir=RESULTS_DIR, cid=cid)
+        if eval_frame is not None:
+            eval_with_size = eval_frame.merge(size_df, on=["ts_code", "trade_date"], how="left")
             eval_with_size["log_size"] = eval_with_size["log_size"].fillna(eval_with_size["log_size"].median())
             # Coerce trade_date to date (object) so PIT merge in filter_universe works
             # (eval_with_size has datetime64[s], pit_dfs has date object)
@@ -592,19 +647,20 @@ def phase3_train_lgb_heads(smoke: bool = False):
 # Phase 4: eval H2_2025 + Q1_2026
 # =============================================================================
 
-def phase4_eval_cells():
+def phase4_eval_cells(smoke: bool = False):
     """Eval all 22 cells on H2_2025 + Q1_2026 with K10/K50 × fwd5/fwd20.
 
     Reuses kronos_matrix_v10.eval_cell() for static IC + dyn-exit + Sharpe NET.
+    M19: smoke runs read/write _smoke-suffixed artifacts only.
     """
-    print("\n[phase 4] eval 22 cells")
+    print(f"\n[phase 4] eval 22 cells{' (smoke)' if smoke else ''}")
     t_total = time.time()
     realized, exits = compute_realized_and_exits()
 
     matrix_v13_results = {}
     for spec in CELL_SPEC:
         cid = cell_id(spec)
-        pred_path = OUT_DIR / f"pred_{cid}.parquet"
+        pred_path = v13_artifact_path("pred", smoke, out_dir=OUT_DIR, results_dir=RESULTS_DIR, cid=cid)
         if not pred_path.exists():
             print(f"  [SKIP] {cid}: no pred parquet"); continue
         pred_df = pd.read_parquet(pred_path)
@@ -619,8 +675,8 @@ def phase4_eval_cells():
         sn_q1 = r_q1["sizing"].get("50", {}).get("sharpe_net", float("nan"))
         print(f"  {cid}: H2 IC={ic_h2:+.2f}% S_NET={sn_h2:+.2f} | Q1 IC={ic_q1:+.2f}% S_NET={sn_q1:+.2f}")
 
-    # Save matrix_v13_results.json
-    out_path = Path("data/kronos/outputs/matrix_v13_results.json")
+    # Save matrix_v13_results{_smoke}.json (M19)
+    out_path = v13_artifact_path("results", smoke, out_dir=OUT_DIR, results_dir=RESULTS_DIR)
     out_path.write_text(json.dumps({
         "config": {
             "tier": "v13 — paradigm 3 Kronos sequence-to-event anchor matrix",
@@ -662,7 +718,7 @@ def main():
     elif args.phase == 3:
         phase3_train_lgb_heads(smoke=args.smoke)
     elif args.phase == 4:
-        phase4_eval_cells()
+        phase4_eval_cells(smoke=args.smoke)
     return 0
 
 
