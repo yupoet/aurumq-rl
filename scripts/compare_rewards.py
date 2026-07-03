@@ -26,7 +26,7 @@ from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 PYTHON = sys.executable
 
-REWARD_TYPES = ("return", "sharpe", "sortino", "mean_variance")
+REWARD_TYPES = ("return", "sharpe", "sortino", "mean_variance", "differential_sharpe")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

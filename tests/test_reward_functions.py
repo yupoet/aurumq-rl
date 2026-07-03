@@ -9,6 +9,7 @@ from aurumq_rl.reward_functions import (
     ANNUALIZATION_FACTOR,
     MIN_RISK_WINDOW,
     VOLATILITY_FLOOR,
+    DifferentialSharpe,
     mean_variance_reward,
     sharpe_reward,
     simple_return_reward,
@@ -245,3 +246,175 @@ def test_mean_variance_invalid_dims() -> None:
             weights=np.zeros(2),
             return_panel=np.zeros(10),  # 1D not allowed
         )
+
+
+# ---------------------------------------------------------------------------
+# DifferentialSharpe (Moody & Saffell 1998) — issue #2
+# ---------------------------------------------------------------------------
+
+_DSR_RETURNS = [0.01, -0.02, 0.015, 0.03, -0.01, 0.02, 0.005, -0.015]
+
+
+def test_differential_sharpe_matches_hand_computed_recurrence() -> None:
+    """DSR.update reproduces the Moody & Saffell recurrence for post-warm-up steps.
+
+    A_t, B_t evolve every step regardless of the warm-up gate; only the
+    *returned* reward is gated. We recompute the recurrence independently in
+    the test and compare against DifferentialSharpe's output for the steps
+    past MIN_RISK_WINDOW, where the guard is inactive and the raw formula
+    applies.
+    """
+    eta = 0.05
+    dsr = DifferentialSharpe(eta=eta)
+    actual = [dsr.update(r) for r in _DSR_RETURNS]
+
+    a, b = 0.0, 0.0
+    expected: list[float] = []
+    for i, r in enumerate(_DSR_RETURNS):
+        d_a = r - a
+        d_b = r * r - b
+        if i + 1 <= MIN_RISK_WINDOW:
+            expected.append(0.0)
+        else:
+            variance = b - a * a
+            denom = max(variance, VOLATILITY_FLOOR**2) ** 1.5
+            expected.append((b * d_a - 0.5 * a * d_b) / denom)
+        a = a + eta * d_a
+        b = b + eta * d_b
+
+    for i in range(MIN_RISK_WINDOW, len(_DSR_RETURNS)):
+        assert actual[i] == pytest.approx(expected[i])
+    # Pinned reference values (guards against silent formula drift).
+    assert actual[5] == pytest.approx(1.9040749737866718, rel=1e-6)
+    assert actual[6] == pytest.approx(0.4046549824137689, rel=1e-6)
+    assert actual[7] == pytest.approx(-2.144393833232199, rel=1e-6)
+
+
+def test_differential_sharpe_single_sample_returns_zero() -> None:
+    """First update (A=B=0 history) is degenerate → neutral 0.0, not a spike."""
+    dsr = DifferentialSharpe()
+    assert dsr.update(0.05) == 0.0
+
+
+def test_differential_sharpe_warmup_below_min_risk_window_returns_zero() -> None:
+    dsr = DifferentialSharpe()
+    for _ in range(MIN_RISK_WINDOW):
+        assert dsr.update(0.01) == 0.0
+
+
+def test_differential_sharpe_constant_stream_bounded_by_variance_floor() -> None:
+    """Pathological all-equal return stream: true variance is 0 throughout.
+
+    This is the C5 failure class (mu / near-zero-sigma spike) applied to the
+    recurrent DSR form. Mirroring sharpe_reward/sortino_reward's own
+    zero-variance-window test (test_sharpe_zero_variance_window_bounded_by_floor,
+    which floors to a finite nonzero value rather than forcing exactly 0.0),
+    DSR must stay finite and bounded (never a >1e3 C5-class spike) even
+    though the zero-initialized EMA has a transient "phantom variance" hump
+    before settling — it must never diverge like the pre-fix mu/1e-8 case.
+    """
+    dsr = DifferentialSharpe()
+    values = [dsr.update(0.01) for _ in range(500)]
+    assert all(v == 0.0 for v in values[:MIN_RISK_WINDOW])  # warm-up
+    assert all(np.isfinite(v) for v in values)
+    assert max(abs(v) for v in values) < 1e3
+
+
+def test_differential_sharpe_varying_stream_is_finite_and_bounded() -> None:
+    """A genuinely varying stream produces finite, O(1)-magnitude DSR values."""
+    rng = np.random.default_rng(3)
+    returns = rng.standard_normal(300) * 0.01
+    dsr = DifferentialSharpe()
+    values = [dsr.update(float(r)) for r in returns]
+    assert all(np.isfinite(v) for v in values)
+    assert max(abs(v) for v in values) < 1e3
+
+
+def test_differential_sharpe_cumulative_sum_tracks_sharpe_direction() -> None:
+    """sum(DSR_t) is positive for a stream with a good risk-adjusted profile
+    and negative for a symmetric bad one — the algorithmic justification for
+    using DSR as a per-step reward instead of a rolling Sharpe snapshot.
+    """
+    rng = np.random.default_rng(7)
+    good = rng.normal(0.01, 0.01, 80)
+    bad = rng.normal(-0.01, 0.01, 80)
+
+    dsr_good = DifferentialSharpe(eta=0.05)
+    dsr_bad = DifferentialSharpe(eta=0.05)
+    sum_good = sum(dsr_good.update(float(r)) for r in good)
+    sum_bad = sum(dsr_bad.update(float(r)) for r in bad)
+
+    assert sum_good > 0
+    assert sum_bad < 0
+
+
+def test_differential_sharpe_reset_clears_state() -> None:
+    dsr = DifferentialSharpe(eta=0.1)
+    for r in _DSR_RETURNS:
+        dsr.update(r)
+    assert dsr.a != 0.0 or dsr.b != 0.0
+
+    dsr.reset()
+    assert dsr.a == 0.0
+    assert dsr.b == 0.0
+
+    # A fresh instance and a reset instance must behave identically going
+    # forward — no leakage of the prior episode's A/B into the next one.
+    fresh = DifferentialSharpe(eta=0.1)
+    for r in _DSR_RETURNS:
+        assert dsr.update(r) == pytest.approx(fresh.update(r))
+
+
+def test_differential_sharpe_invalid_eta_raises() -> None:
+    with pytest.raises(ValueError):
+        DifferentialSharpe(eta=0.0)
+    with pytest.raises(ValueError):
+        DifferentialSharpe(eta=1.5)
+
+
+# ---------------------------------------------------------------------------
+# PortfolioWeightEnv wiring — "differential_sharpe" reward mode (issue #2)
+# ---------------------------------------------------------------------------
+
+
+def test_portfolio_weight_env_differential_sharpe_mode() -> None:
+    pytest.importorskip("gymnasium")
+    import datetime
+
+    from aurumq_rl.portfolio_weight_env import PortfolioWeightConfig, PortfolioWeightEnv
+
+    n_dates, n_stocks, n_factors = 30, 8, 4
+    rng = np.random.default_rng(0)
+    factor = rng.standard_normal((n_dates, n_stocks, n_factors)).astype(np.float32)
+    ret = (rng.standard_normal((n_dates, n_stocks)) * 0.01).astype(np.float32)
+
+    config = PortfolioWeightConfig(
+        start_date=datetime.date(2022, 1, 1),
+        end_date=datetime.date(2022, 12, 31),
+        n_factors=n_factors,
+        forward_period=2,
+        reward_type="differential_sharpe",
+        cost_bps=0.0,
+        turnover_penalty=0.0,
+    )
+    env = PortfolioWeightEnv(config=config, factor_panel=factor, return_panel=ret)
+    env.reset(seed=0)
+
+    action = np.full(n_stocks, 0.5, dtype=np.float32)
+    _, reward, *_ = env.step(action)
+    assert reward == 0.0  # warm-up: step 0 has degenerate DSR history
+
+    rewards = [reward]
+    for _ in range(n_dates - 3):
+        _, reward, terminated, _, _ = env.step(action)
+        rewards.append(reward)
+        if terminated:
+            break
+
+    assert all(np.isfinite(r) for r in rewards)
+    assert max(abs(r) for r in rewards) < 1e3
+
+    # A fresh episode must not leak the previous episode's DSR state.
+    env.reset(seed=0)
+    _, reward0, *_ = env.step(action)
+    assert reward0 == 0.0

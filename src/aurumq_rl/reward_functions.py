@@ -1,10 +1,11 @@
 """RL reward function library.
 
-Four reward types:
-  return        — simple forward return
-  sharpe        — rolling Sharpe ratio
-  sortino       — rolling Sortino ratio
-  mean_variance — Markowitz mean - λ * variance
+Five reward types:
+  return              — simple forward return
+  sharpe              — rolling Sharpe ratio
+  sortino             — rolling Sortino ratio
+  mean_variance       — Markowitz mean - λ * variance
+  differential_sharpe — recurrent per-step Sharpe increment (Moody & Saffell 1998)
 """
 
 from __future__ import annotations
@@ -22,6 +23,12 @@ VOLATILITY_FLOOR: float = 1e-4
 
 # Trading-day annualization factor
 ANNUALIZATION_FACTOR: float = 252.0
+
+# Default DSR decay rate eta = 1 / rolling_window (default rolling_window=20
+# in PortfolioWeightConfig), so the exponential moving average's effective
+# memory span matches the rolling Sharpe/Sortino window — keeps the modes
+# comparable when swapping reward_type without retuning anything else.
+DEFAULT_DSR_ETA: float = 0.05
 
 
 def _portfolio_return_series(
@@ -174,10 +181,98 @@ def mean_variance_reward(
     return expected_return - risk_aversion * portfolio_variance
 
 
+class DifferentialSharpe:
+    """Stateful Differential Sharpe Ratio (Moody & Saffell 1998).
+
+    A recurrent, O(1)-per-step alternative to windowed ``sharpe_reward`` /
+    ``sortino_reward``. Instead of a rolling-window Sharpe snapshot (which,
+    summed over steps, optimizes neither Sharpe nor return — the C5 issue),
+    DSR gives the per-step *marginal contribution* to the Sharpe ratio,
+    tracked via exponentially-decayed moving averages of the return (``A``)
+    and squared return (``B``):
+
+        dA = R_t - A_{t-1}
+        dB = R_t^2 - B_{t-1}
+        DSR_t = (B_{t-1} * dA - 0.5 * A_{t-1} * dB) / (B_{t-1} - A_{t-1}^2)^1.5
+        A_t = A_{t-1} + eta * dA
+        B_t = B_{t-1} + eta * dB
+
+    Summing DSR_t over an episode approximates the change in the batch
+    Sharpe ratio (Moody & Saffell, "Reinforcement Learning for Trading",
+    NeurIPS 1998), so maximizing cumulative DSR reward directly targets
+    end-of-episode Sharpe.
+
+    Numerical guards mirror sharpe_reward/sortino_reward's C5 fix exactly:
+    (a) warm-up — fewer than MIN_RISK_WINDOW updates observed (A/B have not
+    stabilized) — returns neutral 0.0; (b) past warm-up, the variance
+    B - A^2 denominator is floored at VOLATILITY_FLOOR^2 (never gated to a
+    hard 0.0), so a degenerate/near-constant return stream yields a bounded
+    finite value instead of a division-by-near-zero spike — the same
+    floor-the-denominator strategy sharpe_reward/sortino_reward use, rather
+    than a separate variance-based zero-gate (which would still let a
+    transient "phantom variance" hump from the zero-initialized EMA escape
+    unbounded for a genuinely constant stream near the guard boundary).
+    """
+
+    def __init__(self, eta: float = DEFAULT_DSR_ETA) -> None:
+        """Create a DSR tracker.
+
+        Parameters
+        ----------
+        eta : float
+            Decay / adaptation rate for the moving averages of R and R^2,
+            in (0, 1]. Larger eta adapts faster but is noisier; smaller eta
+            is smoother but slower to reflect regime changes. Default
+            ``DEFAULT_DSR_ETA`` (1/20, matching the rolling-mode default
+            window).
+        """
+        if not 0.0 < eta <= 1.0:
+            raise ValueError(f"eta={eta} must be in (0, 1]")
+        self.eta = eta
+        self.a: float = 0.0
+        self.b: float = 0.0
+        self._n: int = 0
+
+    def reset(self) -> None:
+        """Reset A, B, and the warm-up counter to their initial state."""
+        self.a = 0.0
+        self.b = 0.0
+        self._n = 0
+
+    def update(self, r: float) -> float:
+        """Consume one step's realized return and return this step's DSR.
+
+        Parameters
+        ----------
+        r : float
+            Realized portfolio return for this step (same quantity fed to
+            sharpe_reward/sortino_reward's per-step return series).
+        """
+        a_prev, b_prev = self.a, self.b
+        d_a = r - a_prev
+        d_b = r * r - b_prev
+        self._n += 1
+
+        if self._n <= MIN_RISK_WINDOW:
+            dsr = 0.0  # warm-up: A/B have not accumulated enough history
+        else:
+            variance = b_prev - a_prev * a_prev
+            # Floor (not zero-gate) the denominator: identical strategy to
+            # sharpe_reward/sortino_reward's max(sigma, VOLATILITY_FLOOR).
+            denom = max(variance, VOLATILITY_FLOOR**2) ** 1.5
+            dsr = (b_prev * d_a - 0.5 * a_prev * d_b) / denom
+
+        self.a = a_prev + self.eta * d_a
+        self.b = b_prev + self.eta * d_b
+        return float(dsr)
+
+
 __all__ = [
     "ANNUALIZATION_FACTOR",
+    "DEFAULT_DSR_ETA",
     "MIN_RISK_WINDOW",
     "VOLATILITY_FLOOR",
+    "DifferentialSharpe",
     "simple_return_reward",
     "sharpe_reward",
     "sortino_reward",
