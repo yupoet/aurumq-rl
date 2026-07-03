@@ -221,6 +221,14 @@ def main() -> int:
                 }
             )
             if split_idx is not None:
+                # Edge effect: run_backtest_with_series() re-truncates the
+                # trailing `forward_period` rows RELATIVE TO EACH SLICE's end,
+                # so the selection slice silently drops ~forward_period legit
+                # days straddling the selection/confirmation boundary (their
+                # forward returns would reach into the confirmation window).
+                # Accepted deliberately — it is the leak-free choice (a
+                # selection-window forward return must not peek past the
+                # boundary); the loss is at most `forward_period` days.
                 sel_result, _ = run_backtest_with_series(
                     predictions=preds[:split_idx],
                     returns=panel.return_array[:split_idx],

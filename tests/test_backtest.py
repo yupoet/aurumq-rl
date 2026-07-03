@@ -266,3 +266,81 @@ def test_run_backtest_with_series_cost_bps_populates_series_field_only_when_posi
     # unaffected fields identical between the two calls
     assert series_on.top_k_returns == series_off.top_k_returns
     assert series_on.ic == series_off.ic
+
+
+def test_series_skip_degenerate_truncates_trailing_loader_zero_rows():
+    """Review fix: FactorPanelLoader leaves the trailing `forward_period`
+    rows of return_array as literal 0.0 (finite, so NOT caught by the
+    degenerate-day guard). The skip-degenerate / cost-adjusted series must
+    truncate them exactly like run_backtest()'s scalar path, otherwise they
+    leak in as spurious all-zero observations that understate the HAC SE
+    and bias the mean toward zero."""
+    from aurumq_rl.backtest import (
+        _top_k_returns_series,
+        _truncate_trailing_forward_rows,
+    )
+    from aurumq_rl.eval_metrics import hac_mean_ci, hac_standard_error
+
+    rng = np.random.default_rng(23)
+    n_dates, n_stocks, fp, top_k = 60, 40, 10, 8
+    rets = rng.normal(0.003, 0.02, size=(n_dates, n_stocks))
+    # Fabricate the loader's trailing all-zero forward-return rows.
+    rets[n_dates - fp :] = 0.0
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    dates = list(range(n_dates))
+
+    _, series = run_backtest_with_series(
+        preds, rets, dates=dates, top_k=top_k, forward_period=fp, n_random_simulations=5
+    )
+
+    # Reference: the correctly-truncated series computed directly.
+    tp, tr, _ = _truncate_trailing_forward_rows(preds, rets, fp)
+    expected = _top_k_returns_series(tp, tr, top_k)
+
+    # The series must equal the truncated computation, not the untruncated one.
+    assert series.top_k_returns_skip_degenerate == expected
+    # It is strictly shorter than the untruncated series (the fp zero rows are gone).
+    untruncated = _top_k_returns_series(preds, rets, top_k)
+    assert len(series.top_k_returns_skip_degenerate) == len(untruncated) - fp
+    # None of the retained observations is one of the fabricated all-zero rows.
+    assert all(v != 0.0 for v in series.top_k_returns_skip_degenerate[-fp:])
+
+    # HAC on the shipped series == HAC on the correctly-truncated series,
+    # and both differ from the (biased) untruncated HAC.
+    lag = fp - 1
+    assert hac_standard_error(series.top_k_returns_skip_degenerate, lag) == pytest.approx(
+        hac_standard_error(expected, lag)
+    )
+    assert hac_mean_ci(series.top_k_returns_skip_degenerate, lag)["mean"] == pytest.approx(
+        hac_mean_ci(expected, lag)["mean"]
+    )
+    # The untruncated series' HAC SE is understated (extra zero rows shrink it).
+    assert hac_standard_error(untruncated, lag) < hac_standard_error(expected, lag)
+
+
+def test_series_cost_adjusted_also_truncates_trailing_zero_rows():
+    """The cost-adjusted series shares the same truncation as skip-degenerate."""
+    from aurumq_rl.backtest import (
+        _truncate_trailing_forward_rows,
+        top_k_returns_series_cost_adjusted,
+    )
+
+    rng = np.random.default_rng(24)
+    n_dates, n_stocks, fp, top_k = 50, 30, 10, 6
+    rets = rng.normal(0.002, 0.02, size=(n_dates, n_stocks))
+    rets[n_dates - fp :] = 0.0
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    dates = list(range(n_dates))
+
+    _, series = run_backtest_with_series(
+        preds,
+        rets,
+        dates=dates,
+        top_k=top_k,
+        forward_period=fp,
+        n_random_simulations=5,
+        cost_bps=30.0,
+    )
+    tp, tr, _ = _truncate_trailing_forward_rows(preds, rets, fp)
+    expected = top_k_returns_series_cost_adjusted(tp, tr, top_k=top_k, cost_bps=30.0)
+    assert series.top_k_returns_cost_adjusted == expected

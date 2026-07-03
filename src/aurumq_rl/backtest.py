@@ -407,6 +407,37 @@ def random_baseline(
     }
 
 
+def _truncate_trailing_forward_rows(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    forward_period: int,
+    tradeable_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Drop the trailing ``forward_period`` rows when ``forward_period > 1``.
+
+    :class:`FactorPanelLoader` leaves the last ``forward_period`` rows of
+    ``return_array`` as literal ``0.0`` (there is no future close to compute
+    the forward log-return). Those rows are FINITE, so the per-date
+    ``mask.sum() < top_k`` "degenerate day" guard does NOT skip them — they
+    would otherwise enter every return series as spurious all-zero
+    observations, understating the HAC SE and biasing the mean toward zero.
+
+    This is the single source of truth for that truncation, shared by
+    :func:`run_backtest` (scalar path, Phase 16) and
+    :func:`run_backtest_with_series` (the issue #6 series path) so the two
+    can never drift. Returns the (possibly) truncated
+    ``(predictions, returns, tradeable_mask)`` triple; ``tradeable_mask``
+    stays ``None`` if it was ``None``.
+    """
+    if forward_period > 1 and predictions.shape[0] > forward_period:
+        keep = predictions.shape[0] - forward_period
+        predictions = predictions[:keep]
+        returns = returns[:keep]
+        if tradeable_mask is not None:
+            tradeable_mask = tradeable_mask[:keep]
+    return predictions, returns, tradeable_mask
+
+
 def run_backtest(
     predictions: np.ndarray,
     returns: np.ndarray,
@@ -439,11 +470,9 @@ def run_backtest(
     identical to the pre-#6 output.
     """
     predictions = _apply_tradeable_mask(predictions, tradeable_mask)
-    if forward_period > 1 and predictions.shape[0] > forward_period:
-        predictions = predictions[: predictions.shape[0] - forward_period]
-        returns = returns[: returns.shape[0] - forward_period]
-        if tradeable_mask is not None:
-            tradeable_mask = tradeable_mask[: tradeable_mask.shape[0] - forward_period]
+    predictions, returns, tradeable_mask = _truncate_trailing_forward_rows(
+        predictions, returns, forward_period, tradeable_mask
+    )
     sharpes = compute_top_k_sharpes(
         predictions,
         returns,
@@ -493,10 +522,15 @@ class BacktestSeries:
     positive value; see :func:`top_k_returns_series_cost_adjusted`.
     ``top_k_returns_skip_degenerate`` is always populated: the same gross
     top-K return series as ``top_k_returns`` but with degenerate days
-    SKIPPED rather than padded with ``0.0`` — the correct input for
-    autocorrelation-sensitive statistics (e.g. HAC SE), since a padded
-    0.0 is not a real observation and would distort the estimated
-    autocovariance structure.
+    SKIPPED rather than padded with ``0.0`` AND with the trailing
+    ``forward_period`` FactorPanelLoader zero-return rows truncated (exactly
+    as ``run_backtest``'s scalar path does) — the correct input for
+    autocorrelation-sensitive statistics (e.g. HAC SE), since neither a
+    padded 0.0 nor a trailing loader-0.0 row is a real observation and
+    either would distort the estimated autocovariance structure. Because of
+    the skip + truncation this series is generally SHORTER than
+    ``dates`` / ``top_k_returns`` and is not date-aligned — do not plot it
+    against the date axis; use ``top_k_returns`` for charts.
     """
 
     dates: list[str]
@@ -616,12 +650,22 @@ def run_backtest_with_series(
         tradeable_mask=tradeable_mask,
     )
 
+    # Skip-degenerate / cost-adjusted series feed scalar, autocorrelation-
+    # sensitive statistics (Sharpe, HAC SE), so they must use the SAME
+    # trailing-row truncation as run_backtest()'s scalar path — otherwise
+    # FactorPanelLoader's literal-0.0 trailing rows (finite, hence NOT
+    # skipped by the degenerate-day guard) leak in as spurious all-zero
+    # observations that understate the HAC SE and bias the mean to zero.
+    # Reuse the shared helper so the two paths can't drift.
+    trunc_preds, trunc_rets, _ = _truncate_trailing_forward_rows(
+        predictions, returns, forward_period, tradeable_mask
+    )
     cost_adjusted_series: list[float] = []
     if cost_bps > 0:
         cost_adjusted_series = top_k_returns_series_cost_adjusted(
-            predictions, returns, top_k=top_k, cost_bps=cost_bps
+            trunc_preds, trunc_rets, top_k=top_k, cost_bps=cost_bps
         )
-    skip_degenerate_series = _top_k_returns_series(predictions, returns, top_k)
+    skip_degenerate_series = _top_k_returns_series(trunc_preds, trunc_rets, top_k)
 
     series = BacktestSeries(
         dates=[str(d) for d in dates],
