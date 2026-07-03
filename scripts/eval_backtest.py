@@ -36,6 +36,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--forward-period", type=int, default=10)
     p.add_argument("--n-random-simulations", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--cost-bps",
+        type=float,
+        default=0.0,
+        help=(
+            "issue #6, opt-in: transaction cost in basis points, proportional to "
+            "Jaccard turnover of consecutive top-k sets. 0.0 (default) leaves every "
+            "reported field byte-for-byte identical to the pre-#6 output."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -52,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         align_panel_to_training_universe,
         build_tradeable_mask,
     )
+    from aurumq_rl.eval_metrics import hac_mean_ci
 
     args = parse_args(argv)
     onnx_path = args.run_dir / "policy.onnx"
@@ -247,7 +258,17 @@ def main(argv: list[str] | None = None) -> int:
         random_seed=args.seed,
         forward_period=args.forward_period,
         tradeable_mask=tradeable,
+        cost_bps=args.cost_bps,
     )
+
+    # Issue #6 (additive): HAC/Newey-West SE + CI for the mean top-K return,
+    # honest about the autocorrelation induced by overlapping
+    # forward_period-day windows resampled daily (lag = forward_period - 1).
+    # Uses the skip-degenerate series (not the chart-padded top_k_returns)
+    # so a padded 0.0 day doesn't distort the autocovariance structure.
+    skip_deg = series.top_k_returns_skip_degenerate
+    hac_lag = min(max(args.forward_period - 1, 0), max(len(skip_deg) - 1, 0))
+    result.hac = hac_mean_ci(skip_deg, lag=hac_lag)
 
     out_path = args.run_dir / "backtest.json"
     series_path = args.run_dir / "backtest_series.json"
@@ -257,12 +278,25 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[backtest] wrote {series_path}")
     rb = result.random_baseline
     print(
-        f"[backtest] IC={result.ic:+.4f} IR={result.ic_ir:+.3f} "
+        f"[backtest] IC={result.ic:+.4f} (spearman {result.ic_spearman:+.4f}) "
+        f"IR={result.ic_ir:+.3f} "
         f"adj_Sharpe={result.top_k_sharpe_adjusted:+.3f} "
         f"vs random p50 adj {rb.get('p50_sharpe_adjusted', float('nan')):+.3f} "
         f"(legacy {result.top_k_sharpe_legacy:+.3f}, "
         f"non-overlap {result.top_k_sharpe_non_overlap:+.3f})"
     )
+    print(
+        f"[backtest] HAC(lag={result.hac.get('lag', 0):.0f}) mean={result.hac.get('mean', 0):+.5f} "
+        f"se={result.hac.get('se', 0):.5f} t={result.hac.get('t_stat', 0):+.2f} "
+        f"CI95=[{result.hac.get('ci_low', 0):+.5f}, {result.hac.get('ci_high', 0):+.5f}]"
+    )
+    if args.cost_bps > 0:
+        print(
+            f"[backtest] cost_bps={args.cost_bps:.1f} -> "
+            f"adj_Sharpe_cost={result.top_k_sharpe_cost_adjusted:+.3f} "
+            f"cumret_cost={result.top_k_cumret_cost_adjusted:+.4f} "
+            f"(gross cumret={result.top_k_cumret:+.4f})"
+        )
     return 0
 
 

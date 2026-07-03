@@ -90,6 +90,11 @@ dev = [
     "scikit-learn>=1.3",
     # Used by gtja191 ops tests + p3 matrix-lib tests
     "pandas>=2.0",
+    # Reference oracle only in tests/test_eval_metrics.py (issue #6): the
+    # production aurumq_rl.eval_metrics module is scipy-free by design (see
+    # its module docstring) so it stays importable from the GPU training
+    # loop's validation callback, which only installs the `train` extra.
+    "scipy>=1.11",
 ]
 
 [project.scripts]
