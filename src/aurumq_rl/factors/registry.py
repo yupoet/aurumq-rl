@@ -23,6 +23,51 @@ Design notes
   once parity is verified.
 * ``quality_flag``: ``0`` = ok, ``1`` = errata-conservative (gtja191
   ambiguous formulas), ``2`` = stub.
+* ``impl_incremental`` / ``max_window``: OPTIONAL opt-in fields (both default
+  ``None``) implementing the incremental-computation protocol — see the
+  "Incremental computation protocol" section below. A factor that does not
+  set them behaves exactly as before (``impl`` is the only required path).
+
+Incremental computation protocol (issue #10)
+---------------------------------------------
+Every registered factor keeps its full-history path: ``impl(df) -> pl.Series``
+recomputes the factor over the entire panel and remains the source of truth.
+Some factors — pure per-stock time-series formulas with a bounded rolling
+lookback — can ALSO opt into a second, optional path meant for a daily
+refresh: recompute only the new rows using a bounded "tail buffer" per stock
+instead of replaying the full history.
+
+A factor opts in by registering two additional fields on ``FactorEntry``:
+
+* ``max_window: int`` — the factor's maximum lookback in rows (the deepest
+  rolling window / delay it uses, expressed as "how many prior rows are
+  needed before the first row a caller cares about can be computed").
+* ``impl_incremental: Callable[[pl.DataFrame, int], pl.Series]`` — given a
+  **tail buffer** ``tail_df`` and an integer ``n_new``, returns the factor
+  values for exactly the last ``n_new`` rows of every stock group in
+  ``tail_df``.
+
+Tail buffer contract
+~~~~~~~~~~~~~~~~~~~~~
+``tail_df`` must be sorted ``[stock_code, trade_date]`` ascending (same
+convention as the full-history panel passed to ``impl``) and must contain,
+for every stock present in its last ``n_new`` rows, **at least**
+``max_window + n_new`` rows for that stock — i.e. ``max_window`` rows of
+prior history immediately followed by the ``n_new`` new rows. A caller
+assembles this by taking, per stock, the last ``max_window + n_new`` rows of
+that stock's full history (see :func:`compute_incremental` for a ready-made
+slicer over a full panel).
+
+Given a buffer that satisfies the contract, ``impl_incremental(tail_df,
+n_new)`` MUST return a ``pl.Series`` of length ``n_new * n_stocks`` (in the
+same per-stock grouped order as ``tail_df``'s trailing rows) that is
+numerically identical, within float tolerance, to slicing
+``impl(full_history_df)`` down to those same trailing ``n_new`` rows per
+stock. A conforming implementation may reject a buffer shorter than the
+minimum with a clear ``ValueError`` naming the offending stock(s); silently
+returning wrong numbers is never acceptable. Registered ``impl_incremental``
+callables are auto-wrapped with :func:`sanitize_factor_series`, exactly like
+``impl``, so both paths apply the same inf/overflow cleanup.
 """
 
 from __future__ import annotations
@@ -36,8 +81,10 @@ if TYPE_CHECKING:
     import polars as pl
 
     FactorImpl = Callable[["pl.DataFrame"], "pl.Series"]
+    FactorImplIncremental = Callable[["pl.DataFrame", int], "pl.Series"]
 else:
     FactorImpl = Callable
+    FactorImplIncremental = Callable
 
 
 __all__ = [
@@ -49,6 +96,8 @@ __all__ = [
     "register_alpha101",
     "register_gtja191",
     "resolve_for_aqml",
+    "resolve_incremental",
+    "compute_incremental",
     "sanitize_factor_series",
 ]
 
@@ -98,9 +147,34 @@ def _wrap_impl_with_sanitizer(impl: FactorImpl) -> FactorImpl:
     return _sanitized
 
 
+def _wrap_impl_incremental_with_sanitizer(
+    impl_incremental: FactorImplIncremental,
+) -> FactorImplIncremental:
+    """Wrap ``impl_incremental(tail_df, n_new) -> pl.Series`` with the sanitizer.
+
+    Mirrors :func:`_wrap_impl_with_sanitizer` so the incremental path applies
+    the exact same inf/overflow cleanup as the full-history path — required
+    for the two paths to stay numerically identical (see module docstring).
+    """
+
+    def _sanitized(tail_df, n_new):  # type: ignore[no-untyped-def]
+        return sanitize_factor_series(impl_incremental(tail_df, n_new))
+
+    _sanitized.__name__ = getattr(impl_incremental, "__name__", "_sanitized_impl_incremental")
+    _sanitized.__doc__ = getattr(impl_incremental, "__doc__", None)
+    _sanitized.__wrapped__ = impl_incremental  # type: ignore[attr-defined]
+    return _sanitized
+
+
 @dataclass(frozen=True)
 class FactorEntry:
-    """Metadata + callable for a single factor."""
+    """Metadata + callable for a single factor.
+
+    ``impl_incremental`` / ``max_window`` are OPTIONAL (default ``None``) —
+    see the "Incremental computation protocol" section of the module
+    docstring. A factor that leaves them unset is unaffected; ``impl`` and
+    the full-history recompute path are always available and unchanged.
+    """
 
     id: str
     impl: FactorImpl
@@ -111,10 +185,26 @@ class FactorEntry:
     quality_flag: int = 0
     references: tuple[str, ...] = field(default_factory=tuple)
     formula_doc_path: str = ""
+    impl_incremental: FactorImplIncremental | None = None
+    max_window: int | None = None
 
 
 ALPHA101_REGISTRY: dict[str, FactorEntry] = {}
 GTJA191_REGISTRY: dict[str, FactorEntry] = {}
+
+
+def _validate_incremental_metadata(entry: FactorEntry) -> None:
+    """Enforce that ``impl_incremental`` and ``max_window`` are set together.
+
+    ``max_window`` is only required for factors that provide
+    ``impl_incremental`` (see module docstring); it stays optional
+    otherwise, so this never rejects the ~99% of factors that don't opt in.
+    """
+    if entry.impl_incremental is not None and entry.max_window is None:
+        raise ValueError(
+            f"factor {entry.id!r} provides impl_incremental but no max_window "
+            "— max_window is required whenever impl_incremental is set"
+        )
 
 
 def register_alpha101(entry: FactorEntry) -> FactorEntry:
@@ -122,9 +212,20 @@ def register_alpha101(entry: FactorEntry) -> FactorEntry:
 
     The entry's ``impl`` is automatically wrapped with :func:`sanitize_factor_series`
     so every registered factor produces inf-free, clipped output regardless of how
-    the underlying formula handles divide-by-zero / overflow.
+    the underlying formula handles divide-by-zero / overflow. If ``impl_incremental``
+    is set, it is wrapped the same way (see module docstring for the protocol).
     """
-    sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
+    _validate_incremental_metadata(entry)
+    wrapped_incremental = (
+        _wrap_impl_incremental_with_sanitizer(entry.impl_incremental)
+        if entry.impl_incremental is not None
+        else None
+    )
+    sanitized_entry = dataclasses.replace(
+        entry,
+        impl=_wrap_impl_with_sanitizer(entry.impl),
+        impl_incremental=wrapped_incremental,
+    )
     if entry.id in ALPHA101_REGISTRY and ALPHA101_REGISTRY[entry.id] is not sanitized_entry:
         # Allow re-registration only if the underlying (unwrapped) impl is identical.
         existing_impl = getattr(
@@ -141,9 +242,20 @@ def register_alpha101(entry: FactorEntry) -> FactorEntry:
 def register_gtja191(entry: FactorEntry) -> FactorEntry:
     """Register a factor in the gtja191 registry (idempotent on identical entry).
 
-    See :func:`register_alpha101` for the auto-sanitization contract.
+    See :func:`register_alpha101` for the auto-sanitization contract (applies
+    identically to ``impl_incremental`` when set).
     """
-    sanitized_entry = dataclasses.replace(entry, impl=_wrap_impl_with_sanitizer(entry.impl))
+    _validate_incremental_metadata(entry)
+    wrapped_incremental = (
+        _wrap_impl_incremental_with_sanitizer(entry.impl_incremental)
+        if entry.impl_incremental is not None
+        else None
+    )
+    sanitized_entry = dataclasses.replace(
+        entry,
+        impl=_wrap_impl_with_sanitizer(entry.impl),
+        impl_incremental=wrapped_incremental,
+    )
     if entry.id in GTJA191_REGISTRY and GTJA191_REGISTRY[entry.id] is not sanitized_entry:
         existing_impl = getattr(
             GTJA191_REGISTRY[entry.id].impl, "__wrapped__", GTJA191_REGISTRY[entry.id].impl
@@ -196,3 +308,99 @@ def resolve_for_aqml(name: str, df: pl.DataFrame) -> pl.Series:
         raise KeyError(name)
     entry = factors[name]
     return entry.impl(df)
+
+
+def resolve_incremental(name: str, tail_df: pl.DataFrame, n_new: int) -> pl.Series:
+    """Incremental counterpart of :func:`resolve_for_aqml`.
+
+    Looks up ``name`` in the merged registry and invokes its
+    ``impl_incremental(tail_df, n_new)``. See the module docstring's
+    "Incremental computation protocol" section for the tail-buffer contract
+    ``tail_df`` must satisfy.
+
+    Parameters
+    ----------
+    name :
+        Factor id, e.g. ``"alpha009"``.
+    tail_df :
+        Per-stock tail buffer: >= ``max_window + n_new`` rows per stock,
+        sorted ``[stock_code, trade_date]`` ascending.
+    n_new :
+        Number of new (trailing) rows per stock to compute.
+
+    Returns
+    -------
+    pl.Series
+        Factor values for the last ``n_new`` rows of every stock group in
+        ``tail_df``.
+
+    Raises
+    ------
+    KeyError
+        If ``name`` is not in any registry.
+    ValueError
+        If the factor is registered but does not provide
+        ``impl_incremental`` (i.e. has not opted into the protocol).
+    """
+    factors = list_all_factors()
+    if name not in factors:
+        raise KeyError(name)
+    entry = factors[name]
+    if entry.impl_incremental is None:
+        raise ValueError(
+            f"factor {name!r} has no incremental implementation "
+            "(impl_incremental is None) — use resolve_for_aqml / impl instead"
+        )
+    return entry.impl_incremental(tail_df, n_new)
+
+
+def compute_incremental(entry: FactorEntry, panel: pl.DataFrame, n_new: int) -> pl.Series:
+    """Slice the per-stock tail buffer from a full panel and run the incremental path.
+
+    Convenience helper so callers don't have to hand-roll the "last
+    ``max_window + n_new`` rows per stock" slice documented in the module's
+    "Incremental computation protocol" section. ``panel`` should be the same
+    full-history frame that would otherwise be passed to ``entry.impl`` —
+    this helper only reads the trailing rows it needs per stock, so it stays
+    ``O(n_stocks * (max_window + n_new))`` regardless of ``panel``'s total
+    length.
+
+    Parameters
+    ----------
+    entry :
+        A :class:`FactorEntry` with both ``impl_incremental`` and
+        ``max_window`` set (i.e. one that opted into the protocol).
+    panel :
+        Full-history panel, sorted ``[stock_code, trade_date]`` ascending.
+        May contain more history than needed — only the tail is read.
+    n_new :
+        Number of new (trailing) rows per stock to compute.
+
+    Returns
+    -------
+    pl.Series
+        Same as calling ``entry.impl_incremental`` directly on the sliced
+        tail buffer.
+
+    Raises
+    ------
+    ValueError
+        If ``entry`` did not register ``impl_incremental`` / ``max_window``,
+        or if any stock present in the trailing ``n_new`` rows has fewer
+        than ``max_window + n_new`` rows of history available in ``panel``
+        (surfaced by the underlying ``impl_incremental`` call).
+    """
+    if entry.impl_incremental is None or entry.max_window is None:
+        raise ValueError(
+            f"factor {entry.id!r} does not support incremental computation "
+            "(impl_incremental / max_window not set)"
+        )
+    if n_new < 1:
+        raise ValueError(f"n_new must be >= 1, got {n_new}")
+    buffer_size = entry.max_window + n_new
+    tail_df = (
+        panel.sort(["stock_code", "trade_date"])
+        .group_by("stock_code", maintain_order=True)
+        .tail(buffer_size)
+    )
+    return entry.impl_incremental(tail_df, n_new)
