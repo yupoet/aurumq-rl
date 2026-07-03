@@ -169,8 +169,73 @@ caller produces the arrays from whatever bundle source.
 ## Test pass
 
 ```
-21 / 21 passed
-- tests/labeling/test_events_dedupe.py     8 (event primitive + horizon derivation)
-- tests/labeling/test_methods_synthetic.py 9 (A/B/C/D detect known patterns)
-- tests/labeling/test_thresholds.py        4 (target-pos-rate search)
+41 / 41 passed
+- tests/labeling/test_events_dedupe.py             8 (event primitive + horizon derivation)
+- tests/labeling/test_methods_synthetic.py         9 (A/B/C/D detect known patterns)
+- tests/labeling/test_thresholds.py                4 (target-pos-rate search)
+- tests/labeling/test_sampling.py                 10 (CUSUM filter + concurrency/uniqueness)
+- tests/labeling/test_trend_scanning_transform.py  4 (t-stat squashing, opt-in)
+- tests/labeling/test_v2_horizon_scaling.py        6 (√horizon threshold scaling, opt-in, P0-locked default)
 ```
+
+---
+
+## Issue #8 — López de Prado alignments (all opt-in / additive)
+
+Four additions layered on top of the methods above. **None of them change any
+existing method's default output** — every new parameter defaults to the
+current (pre-issue-8) behavior. See `sampling.py` module docstring and each
+function's docstring for full detail.
+
+### Part 1 — CUSUM event filter (`sampling.cusum_filter`)
+
+Symmetric CUSUM filter (LdP ch. 2.5.2): accumulates positive/negative run-sums
+of consecutive diffs, emits an event and resets whenever either run-sum
+crosses `±threshold`. Use this to sample *where* to seed candidate decision
+days instead of scanning every `t` (which clusters seeds in autocorrelated
+stretches).
+
+`triple_barrier.detect_events_triple_barrier(panel, event_idx=...)` accepts an
+OPT-IN `{ts_code: index_array}` mapping (e.g. built from `cusum_filter`) to
+restrict candidate decision days per stock. `event_idx=None` (default)
+preserves the original all-`t` seeding exactly.
+
+### Part 2 — concurrency / average uniqueness (`sampling.py`)
+
+`label_concurrency(t_starts, t_ends, index)` counts, per bar, how many
+labels' `[t_start, t_end]` outcome windows are live (LdP ch. 4).
+`average_uniqueness(t_starts, t_ends, index)` turns that into a per-label
+`sample_weight` (mean of `1/concurrency` over the label's own window) —
+labels whose outcome windows heavily overlap get down-weighted when fed to
+LightGBM. Both are new, standalone utilities; no existing label emitter is
+changed by their presence.
+
+### Part 3 — trend-scanning t-stat squashing (`trend_scanning.detect_events_trend_scanning(..., tstat_transform=...)`)
+
+Raw `|t_stat|` is unbounded — low-vol micro-drifts can produce t-stats in the
+thousands that dominate `search_threshold`-based selection, favoring smooth
+drifts over genuine main waves. `tstat_transform` is OPT-IN:
+
+- `"raw"` (default): current behavior, unbounded `event_quality = t_stat`.
+- `"tanh"` (**recommended**): `tanh(t_stat / 10) * 10` — smoothly bounded,
+  sign-preserving, near-linear for `|t_stat| << 10`.
+- `"clip"`: hard-clips to `[-10, 10]`.
+
+Selection of which forward window `L` wins per `t` (and the up/down direction
+gate) always uses the raw t-stat; the transform only affects the reported
+`event_quality`.
+
+### Part 4 — √horizon vol scaling (`v2_excess_adaptive.detect_events_v2(..., horizon_scaling=...)`, `adaptive_threshold`)
+
+**GUARDRAIL — P0-locked**: `v2_excess_adaptive` is the ablation winner (see
+top of this file); its default label output is locked and must not change.
+
+The P0 threshold `max(0.06, 1.8 * vol20)` compares a *daily* EWM vol against
+an up-to-20-day *cumulative* excess return with no √horizon scaling, so the
+6% floor binds almost always and the label is effectively non-adaptive.
+`horizon_scaling: bool = False` (default) reproduces the P0-locked formula
+byte-for-byte. `horizon_scaling=True` scales the vol term by
+`sqrt(duration)` (`adaptive_threshold(vol20, duration, horizon_scaling=True)
+= max(0.06, 1.8 * vol20 * sqrt(duration))`), where `duration` is the realized
+peak offset. **Enabling this changes the P0-locked label and requires a
+re-ablation before production use — do not flip the default.**
