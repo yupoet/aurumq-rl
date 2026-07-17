@@ -1507,6 +1507,14 @@ bash scripts/web_dashboard.sh        # macOS / Linux / Git Bash
 
 ### 11.1 路线图 / Roadmap
 
+**2026-07-17 更新（4070 重新启用，详细依据见 §12.7）**：
+
+- [ ] **MASTER-lite bring-up**：`scripts/p3/master_train.py` CPU smoke（`--device cpu --max-stocks 200`）→ 4070 全量训练 → `master_ensemble_eval.py` 出 KEEP/KILL verdict（对 path5_long base）
+- [ ] **Kronos 系列适用 kill criteria**：v13 之后不再排独立预测/微调实验，只保留 embedding-as-feature 消融（§12.7a）
+- [ ] **cost-adjusted 评估落地**：年化双边换手 + 分档红利税进 cell 报告模板（§12.7d）
+
+**2026-07-17 update (4070 re-enabled; rationale in §12.7).** MASTER-lite bring-up (CPU smoke → full 4070 train → KEEP/KILL verdict vs the path5_long base); Kronos track restricted to embedding-as-feature ablations under the pre-registered kill criteria; cost-adjusted metrics (turnover + tiered dividend tax) added to the cell-report template.
+
 **短期（已 in-progress）**：
 
 - [ ] path5_long A/B 几周后切到 `is_recommended=True`
@@ -1726,6 +1734,41 @@ A 股选股 ML 研究归两大 paradigm:
 - [`fig04_dyn_exit_ranking.png`](docs/figures/fig04_dyn_exit_ranking.png) — Top-5 cells per dyn-exit trigger (11 triggers)
 - [`fig05_paradigm_compare_scatter.png`](docs/figures/fig05_paradigm_compare_scatter.png) — H2 IC vs Q1 IC scatter, colored by paradigm
 - [`fig06_bootstrap_ci_distribution.png`](docs/figures/fig06_bootstrap_ci_distribution.png) — Bootstrap CI lower-bound histogram
+
+### 12.7 2026-07-17 外部证据更新与路线修正 / External-Evidence Update & Course Correction
+
+> 基于 2026-07-17 对 19 个开源量化仓库增量 diff + 2025-2026 全球 AI 量化文献/业界实践的系统调研
+> (证据与链接见 AurumQ 主仓 `handoffs/2026-07-17-refs-survey/reports/07-ai-quant-trends.md`)。
+> Based on a 2026-07-17 systematic survey of 19 upstream quant repos + the 2025-2026 AI-quant
+> literature and industry practice. Four course corrections below are now project policy.
+
+#### (a) Kronos / 时序基础模型降级 / Kronos & TSFM demotion
+
+**中文.** 社区大规模实测已证伪「时序基础模型作为独立预测器」：200 只 ETF 系统评测方向准确率 0.49（≈抛硬币）、CRPS/RMSE 全面输给 20 日历史波动率基线、多步预测方差坍缩（[Kronos issue #269](https://github.com/shiyu-coder/Kronos/issues/269)）；A股个股 MAPE 8-44%（[#319](https://github.com/shiyu-coder/Kronos/issues/319)）；作者本人承认「TSFM 微调经常越调越差（含 TimeMoE/TimesFM），稳定微调是开放问题」（[#177](https://github.com/shiyu-coder/Kronos/issues/177)）。最严谨的学术评测（[arXiv:2606.27100](https://arxiv.org/abs/2606.27100)）结论：TSFM 相对随机游走的绝对增益「小且稀疏」。
+
+**修正**：本仓 kronos_matrix 系列（v2→v13）继续存在的唯一合理形态是 **embedding-as-feature 消融**（预训练表征作为 LGBM 特征列，v13 已是此形态），且从现在起受 `master_lib.kill_criteria_verdict` 预注册 kill criteria 约束——对 base 无显著增益即终止，不再排新的 Kronos 独立预测 / 微调实验，不进生产管线。
+
+**English.** Community-scale replication has falsified TSFMs as standalone predictors (direction accuracy 0.49 on 200 ETFs, beaten by a 20-day historical-vol baseline; the Kronos authors concede stable fine-tuning is an open problem). Policy: the kronos_matrix series survives ONLY as embedding-as-feature ablations (v13 already is), now governed by the pre-registered kill criteria in `master_lib.kill_criteria_verdict`. No new standalone-forecast or fine-tune experiments; nothing enters production.
+
+#### (b) GBDT 仍是日频面板基本盘 / GBDT stays the daily-panel backbone
+
+**中文.** Qlib CSI300 官方 benchmark：LightGBM IC 0.0448（Alpha158）vs Transformer 0.0264；2025 年表格基准（TabArena / TabReD 时序切分）同结论。深度模型在日频因子面板上的真实增量只有一处有可信证据：**截面结构建模**——MASTER（AAAI 2024, [arXiv:2312.15235](https://arxiv.org/abs/2312.15235)）经股票间 attention + 市场门控做到 IC 0.064 vs XGBoost 0.051（约 +25%）。RD-Agent 消融同时表明通用时序模型（PatchTST/Mamba）在股票预测上「预测与策略双输」。
+
+**修正**：SL 赛道 LightGBM（path5_long 等）是不可动摇的 base；新增 **MASTER-lite 实验**（`scripts/p3/master_train.py` + `master_ensemble_eval.py`）——单卡 4070 复现市场门控截面 transformer，产出一列低相关分数与 LGBM base 做 rank 混合，同样受 kill criteria 约束（最优混合须在 ≥2/3 窗口上 IC 胜 base 且 top-50 不劣，否则 KILL）。预期是 +10-25% IC 量级的 ensemble 增量，不是替代。
+
+**English.** LightGBM remains the backbone (Qlib benchmark: LGBM IC 0.0448 vs Transformer 0.0264). The one credible deep-model increment is cross-sectional structure modeling (MASTER, AAAI 2024, ~+25% IC over XGBoost). New experiment: MASTER-lite (`scripts/p3/master_train.py`) produces one low-correlation score column for rank-blending with the LGBM base, governed by the same pre-registered kill criteria. Expected as an ensemble increment, never a replacement.
+
+#### (c) RL 定界确认 / RL scoping confirmed
+
+**中文.** 业界与学术双向证据（中欧重金投入凸优化器而非 RL 仓位；Qlib RL 模块定位于 order execution；LLM/RL 信号层论文的「超额」多来自训练窗口价格记忆，[arXiv:2505.07078](https://arxiv.org/abs/2505.07078)；[LiveTradeBench](https://arxiv.org/abs/2511.03628) 显示静态 benchmark 赢家实盘反而更差）与本仓 26 期实验结论（Strategy D top-K 加权叠加 +7-10 bps mean_y，Finding 3）互相印证：**RL 的正确位置是仓位/组合权重层的小幅增强器，不追求信号层突破**。路线图上原「AQML → PPO reward 自动转译」保留，信号层新 RL 实验冻结。
+
+**English.** Industry and academic evidence now mutually confirm our own Finding 3: RL's proper place is the position/weight layer as a modest enhancer (+7-10 bps from Strategy D), not signal generation. Signal-layer RL experiments are frozen; the AQML-to-reward translation line stays.
+
+#### (d) 成本一等公民 / Cost as a first-class citizen
+
+**中文.** 1-5 日 horizon 的信号密度最高，但 A股 T+1 + 印花税 + **按持股期限分档的红利税**（≤1 月 20% / 1 月-1 年 10% / >1 年免——周频调仓的 top-K 正是 20% 档重灾区）意味着日频 IC 0.05 级别的信号扣双边成本后利润很薄；国盛证据显示短周期量价 alpha 自 2024 年起拥挤衰减。**修正**：后续每个 cell 报告须附年化双边换手与 cost-adjusted 指标（参考 rqalpha 6.2.0 的 `_pay_dividend_tax` per-lot FIFO 实现，`rqalpha_mod_sys_accounts/position_model.py:322`）；「IC 好看但净值不赚」的 cell 一律不进 §12.2 主榜。
+
+**English.** Ultra-short horizons carry the densest signal but also the harshest cost stack (T+1, stamp duty, holding-period-tiered dividend tax — weekly top-K rebalancing sits squarely in the 20% tier). Every future cell report must carry annualized two-sided turnover and cost-adjusted metrics; cells that look good on IC but lose net of cost stay off the §12.2 master ranking.
 
 ### 12.6 (deprecated content kept for git history)
 
