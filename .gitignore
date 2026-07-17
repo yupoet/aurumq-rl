@@ -47,8 +47,8 @@ htmlcov/
 
 # Project-specific: never commit these
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.secret
 
 # Training outputs (never commit ~5MB ONNX, ~50MB SB3 zips, ~10GB tb_logs)
