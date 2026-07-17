@@ -191,6 +191,131 @@ def blend_rank_scores(
 
 
 # =============================================================================
+# Cost model (README §12.7d — cost as a first-class citizen)
+# =============================================================================
+
+# Pre-registered cost spec v1 for daily top-K rebalancing on the A-share main
+# board. Dividend tax note: the exact per-lot FIFO holding-period tiering
+# (rqalpha `_pay_dividend_tax`) needs dividend-event data our bundles do not
+# carry; v1 pre-registers the approximation "~2 % average yield x 20 % tier
+# (holding <= 1 month, which daily top-K churn guarantees) = 40 bps/yr" applied
+# pro-rata per trading day. Changing any number here after looking at results
+# voids the verdict — bump to a COST_SPEC_V2 and rerun instead.
+COST_SPEC_V1: dict = {
+    "commission_bps_per_side": 2.5,
+    "stamp_duty_bps_sell": 5.0,
+    "slippage_bps_per_side": 10.0,
+    "dividend_tax_drag_bps_annual": 40.0,
+    "trading_days_per_year": 243,
+}
+
+
+def daily_topk_replacement(preds: pl.DataFrame, top_k: int) -> float:
+    """Mean fraction of the top-k basket replaced between consecutive dates.
+
+    ``preds`` needs (trade_date, ts_code, score). For each adjacent date pair
+    the replaced fraction is ``1 - |A ∩ B| / min(|A|, |B|)`` (the min guards
+    days that have fewer than ``top_k`` scored names). Ties on score break by
+    ``ts_code`` so basket membership is deterministic across input row order
+    and polars versions. Returns 0.0 with fewer than two dates
+    (degenerate-input convention, same as ``daily_rank_ic``).
+    """
+    topk = (
+        preds.sort(["trade_date", "score", "ts_code"], descending=[False, True, False])
+        .group_by("trade_date", maintain_order=True)
+        .head(top_k)
+    )
+    days = topk.partition_by("trade_date", maintain_order=True)
+    if len(days) < 2:
+        return 0.0
+    fracs: list[float] = []
+    prev = set(days[0]["ts_code"].to_list())
+    for day in days[1:]:
+        cur = set(day["ts_code"].to_list())
+        denom = max(1, min(len(prev), len(cur)))
+        fracs.append(1.0 - len(prev & cur) / denom)
+        prev = cur
+    return float(np.mean(fracs))
+
+
+def cost_drag_daily(replaced_frac: float, spec: dict = COST_SPEC_V1) -> float:
+    """Daily return drag (fraction) of running the top-k basket.
+
+    A replaced slot pays a full round trip: sell the outgoing name
+    (commission + stamp duty + slippage) and buy the incoming one
+    (commission + slippage). The dividend-tax drag accrues pro-rata daily
+    regardless of churn (holding at all incurs it under the v1 approximation).
+    """
+    round_trip = (
+        2 * spec["commission_bps_per_side"]
+        + spec["stamp_duty_bps_sell"]
+        + 2 * spec["slippage_bps_per_side"]
+    ) / 1e4
+    dividend_daily = spec["dividend_tax_drag_bps_annual"] / 1e4 / spec["trading_days_per_year"]
+    return replaced_frac * round_trip + dividend_daily
+
+
+def cost_metric_block(
+    preds: pl.DataFrame,
+    realized: pl.DataFrame,
+    market: pl.DataFrame,
+    window: tuple,
+    top_k: int = 50,
+    spec: dict = COST_SPEC_V1,
+) -> dict:
+    """Turnover + cost-adjusted top-k excess block (README §12.7d).
+
+    Args mirror ``path1_eval.evaluate``: ``realized`` has
+    (trade_date, ts_code, pct_chg_t_plus_1) where the row at the anchor date
+    already carries that anchor's T+1 return; ``market`` has
+    (trade_date, eq_weight_pct_chg_t_plus_1). Per-date top-k mean T+1 excess
+    is reported gross and net of ``cost_drag_daily``. Turnover is computed on
+    the same joined frame the gross metric uses, so basket membership and
+    return attribution agree.
+
+    Registered v1 simplification: turnover is pairwise between consecutive
+    dates, so the initial basket entry on day 1 of the window is not charged
+    (understates drag slightly on short windows; bump the spec version if
+    this is ever changed).
+    """
+    lo, hi = window
+    joined = (
+        preds.filter((pl.col("trade_date") >= lo) & (pl.col("trade_date") <= hi))
+        .join(realized, on=["trade_date", "ts_code"], how="inner")
+        .join(market, on="trade_date", how="inner")
+        .with_columns(
+            (pl.col("pct_chg_t_plus_1") - pl.col("eq_weight_pct_chg_t_plus_1")).alias("e1")
+        )
+        .drop_nulls(["score", "e1"])
+    )
+    n_dates = joined["trade_date"].n_unique() if len(joined) else 0
+    if n_dates == 0:
+        return {
+            "n_dates": 0,
+            "topk_daily_replaced_frac": 0.0,
+            "annualized_two_sided_turnover": 0.0,
+            "gross_mean_topk_excess_t1": 0.0,
+            "net_mean_topk_excess_t1": 0.0,
+            "cost_spec": dict(spec),
+        }
+    topk = (
+        joined.sort(["trade_date", "score", "ts_code"], descending=[False, True, False])
+        .group_by("trade_date", maintain_order=True)
+        .head(top_k)
+    )
+    gross = float(topk.group_by("trade_date").agg(pl.col("e1").mean().alias("m"))["m"].mean())
+    replaced = daily_topk_replacement(joined, top_k)
+    return {
+        "n_dates": n_dates,
+        "topk_daily_replaced_frac": replaced,
+        "annualized_two_sided_turnover": replaced * 2 * spec["trading_days_per_year"],
+        "gross_mean_topk_excess_t1": gross,
+        "net_mean_topk_excess_t1": gross - cost_drag_daily(replaced, spec),
+        "cost_spec": dict(spec),
+    }
+
+
+# =============================================================================
 # Pre-registered kill criteria (README §12.7)
 # =============================================================================
 
@@ -201,12 +326,16 @@ def kill_criteria_verdict(
     ic_key: str = "spearman",
     primary_key: str = "primary_mean_top50_proximity_excess",
     required_win_frac: float = 2 / 3,
+    cost_key: str | None = None,
 ) -> dict:
     """Pre-registered KEEP/KILL verdict for a treatment vs its baseline.
 
     Both args map window name -> metric block (the dicts produced by
-    ``p3.path1_eval.evaluate``). A window is a WIN when the treatment beats the
-    base on ``ic_key`` AND is not worse on ``primary_key``. Verdict is KEEP iff
+    ``p3.path1_eval.evaluate``, optionally merged with ``cost_metric_block``).
+    A window is a WIN when the treatment beats the base on ``ic_key`` AND is
+    not worse on ``primary_key`` AND — when ``cost_key`` is given — is not
+    worse on the cost-adjusted metric either (§12.7d: an IC win that loses
+    net of trading costs is not a win). Verdict is KEEP iff
     wins >= ceil(required_win_frac * n_windows), else KILL.
 
     The criteria are registered BEFORE the experiment runs (this function is the
@@ -223,14 +352,21 @@ def kill_criteria_verdict(
         ic_win = t[ic_key] > b[ic_key]
         primary_ok = t[primary_key] >= b[primary_key]
         win = bool(ic_win and primary_ok)
-        wins += win
-        detail[name] = {
-            "win": win,
+        entry = {
             "ic_base": b[ic_key],
             "ic_treatment": t[ic_key],
             "primary_base": b[primary_key],
             "primary_treatment": t[primary_key],
         }
+        if cost_key is not None:
+            cost_ok = t[cost_key] >= b[cost_key]
+            win = win and cost_ok
+            entry["cost_base"] = b[cost_key]
+            entry["cost_treatment"] = t[cost_key]
+            entry["cost_ok"] = cost_ok
+        entry["win"] = win
+        wins += win
+        detail[name] = entry
     required = math.ceil(required_win_frac * len(windows))
     return {
         "verdict": "KEEP" if wins >= required else "KILL",
@@ -239,5 +375,6 @@ def kill_criteria_verdict(
         "n_windows": len(windows),
         "ic_key": ic_key,
         "primary_key": primary_key,
+        "cost_key": cost_key,
         "windows": detail,
     }
