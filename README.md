@@ -1510,8 +1510,9 @@ bash scripts/web_dashboard.sh        # macOS / Linux / Git Bash
 **2026-07-17 更新（4070 重新启用，详细依据见 §12.7）**：
 
 - [ ] **MASTER-lite bring-up**：`scripts/p3/master_train.py` CPU smoke（`--device cpu --max-stocks 200`）→ 4070 全量训练 → `master_ensemble_eval.py` 出 KEEP/KILL verdict（对 path5_long base）
+  - 预注册协议（2026-07-17，训练前锁定）：**3 seeds (42/43/44) rank 平均后再 blend**（Phase 17/18 种子鲁棒性纪律）；**eval 窗口 = H1 + H2 + W3(2026-01-05~2026-06-30)**，避免双窗 2/2 全胜制退化；verdict 含 §12.7d 成本否决（见下）
 - [ ] **Kronos 系列适用 kill criteria**：v13 之后不再排独立预测/微调实验，只保留 embedding-as-feature 消融（§12.7a）
-- [ ] **cost-adjusted 评估落地**：年化双边换手 + 分档红利税进 cell 报告模板（§12.7d）
+- [x] **cost-adjusted 评估落地**（2026-07-17 代码层完成）：`master_lib.COST_SPEC_V1`（佣金 2.5bps/边 + 印花税 5bps 卖方 + 冲击 10bps/边 + 红利税近似 40bps/年 pro-rata）；`cost_metric_block` 输出年化双边换手 + net-of-cost top-K 超额；`kill_criteria_verdict(cost_key=...)` 对「IC 赢但净值输」的窗口直接否决（§12.7d）。注：分档红利税的 per-lot FIFO 精确实现需要 bundle 携带分红事件数据，v1 先用预注册近似，升级时 bump COST_SPEC_V2 重跑
 
 **2026-07-17 update (4070 re-enabled; rationale in §12.7).** MASTER-lite bring-up (CPU smoke → full 4070 train → KEEP/KILL verdict vs the path5_long base); Kronos track restricted to embedding-as-feature ablations under the pre-registered kill criteria; cost-adjusted metrics (turnover + tiered dividend tax) added to the cell-report template.
 
@@ -1769,6 +1770,8 @@ A 股选股 ML 研究归两大 paradigm:
 **中文.** 1-5 日 horizon 的信号密度最高，但 A股 T+1 + 印花税 + **按持股期限分档的红利税**（≤1 月 20% / 1 月-1 年 10% / >1 年免——周频调仓的 top-K 正是 20% 档重灾区）意味着日频 IC 0.05 级别的信号扣双边成本后利润很薄；国盛证据显示短周期量价 alpha 自 2024 年起拥挤衰减。**修正**：后续每个 cell 报告须附年化双边换手与 cost-adjusted 指标（参考 rqalpha 6.2.0 的 `_pay_dividend_tax` per-lot FIFO 实现，`rqalpha_mod_sys_accounts/position_model.py:322`）；「IC 好看但净值不赚」的 cell 一律不进 §12.2 主榜。
 
 **English.** Ultra-short horizons carry the densest signal but also the harshest cost stack (T+1, stamp duty, holding-period-tiered dividend tax — weekly top-K rebalancing sits squarely in the 20% tier). Every future cell report must carry annualized two-sided turnover and cost-adjusted metrics; cells that look good on IC but lose net of cost stay off the §12.2 master ranking.
+
+**实现 (2026-07-17)**：`scripts/p3/master_lib.py` — `COST_SPEC_V1` / `daily_topk_replacement` / `cost_metric_block`；`kill_criteria_verdict` 增加 `cost_key` 第三条件（net-of-cost top-K 超额不得劣于 base，否则该窗口不算 WIN）。`master_ensemble_eval.py` 的 verdict 已默认启用。/ Implemented in `master_lib.py` (`COST_SPEC_V1`, `cost_metric_block`) and wired into `kill_criteria_verdict` as a third per-window condition; `master_ensemble_eval.py` enables it by default.
 
 ### 12.6 (deprecated content kept for git history)
 

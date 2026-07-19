@@ -52,6 +52,7 @@ import json
 import logging
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +61,7 @@ import polars as pl
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from p3.master_lib import (
+    STD_FLOOR,
     build_sequence_windows,
     cs_zscore_panel,
     daily_rank_ic,
@@ -126,6 +128,40 @@ def densify(
     return x, y, dates, codes
 
 
+def masked_market_vector(x_anchor: np.ndarray, present_row: np.ndarray) -> np.ndarray:
+    """Cross-sectional mean feature vector over present stocks only.
+
+    After ``cs_zscore_panel`` absent stocks sit at exactly 0; averaging them in
+    shrinks the market-state vector toward 0 in proportion to how many names
+    are absent that day. Falls back to the all-rows mean when nothing is
+    present (degenerate warmup dates).
+    """
+    if present_row.any():
+        return x_anchor[present_row].mean(axis=0)
+    return x_anchor.mean(axis=0)
+
+
+def zscore_labels_per_date(y: np.ndarray, present: np.ndarray) -> np.ndarray:
+    """Z-score labels per date over present stocks; absent cells left untouched.
+
+    Raw proximity labels keep their cross-sectional dispersion, letting
+    high-dispersion dates dominate the MSE loss; per-date normalization makes
+    every anchor date contribute comparably (scores are only consumed as a
+    within-date ranking downstream). Std is floored at ``STD_FLOOR`` so a
+    constant cross-section maps to 0 instead of exploding.
+    """
+    masked = np.where(present, y, np.nan)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice")
+        warnings.filterwarnings("ignore", message="Degrees of freedom <= 0")
+        mean = np.nanmean(masked, axis=1, keepdims=True)
+        std = np.nanstd(masked, axis=1, keepdims=True)
+    mean = np.nan_to_num(mean, nan=0.0)
+    std = np.maximum(np.nan_to_num(std, nan=0.0), STD_FLOOR)
+    z = (y - mean) / std
+    return np.where(present, z, y).astype(np.float32)
+
+
 # ------------------------------------------------------------------ #
 # Model (torch imported lazily so --help works on CPU-only boxes)
 # ------------------------------------------------------------------ #
@@ -159,12 +195,19 @@ def build_model(n_factors: int, d_model: int, n_heads: int, dropout: float):
             )
             self.head = nn.Linear(d_model, 1)
 
-        def forward(self, x, market):
-            # x: [N, L, F] one anchor date; market: [F] cross-section mean at anchor.
+        def forward(self, x, market, pad_mask=None):
+            # x: [N, L, F] one anchor date; market: [F] present-stock mean at
+            # anchor; pad_mask: [N] bool, True = absent stock (excluded from
+            # cross-stock attention keys, src_key_padding_mask convention).
+            if pad_mask is not None and bool(pad_mask.all()):
+                pad_mask = None  # degenerate all-absent date: avoid NaN attention
             g = self.gate(market)  # [F] market-guided feature gate
             h = self.proj(x * g)  # [N, L, d]
             h = self.temporal(h)[:, -1, :]  # [N, d] last-step summary
-            h = self.cross(h.unsqueeze(0)).squeeze(0)  # attention across stocks
+            h = self.cross(
+                h.unsqueeze(0),
+                src_key_padding_mask=None if pad_mask is None else pad_mask.unsqueeze(0),
+            ).squeeze(0)  # attention across present stocks
             return self.head(h).squeeze(-1)  # [N]
 
     return MasterLite()
@@ -209,6 +252,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--val-frac", type=float, default=0.15)
     p.add_argument("--embargo-days", type=int, default=30)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--label-norm",
+        choices=("zscore", "none"),
+        default="zscore",
+        help="per-date cross-sectional z-score of the training labels (loss only; "
+        "val IC and eval blocks always use raw y)",
+    )
     p.add_argument("--device", default="cuda")
     p.add_argument("--no-amp", action="store_true", help="disable bf16 autocast")
     p.add_argument(
@@ -258,7 +308,8 @@ def main(argv: list[str] | None = None) -> int:
     feat_present = ~np.isnan(x).all(axis=2)  # [D, N] stock has any feature this date
     x = cs_zscore_panel(x)
     present = ~np.isnan(y)  # [D, N] stock has a label at this date
-    y = np.nan_to_num(y, nan=0.0)
+    y_raw = np.nan_to_num(y, nan=0.0)  # reporting/eval always sees raw labels
+    y = zscore_labels_per_date(y_raw, present) if args.label_norm == "zscore" else y_raw
     logger.info("dense panel: D=%d N=%d F=%d (%.0fs)", *x.shape, time.time() - t0)
 
     windows = build_sequence_windows(len(dates), args.seq_len)
@@ -289,10 +340,12 @@ def main(argv: list[str] | None = None) -> int:
 
     def forward_date(i: int):
         w = windows[i]
+        anchor = w[-1]
         xb = x_t[w].permute(1, 0, 2).to(device, non_blocking=True)  # [N, L, F]
-        market = xb[:, -1, :].mean(dim=0)  # [F]
+        market = torch.from_numpy(masked_market_vector(x[anchor], feat_present[anchor])).to(device)
+        pad = torch.from_numpy(~(feat_present[anchor] | present[anchor])).to(device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
-            return model(xb, market)
+            return model(xb, market, pad_mask=pad)
 
     def val_ic() -> float:
         model.eval()
@@ -307,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
                             "trade_date": [anchor_dates[i]] * int(mask.sum()),
                             "ts_code": [codes[j] for j in np.flatnonzero(mask)],
                             "score": scores[mask],
-                            "actual_y": y[windows[i][-1]][mask],
+                            "actual_y": y_raw[windows[i][-1]][mask],
                         }
                     )
                 )

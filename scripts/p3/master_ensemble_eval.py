@@ -12,13 +12,30 @@ The blend never replaces the base. A KEEP means "MASTER earns a weight in the
 production rank blend"; a KILL means the experiment stops (Finding-style
 discipline: negative results get recorded, not retried with shifted goalposts).
 
+Cost discipline (§12.7d): every metric block is merged with
+``master_lib.cost_metric_block`` (annualized two-sided turnover + top-k T+1
+excess net of COST_SPEC_V1), and the verdict requires the blend to hold the
+net-of-cost excess in addition to IC / proximity — an IC win that loses net of
+trading costs is not a win.
+
+Pre-registered protocol (2026-07-17, before any 4070 run):
+  * eval windows: H1 + H2 + W3=2026-01-05:2026-06-30 (pass W3 via
+    ``--extra-window W3=2026-01-05:2026-06-30``; 2-window verdicts degenerate
+    to 2/2 and are logged with a warning)
+  * seeds: 42, 43, 44 — pass all three prediction parquets via repeated
+    ``--master-preds``; they are rank-averaged into ONE master score column
+    before blending (seed-ensemble, Phase 18 discipline)
+
 Usage::
 
     python scripts/p3/master_ensemble_eval.py \
         --master-preds runs/master_lite/d64_L8_seed42/predictions.parquet \
+        --master-preds runs/master_lite/d64_L8_seed43/predictions.parquet \
+        --master-preds runs/master_lite/d64_L8_seed44/predictions.parquet \
         --base-preds runs/sl_path5_long/best/predictions.parquet \
         --bundle data/p3_4070_long \
-        --out runs/master_lite/d64_L8_seed42/ensemble
+        --extra-window W3=2026-01-05:2026-06-30 \
+        --out runs/master_lite/d64_L8/ensemble
 """
 
 from __future__ import annotations
@@ -34,7 +51,11 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from p3.master_lib import blend_rank_scores, kill_criteria_verdict
+from p3.master_lib import (
+    blend_rank_scores,
+    cost_metric_block,
+    kill_criteria_verdict,
+)
 from p3.path1_eval import H1, H2, evaluate
 
 logger = logging.getLogger(__name__)
@@ -61,7 +82,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--master-preds", required=True, type=Path)
+    ap.add_argument(
+        "--master-preds",
+        required=True,
+        type=Path,
+        action="append",
+        help="MASTER predictions parquet; repeat for multi-seed runs (rank-averaged)",
+    )
     ap.add_argument("--base-preds", required=True, type=Path)
     ap.add_argument("--bundle", default="data/p3_4070", type=Path)
     ap.add_argument("--out", required=True, type=Path)
@@ -81,8 +108,19 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
 
     base = pl.read_parquet(args.base_preds).select(["trade_date", "ts_code", "score"])
-    master = pl.read_parquet(args.master_preds).select(["trade_date", "ts_code", "score"])
-    logger.info("base: %s rows | master: %s rows", f"{len(base):,}", f"{len(master):,}")
+    seeds = [
+        pl.read_parquet(p).select(["trade_date", "ts_code", "score"]) for p in args.master_preds
+    ]
+    # Multi-seed runs are rank-averaged into ONE master column before blending
+    # (equal weights). A single frame passes through unchanged.
+    master = seeds[0] if len(seeds) == 1 else blend_rank_scores(seeds, [1.0] * len(seeds))
+    logger.info(
+        "base: %s rows | master: %s rows (%d seed%s)",
+        f"{len(base):,}",
+        f"{len(master):,}",
+        len(seeds),
+        "" if len(seeds) == 1 else "s",
+    )
 
     target_y = pl.read_parquet(args.bundle / "target_y.parquet")
     realized = pl.read_parquet(args.bundle / "realized_returns.parquet").select(
@@ -93,10 +131,24 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     windows = {"H1": H1, "H2": H2, **parse_windows(args.extra_window)}
+    if len(windows) < 3:
+        logger.warning(
+            "only %d eval windows: ceil(2/3 * %d) = %d, so the verdict degenerates to "
+            "all-windows-must-win; pre-registered protocol adds W3=2026-01-05:2026-06-30 "
+            "via --extra-window",
+            len(windows),
+            len(windows),
+            -(-2 * len(windows) // 3),
+        )
 
     def eval_all(preds: pl.DataFrame) -> dict[str, dict]:
+        # §12.7d: the standard metric block is merged with the turnover/cost
+        # block so the kill criteria can veto on net-of-cost excess.
         return {
-            name: evaluate(preds, target_y, realized, market, w, args.top_k)
+            name: {
+                **evaluate(preds, target_y, realized, market, w, args.top_k),
+                **cost_metric_block(preds, realized, market, w, args.top_k),
+            }
             for name, w in windows.items()
         }
 
@@ -118,20 +170,42 @@ def main(argv: list[str] | None = None) -> int:
 
     best_key = max(blend_metrics, key=lambda k: mean_ic(blend_metrics[k]))
     results["best_blend"] = best_key
-    results["kill_criteria"] = kill_criteria_verdict(results["base"], blend_metrics[best_key])
+    results["n_seeds"] = len(seeds)
+    # Self-documenting protocol flag: a verdict produced off-protocol (fewer
+    # than 3 windows or 3 seeds) is dev-grade and must not enter README §12.2.
+    results["protocol_ok"] = len(windows) >= 3 and len(seeds) >= 3
+    if not results["protocol_ok"]:
+        logger.warning(
+            "OFF-PROTOCOL RUN (windows=%d, seeds=%d; protocol needs >=3 of each): "
+            "verdict is dev-grade, do not record it as the pre-registered result",
+            len(windows),
+            len(seeds),
+        )
+    results["kill_criteria"] = kill_criteria_verdict(
+        results["base"],
+        blend_metrics[best_key],
+        cost_key="net_mean_topk_excess_t1",
+    )
 
     out_path = args.out / "ensemble_verdict.json"
     out_path.write_text(json.dumps(results, indent=2, default=str))
 
-    header = f"{'window':<10}{'base IC':>10}{'master IC':>11}{best_key + ' IC':>16}"
+    header = (
+        f"{'window':<10}{'base IC':>10}{'master IC':>11}{best_key + ' IC':>16}"
+        f"{'base net':>11}{'blend net':>11}{'blend t/o':>11}"
+    )
     logger.info("%s", header)
     for name in windows:
+        blend_w = blend_metrics[best_key][name]
         logger.info(
-            "%-10s%+10.4f%+11.4f%+16.4f",
+            "%-10s%+10.4f%+11.4f%+16.4f%+11.4f%+11.4f%11.1f",
             name,
             results["base"][name]["spearman"],
             results["master"][name]["spearman"],
-            blend_metrics[best_key][name]["spearman"],
+            blend_w["spearman"],
+            results["base"][name]["net_mean_topk_excess_t1"],
+            blend_w["net_mean_topk_excess_t1"],
+            blend_w["annualized_two_sided_turnover"],
         )
     verdict = results["kill_criteria"]
     logger.info(

@@ -14,11 +14,15 @@ import numpy as np
 import polars as pl
 import pytest
 from p3.master_lib import (
+    COST_SPEC_V1,
     ZSCORE_CLIP,
     blend_rank_scores,
     build_sequence_windows,
+    cost_drag_daily,
+    cost_metric_block,
     cs_zscore_panel,
     daily_rank_ic,
+    daily_topk_replacement,
     kill_criteria_verdict,
     train_val_split_with_embargo,
 )
@@ -238,3 +242,182 @@ def test_kill_verdict_two_windows_requires_both():
     base = {"H1": _metrics(0.03, 0.010), "H2": _metrics(0.02, 0.008)}
     treat = {"H1": _metrics(0.05, 0.011), "H2": _metrics(0.01, 0.009)}
     assert kill_criteria_verdict(base, treat)["verdict"] == "KILL"
+
+
+# =============================================================================
+# daily_topk_replacement / cost_drag_daily / cost_metric_block (README §12.7d)
+# =============================================================================
+
+
+def test_topk_replacement_identical_membership_is_zero():
+    d1, d2 = dt.date(2025, 6, 2), dt.date(2025, 6, 3)
+    preds = _score_frame(d1, {"c1": 3.0, "c2": 2.0, "c3": 1.0}).vstack(
+        _score_frame(d2, {"c1": 30.0, "c2": 20.0, "c3": 1.0})
+    )
+    assert daily_topk_replacement(preds, top_k=2) == pytest.approx(0.0)
+
+
+def test_topk_replacement_full_and_half_churn():
+    d1, d2, d3 = dt.date(2025, 6, 2), dt.date(2025, 6, 3), dt.date(2025, 6, 4)
+    scores = {
+        # day1 top-2 = {c1, c2}; day2 top-2 = {c3, c4} (full churn);
+        # day3 top-2 = {c3, c1} (half churn vs day2)
+        d1: {"c1": 4.0, "c2": 3.0, "c3": 2.0, "c4": 1.0},
+        d2: {"c1": 1.0, "c2": 2.0, "c3": 4.0, "c4": 3.0},
+        d3: {"c1": 3.0, "c2": 1.0, "c3": 4.0, "c4": 2.0},
+    }
+    preds = pl.concat([_score_frame(d, s) for d, s in scores.items()])
+    # pairs: (d1,d2) -> 1.0 replaced; (d2,d3) -> 0.5 replaced; mean = 0.75
+    assert daily_topk_replacement(preds, top_k=2) == pytest.approx(0.75)
+
+
+def test_topk_replacement_single_day_is_zero():
+    preds = _score_frame(dt.date(2025, 6, 2), {"c1": 1.0, "c2": 2.0})
+    assert daily_topk_replacement(preds, top_k=2) == 0.0
+
+
+def test_cost_drag_daily_arithmetic():
+    spec = {
+        "commission_bps_per_side": 2.5,
+        "stamp_duty_bps_sell": 5.0,
+        "slippage_bps_per_side": 10.0,
+        "dividend_tax_drag_bps_annual": 40.0,
+        "trading_days_per_year": 243,
+    }
+    # per replaced slot: sell (2.5 + 5 + 10) + buy (2.5 + 10) = 30 bps
+    # drag = 0.5 * 30bps + 40bps / 243
+    expected = 0.5 * 30e-4 + 40e-4 / 243
+    assert cost_drag_daily(0.5, spec) == pytest.approx(expected)
+    # zero churn still pays the dividend-tax drag
+    assert cost_drag_daily(0.0, spec) == pytest.approx(40e-4 / 243)
+
+
+def test_cost_spec_v1_is_registered():
+    for key in (
+        "commission_bps_per_side",
+        "stamp_duty_bps_sell",
+        "slippage_bps_per_side",
+        "dividend_tax_drag_bps_annual",
+        "trading_days_per_year",
+    ):
+        assert key in COST_SPEC_V1
+
+
+def _cost_fixture() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    d1, d2 = dt.date(2025, 7, 1), dt.date(2025, 7, 2)
+    preds = _score_frame(d1, {"c1": 2.0, "c2": 1.0}).vstack(
+        _score_frame(d2, {"c1": 1.0, "c2": 2.0})  # top-1 flips c1 -> c2: full churn
+    )
+    realized = pl.DataFrame(
+        {
+            "trade_date": [d1, d1, d2, d2],
+            "ts_code": ["c1", "c2", "c1", "c2"],
+            "pct_chg_t_plus_1": [0.02, 0.00, 0.00, 0.03],
+        }
+    )
+    market = pl.DataFrame(
+        {
+            "trade_date": [d1, d2],
+            "eq_weight_pct_chg_t_plus_1": [0.01, 0.01],
+        }
+    )
+    return preds, realized, market
+
+
+def test_cost_metric_block_gross_net_and_turnover():
+    preds, realized, market = _cost_fixture()
+    block = cost_metric_block(
+        preds, realized, market, window=(dt.date(2025, 7, 1), dt.date(2025, 7, 31)), top_k=1
+    )
+    # top-1: d1 -> c1 e1 = 0.02 - 0.01; d2 -> c2 e1 = 0.03 - 0.01; gross mean = 0.015
+    assert block["gross_mean_topk_excess_t1"] == pytest.approx(0.015)
+    assert block["topk_daily_replaced_frac"] == pytest.approx(1.0)
+    spec = COST_SPEC_V1
+    days = spec["trading_days_per_year"]
+    assert block["annualized_two_sided_turnover"] == pytest.approx(1.0 * 2 * days)
+    assert block["net_mean_topk_excess_t1"] == pytest.approx(0.015 - cost_drag_daily(1.0, spec))
+    assert block["cost_spec"] == spec
+
+
+def test_cost_metric_block_respects_window():
+    preds, realized, market = _cost_fixture()
+    block = cost_metric_block(
+        preds, realized, market, window=(dt.date(2025, 8, 1), dt.date(2025, 8, 31)), top_k=1
+    )
+    assert block["n_dates"] == 0
+    assert block["gross_mean_topk_excess_t1"] == 0.0
+    assert block["net_mean_topk_excess_t1"] == 0.0
+
+
+# =============================================================================
+# kill_criteria_verdict — cost-adjusted third condition (README §12.7d)
+# =============================================================================
+
+
+def _metrics_cost(ic: float, primary: float, net: float) -> dict:
+    return {
+        "spearman": ic,
+        "primary_mean_top50_proximity_excess": primary,
+        "net_mean_topk_excess_t1": net,
+    }
+
+
+def test_kill_verdict_cost_key_vetoes_ic_win():
+    # IC and primary both improve, but net-of-cost excess degrades -> not a win
+    base = {
+        "H1": _metrics_cost(0.03, 0.010, 0.0050),
+        "H2": _metrics_cost(0.02, 0.008, 0.0040),
+    }
+    treat = {
+        "H1": _metrics_cost(0.05, 0.011, 0.0020),
+        "H2": _metrics_cost(0.04, 0.009, 0.0010),
+    }
+    v = kill_criteria_verdict(base, treat, cost_key="net_mean_topk_excess_t1")
+    assert v["verdict"] == "KILL"
+    assert v["wins"] == 0
+    assert v["windows"]["H1"]["cost_base"] == pytest.approx(0.0050)
+    assert v["windows"]["H1"]["cost_treatment"] == pytest.approx(0.0020)
+
+
+def test_kill_verdict_cost_key_keep_when_net_holds():
+    base = {
+        "H1": _metrics_cost(0.03, 0.010, 0.0050),
+        "H2": _metrics_cost(0.02, 0.008, 0.0040),
+    }
+    treat = {
+        "H1": _metrics_cost(0.05, 0.011, 0.0055),
+        "H2": _metrics_cost(0.04, 0.009, 0.0040),
+    }
+    v = kill_criteria_verdict(base, treat, cost_key="net_mean_topk_excess_t1")
+    assert v["verdict"] == "KEEP"
+    assert v["wins"] == 2
+    assert v["cost_key"] == "net_mean_topk_excess_t1"
+
+
+def test_kill_verdict_without_cost_key_ignores_cost_fields():
+    # default (cost_key=None) must keep pre-existing behavior byte-compatible
+    base = {"H1": _metrics_cost(0.03, 0.010, 0.005)}
+    treat = {"H1": _metrics_cost(0.05, 0.011, 0.001)}
+    v = kill_criteria_verdict(base, treat)
+    assert v["verdict"] == "KEEP"
+    assert "cost_base" not in v["windows"]["H1"]
+
+
+def test_cost_spec_v1_numerics_are_pinned():
+    # Pre-registration means these literals are frozen: a change here without
+    # bumping to COST_SPEC_V2 voids every verdict produced under v1.
+    assert COST_SPEC_V1 == {
+        "commission_bps_per_side": 2.5,
+        "stamp_duty_bps_sell": 5.0,
+        "slippage_bps_per_side": 10.0,
+        "dividend_tax_drag_bps_annual": 40.0,
+        "trading_days_per_year": 243,
+    }
+
+
+def test_topk_replacement_ties_break_deterministically():
+    d1, d2 = dt.date(2025, 6, 2), dt.date(2025, 6, 3)
+    # all scores tie; ts_code tie-break keeps the same top-2 both days
+    tied = {"c3": 1.0, "c1": 1.0, "c2": 1.0}
+    preds = _score_frame(d1, tied).vstack(_score_frame(d2, tied))
+    assert daily_topk_replacement(preds, top_k=2) == pytest.approx(0.0)
