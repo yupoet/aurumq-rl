@@ -146,6 +146,16 @@ Parquet 必须含字段：
 - Commit message 用 conventional commits：`feat:`, `fix:`, `docs:`, `test:`, `refactor:`。
 - 不强制 commit 签名，不要求 PR 模板。
 
+### 远程推送（2026-07-25 锁定）
+
+- **origin 必须用 SSH**：`git@github.com:yupoet/aurumq-rl.git`（与 `search_catering_data` / `ledashi-*` 等同机 key `~/.ssh/id_ed25519`）。
+- **禁止依赖 `gh` / HTTPS + GitHub CLI credential helper 做 push**。本机 `gh` keyring token 曾失效，导致 `https://github.com/...` push 失败。
+- AI / agent 推送约定：
+  1. 若 `git remote get-url origin` 是 `https://github.com/...` → 先 `git remote set-url origin git@github.com:yupoet/aurumq-rl.git`
+  2. 用 `git push -u origin HEAD`（或指定 branch），**不要** `gh auth login` / `gh auth setup-git` / `gh repo sync` 作为 push 路径
+  3. 需要 PR 时可用 `gh pr create`（若 token 可用）；**仅 push 一律 SSH + git**
+- 冒烟：`ssh -o BatchMode=yes -T git@github.com` 应返回 `Hi yupoet!`
+
 ## 性能基准
 
 修改任何 hot path 代码（`env.step`, `data_loader.load_panel`, `inference.predict`）后必须跑：
