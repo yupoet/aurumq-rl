@@ -86,6 +86,9 @@ Phase 10      Optimizer orphan + LayerNorm + dual pooling  2026-05-01 night
 Phase 11/12   bf16 autocast / target_kl=0.10 (eliminated)
 Phase 13      PPO SGD perf-probe                    2026-05-01 late night
 Phase 14      TF32 + unique-date + 1M overnight     2026-05-02 → 03 early
+...
+matrix v3-v13  Cross-section / anchor / Kronos grids 2026-05
+H1 next-wave   LGBM cost-aware overnight track       2026-07 (v1 S1 cost-fail → v2 Gate A pass, Gate B pending)
 Phase 15      RL serving integration (champion)     2026-05-02..03
 Phase 16-19   Eval correction + multi-seed ensemble 2026-05-03
 Phase 20      Long-data PPO                         2026-05-05
@@ -1629,9 +1632,33 @@ A 股选股 ML 研究归两大 paradigm:
 
 **所有 paradigm 2 共同特点**: 用 backward 历史扫描定义 event,用 pre-event window 作正样本,严重 class imbalance,符合 "找主升浪前夕入场" 思路。
 
-### 12.2 当前研究进度 / Research Progress (updated 2026-05-18)
+### 12.2 当前研究进度 / Research Progress (updated 2026-07-25)
 
 **Comprehensive synthesis** of 1,473 cells across 8 matrices (5/15-5/18 overnight pipeline): see [`docs/RANKINGS_COMPREHENSIVE_v18.md`](docs/RANKINGS_COMPREHENSIVE_v18.md) for full 13-section report (98 KB, 353 lines, top-20 overall + top-10 per universe/paradigm/panel/method/horizon + sanity checks + production routing + gap audit) + 6 visualization PNGs in [`docs/figures/`](docs/figures/).
+
+#### LGBM H1 cost-aware track (2026-07, ledashi @ RTX 4070) — **latest**
+
+Paradigm **1** sub-direction: multi-horizon multi-task / overnight-anchored regression with **cost-aware top-50 gates** (not IC-only). Confirmatory 2026 OOT is deliberately isolated (no self-trigger).
+
+| wave / package | role | status | headline |
+|---|---|---|---|
+| Stage-B parity + GPU Search (H1/H2/H3) | host GPU parity + frozen search | ✅ done | RTX 4070 formal path validated; no CPU fallback |
+| next-wave v1 formal cascade | S1 provisional gate on 2025 confirmation | ✅ done, **S1 FAIL** | RankIC / positive-day criteria passed; sole miss = **confirmation top-50 net excess < 0** (cost path) |
+| H1 capture redesign (EW / inverse-vol / exp-rank) | frozen overnight model; change top-50 weights only | ✅ done, **ALL_FAIL** | EW reproduces formal top-50 bit-faithfully; dual gates (full 2025-07~2026-06 + 2026H1) all negative — **weighting does not fix cost miss** |
+| wave_leader_v1 (NPF_CROSS_BOARD leader pool) | event/leader-pool training candidate | ✅ **STOP** (no train) | `baseline_excess_t3_mean < 0`; full-pool 75× training forbidden; subsets show thin positive excess but scheme-A hit rate below open-train bar |
+| **next-wave v2 costaware formal** | Gate0 → F1 kill-switch → F2/F3 + OOT registration | ✅ formal GPU **complete** | Gate0 **PASS**; Gate A **`NOT_KILLED`**; **11/11** registered fits; `oot_registration` written; **Gate B (2026 OOT) not run** (human-triggered only) |
+
+**v2 F1 (fresh H2-2024 eval, economic RankIC on total market excess)** — overnight candidate still leads its core / total baselines on the kill-switch fold:
+
+| fit (F1) | economic RankIC mean | pos-day rate | banded top-50 net excess |
+|---|---:|---:|---:|
+| overlay overnight (candidate) | ~0.046 | ~0.65 | slightly negative (within Gate-A floor) |
+| core overnight (attribution) | ~0.042 | ~0.67 | slightly negative |
+| overlay total (continuity) | ~0.026 | ~0.58 | near-zero / small positive |
+
+Design discipline (locked, enforced in package code): no `trade_date ≥ 2026-01-01` in the formal cascade; fixed parameters / no HPO; max 13 fit slots; Gate A is F1-only; registration is **shadow candidate**, not production promote.
+
+**Next authorized step (waits paris)**: human-triggered **Gate B 2026 OOT** on the hash-pinned registration only — no re-registration if it fails.
 
 #### Master ranking — Top-10 production-deployable cells
 
@@ -1674,6 +1701,7 @@ A 股选股 ML 研究归两大 paradigm:
 | **v11** | **P1 binary sparse (paris 0.8%)** | **504** | 7×6 × 4 methods × 3 horizons | **missing** | shipped (no CI) |
 | **v12** | **P2 anchor α/β** | **252** (147 valid + 105 skip) | 7×6 × 2 specs × 3 anchors | **missing** | shipped (no CI; β sparse) |
 | **v13** | **P3 Kronos sequence anchor** | **22** | 6 univ × 3 anchor × α full + β-MAIN_BOARD + null control | planned | scheduled 5/22 evening fire |
+| **H1 next-wave v1→v2** | **P1 overnight / cost-aware LGBM** | 6 S1 fits (v1) → 11 WF fits (v2) | frozen v4 panel + pv/ctx overlay; no 2026 in formal path | n/a (gate metrics) | **v1 S1 FAIL (cost); v2 formal Gate A NOT_KILLED; Gate B pending** |
 
 **v13 paradigm 3 matrix** (post paris ACK_v30 + ledashi ACK-of-ACK shipped 5/19 PM):
 - Architecture: reuse `aurumq_predictor_small` encoder → 1536-dim hidden state (60d + 120d concat) → +1 log(free_float_mv) → 1537-dim → LGB binary head
@@ -1683,9 +1711,11 @@ A 股选股 ML 研究归两大 paradigm:
 - Compute: Phase 2 ~3-4h GPU embed extract + Phase 3 ~1.5h LGB train + Phase 4 ~1h eval
 - Production gate: if 5 cells meet (Sharpe NET ≥ 3.0 + dual-regime + bootstrap CI lower > 0) → Track 11 paradigm 3 catalog launches
 
+**H1 next-wave cost-aware (2026-07)** — see subsection above for full table. One-line status: **signal exists (RankIC), portfolio net does not clear cost gates without a fresh OOT design; v2 registration is the handoff artifact for that OOT.**
+
 ### 12.3 实证结论 / Empirical Findings (paper-level, multi-paradigm)
 
-**Headline findings**:
+**Headline findings** (matrix track, 2026-05):
 
 - The strongest single-cell deployable signal is **`target_y_HARD_TECH_v2_null`** (paradigm `p1-proximity-reg`, panel `v2_null`, universe `HARD_TECH`) with H2_2025 fwd20 IC = **+6.60%** and Sharpe_NET K10 fwd20 = **2.46**, beating the baseline `v3_MAIN_BOARD_ledashi` (+4.14% IC).
 - **Paradigm 1 (cross-sectional prediction) dominates Paradigm 2 (anchor) on H2 fwd20 IC by ~0.41pp** — anchor labels useful as meta-feature, not standalone.
@@ -1693,6 +1723,14 @@ A 股选股 ML 研究归两大 paradigm:
 - **LGB binary dense (v10c) has the highest mean composite score**; **LGB proximity continuous (v10) has the highest peak composite score**. Both retained for production diversification.
 - **CSI500/CSI1000 cells (PIT membership) are the safest universes**; HARD_TECH and NPF cells need ≥ 1pp differential vs baseline to claim improvement (IC SE ≈ 0.018).
 - **Gap**: v11/v12 lack bootstrap CI; v10d/v10e only cover 2 panels of 7. Production routing on those cells should be flagged as 'preliminary'.
+
+**Headline findings** (LGBM H1 cost-aware track, 2026-07 — paper-relevant):
+
+- **Binding constraint is cost-adjusted top-50, not RankIC.** v1 formal S1 failed solely on confirmation top-50 net excess while overnight RankIC remained strong (high positive-day rate). This is a real stop, not a stack bug. → paper candidate: *"Regression vs portfolio-construction mismatch under A-share costs"*.
+- **Top-50 construction redesign (EW / vol-scale / exp-rank) does not rescue the cost gate.** On the frozen overnight lineage, all three constructions failed dual gates (extended full window + 2026H1). Relative ordering: vol-scale slightly less bad than EW on some windows; rank-weight worse. Construction-invariant 2026H1 deterioration points to **regime / edge decay**, not weight shape. → paper candidate: *"Portfolio weights cannot substitute for cost-aware labels"*.
+- **Native overnight RankIC ≠ economic RankIC on total market excess.** Gates and kill-switches must use a **uniform economic target**; native overnight IC is diagnostic only (v2 package enforces this).
+- **Anti-snooping split works as designed.** Because H2-2025 confirmation was already inspected for this candidate, v2 treats pre-2026 folds as **disqualify-only** (Gate A on F1) and reserves **2026 OOT** as the sole confirmatory gate (human-triggered). Formal GPU: Gate A `NOT_KILLED`, registration written, 2026 still untouched.
+- **Leader-pool training is not free alpha.** wave_leader full pool `excess_t3` mean < 0 → hard STOP before 75× training; sparse concept-leader / rank-1 subsets show thin positive excess but fail hit-rate open-train thresholds. Filter redesign must precede model search.
 
 **Universe × Regime alpha** (validated bootstrap CI v10h):
 - target_y NPF Q1 IC **+10.22%** (panel-invariant across 7 panels)
@@ -1819,6 +1857,11 @@ v24 (Phase 1 + Phase 2 labels + LABELS_SPEC + IC pre-estimate) → v25 (P2 refer
 
 ### 12.4 未来研究方向 / Future Research Directions
 
+**Tier 0 (next authorized handoff — waits paris)**:
+- **Gate B 2026 OOT** on hash-pinned v2 overnight registration (human-triggered only; no re-registration on fail)
+- Leader-pool filter redesign (cls_rank / concept_leader) before any 75× wave_leader train
+- Cost-aware training targets / banded portfolio as **in-fit** objectives (not post-hoc top-50 weights)
+
 **Tier 1 (1-2 weeks)**:
 - v11 short-K proximity labels (paradigm 1 short-horizon completion)
 - v11+ anchor-based main-rising-wave label (paradigm 2 entry)
@@ -1827,7 +1870,7 @@ v24 (Phase 1 + Phase 2 labels + LABELS_SPEC + IC pre-estimate) → v25 (P2 refer
 
 **Tier 2 (1-3 months)**:
 - Meta-learner across panels (paradigm 1 model diversity)
-- Risk-parity portfolio construction (replace top-K equal-weight)
+- Risk-parity / hold-band portfolio construction (replace top-K equal-weight)
 - Regime classifier conditional model (HMM / vol-regime)
 - Hyperparam Optuna search (Bayesian)
 
@@ -1844,6 +1887,10 @@ The matrix v3-v10 series produces academic-grade evidence on:
 - Hyperparam-label fit (paper draft target: "Regression vs binary classifier choice in proximity-weighted forecasting")
 - Dyn-exit ensemble alpha (paper draft target: "Adaptive exit triggers in factor-based portfolios")
 - Comparison Paradigm 1 vs Paradigm 2 (future paper after anchor-based label complete)
+
+The 2026-07 H1 next-wave track adds:
+- Cost-gate vs RankIC dissociation (paper draft target: "When cross-sectional RankIC fails to survive A-share turnover costs")
+- Anti-snooping walk-forward + deferred OOT confirmation for already-inspected candidates
 
 PRs welcomed for: anchor-based label math formula refinement, paradigm-2 algorithm benchmarks, sector-neutral decomposition implementations.
 
