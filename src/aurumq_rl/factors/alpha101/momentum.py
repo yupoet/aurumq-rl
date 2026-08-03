@@ -156,6 +156,68 @@ def alpha009(panel: pl.DataFrame) -> pl.Series:
 
 
 # ---------------------------------------------------------------------------
+# alpha009 — incremental path (reference implementation, issue #10)
+# ---------------------------------------------------------------------------
+
+ALPHA009_MAX_WINDOW: int = 5
+"""Maximum lookback (in prior rows) alpha009 needs before its first row.
+
+``delta(close, 1)`` needs 1 prior row; ``ts_min``/``ts_max`` of that delta
+over a 5-row window then need 5 consecutive delta values, i.e. 5 prior
+``close`` rows (rows ``t-5 .. t-1``) before row ``t`` is fully warmed up.
+Combined with the 1-row delta lag this is still 5 — the delta lag is
+already "inside" the 5-row delta window, not additive on top of it.
+"""
+
+
+def alpha009_incremental(tail_df: pl.DataFrame, n_new: int) -> pl.Series:
+    """Incremental counterpart of :func:`alpha009` (issue #10 reference impl).
+
+    Contract (see ``aurumq_rl.factors.registry`` module docstring for the
+    general protocol)
+    -----------------------------------------------------------------------
+    ``tail_df`` must be sorted ``[stock_code, trade_date]`` ascending and
+    contain, for every stock present in its last ``n_new`` rows, at least
+    ``ALPHA009_MAX_WINDOW + n_new`` rows for that stock (``ALPHA009_MAX_WINDOW``
+    rows of prior history immediately followed by the ``n_new`` new rows).
+
+    Returns the alpha009 value for exactly the last ``n_new`` rows of every
+    stock group in ``tail_df``, in the same per-stock grouped order as those
+    trailing rows. Because alpha009 is a pure per-stock time-series formula
+    with no cross-sectional dependency (unlike most alpha101 factors, it
+    never calls ``cs_rank``), recomputing it on a bounded tail buffer is
+    numerically identical to recomputing it on the full history and slicing
+    the same trailing rows — the rolling windows only ever look backward
+    within one stock, and the buffer supplies every row those windows need.
+
+    Raises ``ValueError`` (naming the offending stock(s)) if any stock in
+    ``tail_df`` has fewer than ``ALPHA009_MAX_WINDOW + n_new`` rows —
+    silently returning under-warmed values is not acceptable for a daily
+    refresh path. Also raises ``ValueError`` if ``n_new < 1``.
+
+    Required panel columns: ``close``, ``stock_code``, ``trade_date``.
+    """
+    if n_new < 1:
+        raise ValueError(f"n_new must be >= 1, got {n_new}")
+
+    min_required = ALPHA009_MAX_WINDOW + n_new
+    counts = tail_df.group_by("stock_code").len()
+    too_short = counts.filter(pl.col("len") < min_required)
+    if too_short.height > 0:
+        bad = sorted(too_short["stock_code"].to_list())
+        raise ValueError(
+            f"alpha009_incremental: tail buffer too short for stock(s) {bad} — "
+            f"need >= max_window({ALPHA009_MAX_WINDOW}) + n_new({n_new}) = "
+            f"{min_required} rows per stock, got fewer"
+        )
+
+    values = alpha009(tail_df)
+    tagged = tail_df.select("stock_code").with_columns(values.alias("__a009_incr"))
+    tail_only = tagged.group_by("stock_code", maintain_order=True).tail(n_new)
+    return tail_only["__a009_incr"].rename("alpha009").cast(pl.Float64)
+
+
+# ---------------------------------------------------------------------------
 # alpha010 — Cross-sectional rank of trend-confirmed price change
 # ---------------------------------------------------------------------------
 
@@ -657,6 +719,10 @@ _ENTRIES = [
         ),
         references=("Kakushadze 2015, '101 Formulaic Alphas', arXiv:1601.00991, eq. 9",),
         formula_doc_path="docs/factor_library/alpha101/alpha_009.md",
+        # Reference implementation of the OPT-IN incremental-computation
+        # protocol (issue #10) — see alpha009_incremental's docstring.
+        impl_incremental=alpha009_incremental,
+        max_window=ALPHA009_MAX_WINDOW,
     ),
     FactorEntry(
         id="alpha010",
