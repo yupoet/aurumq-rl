@@ -50,10 +50,27 @@ __all__ = [
     "identify_board",
     "is_at_limit_up",
     "is_at_limit_down",
+    # Evaluation metrics (issue #6) — pure numpy/stdlib, always available
+    "deflated_sharpe_ratio",
+    "probability_of_backtest_overfitting",
+    "spearman_ic",
+    "spearman_ic_per_date",
+    "hac_standard_error",
+    "hac_mean_ci",
+    "split_selection_confirmation",
 ]
 
 # Always-available imports (no PyTorch required)
 from aurumq_rl.data_loader import FactorPanel, FactorPanelLoader
+from aurumq_rl.eval_metrics import (
+    deflated_sharpe_ratio,
+    hac_mean_ci,
+    hac_standard_error,
+    probability_of_backtest_overfitting,
+    spearman_ic,
+    spearman_ic_per_date,
+    split_selection_confirmation,
+)
 from aurumq_rl.inference import RlAgentInference, RlAgentMetadata
 from aurumq_rl.price_limits import (
     StockBoard,

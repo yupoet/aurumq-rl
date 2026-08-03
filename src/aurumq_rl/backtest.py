@@ -13,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
+from aurumq_rl.eval_metrics import spearman_ic_per_date
+
 
 @dataclass
 class BacktestResult:
@@ -37,6 +39,19 @@ class BacktestResult:
     contains both ``*_sharpe`` (legacy) and ``*_sharpe_adjusted`` /
     ``*_sharpe_non_overlap`` keys so the comparison can be done at
     matching scales.
+
+    Issue #6 (additive): ``ic_spearman`` is the Spearman rank-IC companion
+    to ``ic`` (Pearson), always computed alongside it — Spearman is
+    invariant to monotone-nonlinear score/return relationships that
+    penalise Pearson. ``top_k_sharpe_cost_adjusted`` /
+    ``top_k_cumret_cost_adjusted`` are OPT-IN (only computed when
+    ``run_backtest(..., cost_bps=...)`` is passed a positive value; they
+    default to 0.0 and do not affect any existing field). ``hac`` is an
+    OPT-IN dict (empty by default) that CLI callers (e.g.
+    ``scripts/eval_backtest.py``) may populate with
+    :func:`aurumq_rl.eval_metrics.hac_mean_ci` on the top-K return series —
+    left to the caller because the honest HAC lag depends on which return
+    series (padded per-date vs skip-degenerate) the caller has in hand.
     """
 
     ic: float
@@ -51,6 +66,11 @@ class BacktestResult:
     top_k_sharpe_legacy: float = 0.0
     top_k_sharpe_adjusted: float = 0.0
     top_k_sharpe_non_overlap: float = 0.0
+    ic_spearman: float = 0.0
+    cost_bps: float = 0.0
+    top_k_sharpe_cost_adjusted: float = 0.0
+    top_k_cumret_cost_adjusted: float = 0.0
+    hac: dict[str, float] = field(default_factory=dict)
 
     def to_json(self, path: Path | str) -> None:
         Path(path).write_text(
@@ -147,6 +167,86 @@ def compute_ic_ir(predictions: np.ndarray, returns: np.ndarray) -> float:
     return float(arr.mean() / std)
 
 
+def compute_ic_spearman(predictions: np.ndarray, returns: np.ndarray) -> float:
+    """Mean per-date Spearman rank IC between predictions and forward returns.
+
+    Additive companion to :func:`compute_ic` (Pearson) — issue #6. Spearman
+    IC is invariant to monotone-nonlinear score/return relationships that
+    would otherwise depress the Pearson correlation; see
+    :func:`aurumq_rl.eval_metrics.spearman_ic`. Does not affect
+    :func:`compute_ic`'s value.
+    """
+    ics = spearman_ic_per_date(predictions, returns)
+    return float(np.mean(ics)) if ics else 0.0
+
+
+def _top_k_indices(pred_row: np.ndarray, ret_row: np.ndarray, top_k: int) -> np.ndarray | None:
+    """Full-universe column indices of the top-K picks for one date, sorted
+    by descending prediction. ``None`` when fewer than ``top_k`` cells are
+    finite (degenerate day, matches ``_top_k_returns_series`` semantics)."""
+    mask = np.isfinite(pred_row) & np.isfinite(ret_row)
+    if mask.sum() < top_k:
+        return None
+    valid_idx = np.nonzero(mask)[0]
+    order = np.argsort(-pred_row[valid_idx])[:top_k]
+    return valid_idx[order]
+
+
+def _jaccard_turnover(prev: set[int] | None, curr: set[int]) -> float:
+    """Jaccard turnover (distance) between two top-K stock-index sets:
+    ``1 - |intersection| / |union|``. 0.0 = identical portfolio, 1.0 =
+    fully disjoint. ``prev=None`` (no prior portfolio, e.g. the first
+    tradeable day) costs nothing."""
+    if prev is None:
+        return 0.0
+    union = prev | curr
+    if not union:
+        return 0.0
+    inter = prev & curr
+    return 1.0 - len(inter) / len(union)
+
+
+def top_k_returns_series_cost_adjusted(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    top_k: int,
+    cost_bps: float = 0.0,
+) -> list[float]:
+    """Per-date top-K equal-weight return, net of an OPT-IN turnover cost.
+
+    Issue #6: each day's gross top-K return is reduced by
+    ``turnover_t * cost_bps / 1e4``, where ``turnover_t`` is the Jaccard
+    turnover (:func:`_jaccard_turnover`) between today's and yesterday's
+    top-K stock-index sets. This mirrors the ~30bps/step transaction cost
+    already subtracted from the training reward, so the eval metric can
+    target the same net quantity training optimizes.
+
+    With ``cost_bps == 0`` (the default) this reproduces
+    ``_top_k_returns_series`` EXACTLY, byte-for-byte: the turnover term
+    always multiplies to ``0.0`` regardless of the (always-finite,
+    always-in-``[0, 1]``) turnover value, and the gross-return computation
+    is identical (same mask, same ``argsort``, same ``.mean()``). Degenerate
+    days (fewer than ``top_k`` finite pairs) are SKIPPED, exactly like
+    ``_top_k_returns_series``, and do not reset the turnover chain — the
+    last tracked portfolio carries forward across a skipped day.
+    """
+    if predictions.shape != returns.shape:
+        raise ValueError("shape mismatch")
+    out: list[float] = []
+    prev_set: set[int] | None = None
+    for t in range(predictions.shape[0]):
+        idx = _top_k_indices(predictions[t], returns[t], top_k)
+        if idx is None:
+            continue
+        curr_set = set(idx.tolist())
+        gross = float(returns[t][idx].mean())
+        turnover = _jaccard_turnover(prev_set, curr_set)
+        cost = turnover * (cost_bps / 1e4)
+        out.append(gross - cost)
+        prev_set = curr_set
+    return out
+
+
 def _top_k_returns_series(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> list[float]:
     """Per-date top-K equal-weight portfolio return; degenerate days skipped."""
     if predictions.shape != returns.shape:
@@ -208,6 +308,21 @@ def compute_top_k_sharpes(
     else:
         non_overlap = adjusted
     return {"legacy": legacy, "adjusted": adjusted, "non_overlap": non_overlap}
+
+
+def _sharpe_and_cumret_from_series(series: list[float], forward_period: int) -> tuple[float, float]:
+    """Adjusted (``sqrt(252/forward_period)``) Sharpe + total cumulative
+    return of an arbitrary per-date return series. Shared by the gross and
+    cost-adjusted paths so both use identical arithmetic."""
+    if len(series) < 2:
+        return 0.0, 0.0
+    arr = np.asarray(series)
+    cumret = float(np.prod(1.0 + arr) - 1.0)
+    std = arr.std(ddof=1)
+    if std < 1e-12:
+        return 0.0, cumret
+    sharpe = float(arr.mean() / std * np.sqrt(252 / max(forward_period, 1)))
+    return sharpe, cumret
 
 
 def compute_top_k_cumret(predictions: np.ndarray, returns: np.ndarray, top_k: int) -> float:
@@ -292,6 +407,37 @@ def random_baseline(
     }
 
 
+def _truncate_trailing_forward_rows(
+    predictions: np.ndarray,
+    returns: np.ndarray,
+    forward_period: int,
+    tradeable_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Drop the trailing ``forward_period`` rows when ``forward_period > 1``.
+
+    :class:`FactorPanelLoader` leaves the last ``forward_period`` rows of
+    ``return_array`` as literal ``0.0`` (there is no future close to compute
+    the forward log-return). Those rows are FINITE, so the per-date
+    ``mask.sum() < top_k`` "degenerate day" guard does NOT skip them — they
+    would otherwise enter every return series as spurious all-zero
+    observations, understating the HAC SE and biasing the mean toward zero.
+
+    This is the single source of truth for that truncation, shared by
+    :func:`run_backtest` (scalar path, Phase 16) and
+    :func:`run_backtest_with_series` (the issue #6 series path) so the two
+    can never drift. Returns the (possibly) truncated
+    ``(predictions, returns, tradeable_mask)`` triple; ``tradeable_mask``
+    stays ``None`` if it was ``None``.
+    """
+    if forward_period > 1 and predictions.shape[0] > forward_period:
+        keep = predictions.shape[0] - forward_period
+        predictions = predictions[:keep]
+        returns = returns[:keep]
+        if tradeable_mask is not None:
+            tradeable_mask = tradeable_mask[:keep]
+    return predictions, returns, tradeable_mask
+
+
 def run_backtest(
     predictions: np.ndarray,
     returns: np.ndarray,
@@ -300,6 +446,7 @@ def run_backtest(
     random_seed: int = 0,
     forward_period: int = 1,
     tradeable_mask: np.ndarray | None = None,
+    cost_bps: float = 0.0,
 ) -> BacktestResult:
     """One-shot evaluation: IC + IR + top-K Sharpe trio + random baseline.
 
@@ -313,19 +460,32 @@ def run_backtest(
     (suspended / ST / at price limit / IPO window) are excluded from top-k
     selection AND from IC (predictions set to NaN), matching the training
     valid_mask convention. The random baseline samples from the same set.
+
+    Issue #6 (additive): ``ic_spearman`` is always computed alongside
+    ``ic`` (Pearson) — cheap, does not change ``ic``. ``cost_bps`` is
+    OPT-IN and defaults to 0.0: the cost-adjusted fields
+    (``top_k_sharpe_cost_adjusted`` / ``top_k_cumret_cost_adjusted``) are
+    only computed (non-zero) when ``cost_bps > 0``; at the default they
+    stay at their dataclass default and every other field is byte-for-byte
+    identical to the pre-#6 output.
     """
     predictions = _apply_tradeable_mask(predictions, tradeable_mask)
-    if forward_period > 1 and predictions.shape[0] > forward_period:
-        predictions = predictions[: predictions.shape[0] - forward_period]
-        returns = returns[: returns.shape[0] - forward_period]
-        if tradeable_mask is not None:
-            tradeable_mask = tradeable_mask[: tradeable_mask.shape[0] - forward_period]
+    predictions, returns, tradeable_mask = _truncate_trailing_forward_rows(
+        predictions, returns, forward_period, tradeable_mask
+    )
     sharpes = compute_top_k_sharpes(
         predictions,
         returns,
         top_k=top_k,
         forward_period=forward_period,
     )
+    cost_sharpe = 0.0
+    cost_cumret = 0.0
+    if cost_bps > 0:
+        cost_series = top_k_returns_series_cost_adjusted(
+            predictions, returns, top_k=top_k, cost_bps=cost_bps
+        )
+        cost_sharpe, cost_cumret = _sharpe_and_cumret_from_series(cost_series, forward_period)
     return BacktestResult(
         ic=compute_ic(predictions, returns),
         ic_ir=compute_ic_ir(predictions, returns),
@@ -346,18 +506,40 @@ def run_backtest(
         top_k_sharpe_legacy=sharpes["legacy"],
         top_k_sharpe_adjusted=sharpes["adjusted"],
         top_k_sharpe_non_overlap=sharpes["non_overlap"],
+        ic_spearman=compute_ic_spearman(predictions, returns),
+        cost_bps=cost_bps,
+        top_k_sharpe_cost_adjusted=cost_sharpe,
+        top_k_cumret_cost_adjusted=cost_cumret,
     )
 
 
 @dataclass
 class BacktestSeries:
-    """Per-date series produced alongside the BacktestResult."""
+    """Per-date series produced alongside the BacktestResult.
+
+    Issue #6 (additive): ``top_k_returns_cost_adjusted`` is OPT-IN — empty
+    unless ``run_backtest_with_series(..., cost_bps=...)`` is passed a
+    positive value; see :func:`top_k_returns_series_cost_adjusted`.
+    ``top_k_returns_skip_degenerate`` is always populated: the same gross
+    top-K return series as ``top_k_returns`` but with degenerate days
+    SKIPPED rather than padded with ``0.0`` AND with the trailing
+    ``forward_period`` FactorPanelLoader zero-return rows truncated (exactly
+    as ``run_backtest``'s scalar path does) — the correct input for
+    autocorrelation-sensitive statistics (e.g. HAC SE), since neither a
+    padded 0.0 nor a trailing loader-0.0 row is a real observation and
+    either would distort the estimated autocovariance structure. Because of
+    the skip + truncation this series is generally SHORTER than
+    ``dates`` / ``top_k_returns`` and is not date-aligned — do not plot it
+    against the date axis; use ``top_k_returns`` for charts.
+    """
 
     dates: list[str]
     ic: list[float]
     top_k_returns: list[float]
     equity_curve: list[float]
     random_baseline_sharpes: list[float] = field(default_factory=list)
+    top_k_returns_cost_adjusted: list[float] = field(default_factory=list)
+    top_k_returns_skip_degenerate: list[float] = field(default_factory=list)
 
     def to_json(self, path: Path | str) -> None:
         Path(path).write_text(
@@ -411,6 +593,7 @@ def run_backtest_with_series(
     random_seed: int = 0,
     forward_period: int = 1,
     tradeable_mask: np.ndarray | None = None,
+    cost_bps: float = 0.0,
 ) -> tuple[BacktestResult, BacktestSeries]:
     """One-shot evaluation that also returns per-date / per-simulation series.
 
@@ -422,6 +605,14 @@ def run_backtest_with_series(
 
     ``tradeable_mask`` (M5): see :func:`run_backtest` — applied to top-k
     selection, IC and the random baseline alike.
+
+    ``cost_bps`` (issue #6, additive/opt-in): defaults to 0.0, in which case
+    ``series.top_k_returns_cost_adjusted`` stays empty and every other
+    field is unchanged. When positive,
+    ``series.top_k_returns_cost_adjusted`` holds the turnover-cost-net
+    series (skipped/degenerate days are simply absent, unlike
+    ``top_k_returns`` which pads them with 0.0 — see
+    :func:`top_k_returns_series_cost_adjusted`).
     """
     if predictions.shape != returns.shape:
         raise ValueError("shape mismatch")
@@ -437,6 +628,7 @@ def run_backtest_with_series(
         random_seed=random_seed,
         forward_period=forward_period,
         tradeable_mask=tradeable_mask,
+        cost_bps=cost_bps,
     )
 
     # Per-date series for charts (aligned to dates; degenerate days -> 0.0).
@@ -458,12 +650,31 @@ def run_backtest_with_series(
         tradeable_mask=tradeable_mask,
     )
 
+    # Skip-degenerate / cost-adjusted series feed scalar, autocorrelation-
+    # sensitive statistics (Sharpe, HAC SE), so they must use the SAME
+    # trailing-row truncation as run_backtest()'s scalar path — otherwise
+    # FactorPanelLoader's literal-0.0 trailing rows (finite, hence NOT
+    # skipped by the degenerate-day guard) leak in as spurious all-zero
+    # observations that understate the HAC SE and bias the mean to zero.
+    # Reuse the shared helper so the two paths can't drift.
+    trunc_preds, trunc_rets, _ = _truncate_trailing_forward_rows(
+        predictions, returns, forward_period, tradeable_mask
+    )
+    cost_adjusted_series: list[float] = []
+    if cost_bps > 0:
+        cost_adjusted_series = top_k_returns_series_cost_adjusted(
+            trunc_preds, trunc_rets, top_k=top_k, cost_bps=cost_bps
+        )
+    skip_degenerate_series = _top_k_returns_series(trunc_preds, trunc_rets, top_k)
+
     series = BacktestSeries(
         dates=[str(d) for d in dates],
         ic=ic_per_date,
         top_k_returns=top_k_rets,
         equity_curve=equity,
         random_baseline_sharpes=random_sharpes,
+        top_k_returns_cost_adjusted=cost_adjusted_series,
+        top_k_returns_skip_degenerate=skip_degenerate_series,
     )
 
     return result, series
@@ -474,9 +685,11 @@ __all__ = [
     "BacktestSeries",
     "compute_ic",
     "compute_ic_ir",
+    "compute_ic_spearman",
     "compute_top_k_sharpe",
     "compute_top_k_sharpes",
     "compute_top_k_cumret",
+    "top_k_returns_series_cost_adjusted",
     "random_baseline",
     "run_backtest",
     "run_backtest_with_series",

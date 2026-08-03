@@ -14,6 +14,7 @@ Usage
 
 Outputs ``<run-dir>/oos_sweep.json`` and ``<run-dir>/oos_sweep.md``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,6 +40,7 @@ from aurumq_rl.data_loader import (
     align_panel_to_stock_list,
     build_tradeable_mask,
 )
+from aurumq_rl.eval_metrics import split_selection_confirmation
 from aurumq_rl.vecnorm_eval import resolve_obs_normalizer
 
 _CKPT_RE = re.compile(r"ppo_(\d+)_steps\.zip$")
@@ -53,8 +55,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--top-k", type=int, default=30)
     p.add_argument("--universe-filter", default="main_board_non_st")
     p.add_argument("--n-random-simulations", type=int, default=100)
-    p.add_argument("--device", default="cuda",
-                   help="cuda or cpu; cpu lets the eval coexist with a GPU training job")
+    p.add_argument(
+        "--device",
+        default="cuda",
+        help="cuda or cpu; cpu lets the eval coexist with a GPU training job",
+    )
+    p.add_argument(
+        "--confirm-frac",
+        type=float,
+        default=None,
+        help=(
+            "issue #6, opt-in: fraction of the OOS date range (tail) held out as an "
+            "untouched confirmation window. When set, the 'best' checkpoint is still "
+            "chosen by the existing full-window argmax (unchanged), but each row also "
+            "reports a sel_/confirm_ split so you can see whether picking on the "
+            "selection window overstates the confirmation-window number. Omit "
+            "(default None) for the exact pre-#6 behaviour."
+        ),
+    )
     return p.parse_args()
 
 
@@ -89,8 +107,10 @@ def main() -> int:
         print(f"[eval] factor_names from metadata: {len(train_factor_names)} cols")
     else:
         train_factor_names = None
-        print("[eval] WARN: metadata.json has no factor_names; falling back to "
-              "factor_count — column ORDER may shift if a new prefix was added.")
+        print(
+            "[eval] WARN: metadata.json has no factor_names; falling back to "
+            "factor_count — column ORDER may shift if a new prefix was added."
+        )
     forward_period = int(meta.get("forward_period", 10))
     print(f"[eval] forward_period={forward_period}")
 
@@ -134,11 +154,26 @@ def main() -> int:
 
     custom_objects = {"rollout_buffer_class": RolloutBuffer}
 
+    # Issue #6, opt-in: selection/confirmation date split. `best` below is
+    # still chosen by the unchanged full-window argmax; when --confirm-frac
+    # is set we ADDITIONALLY report, per checkpoint, its metric on a
+    # selection sub-window and on an untouched confirmation sub-window (the
+    # tail), so a reader can see whether picking on the selection window
+    # overstates the confirmation-window number (the same multiple-testing
+    # hazard the Deflated Sharpe Ratio corrects for analytically).
+    split_idx = None
+    if args.confirm_frac is not None:
+        sel_dates, confirm_dates = split_selection_confirmation(panel.dates, args.confirm_frac)
+        split_idx = len(sel_dates)
+        print(
+            f"[eval] selection/confirmation split (confirm_frac={args.confirm_frac}): "
+            f"{len(sel_dates)} selection dates + {len(confirm_dates)} confirmation dates"
+        )
+
     rows = []
     for step, ckpt_path in checkpoints:
         try:
-            model = PPO.load(str(ckpt_path), device=args.device,
-                             custom_objects=custom_objects)
+            model = PPO.load(str(ckpt_path), device=args.device, custom_objects=custom_objects)
             model.policy.eval()
             model.policy.to(args.device)
             scores = []
@@ -163,30 +198,73 @@ def main() -> int:
             rand_p50_adj = rb.get("p50_sharpe_adjusted", 0.0)
             rand_p50_legacy = rb.get("p50_sharpe", 0.0)
             rand_p50_nov = rb.get("p50_sharpe_non_overlap", 0.0)
-            rows.append({
-                "step": step,
-                "label": label,
-                "checkpoint": str(ckpt_path),
-                "ic": result.ic,
-                "ic_ir": result.ic_ir,
-                # adjusted is the primary metric; keep all three so we can
-                # compare across regimes without re-running.
-                "top_k_sharpe_adjusted": result.top_k_sharpe_adjusted,
-                "top_k_sharpe_legacy": result.top_k_sharpe_legacy,
-                "top_k_sharpe_non_overlap": result.top_k_sharpe_non_overlap,
-                "top_k_cumret": result.top_k_cumret,
-                "random_p50_sharpe_adjusted": rand_p50_adj,
-                "random_p95_sharpe_adjusted": rb.get("p95_sharpe_adjusted", 0.0),
-                "random_p50_sharpe_legacy": rand_p50_legacy,
-                "random_p50_sharpe_non_overlap": rand_p50_nov,
-                "vs_random_p50_adjusted": result.top_k_sharpe_adjusted - rand_p50_adj,
-                "vs_random_p50_non_overlap": result.top_k_sharpe_non_overlap - rand_p50_nov,
-                "forward_period": forward_period,
-            })
-            print(f"[eval] {label:>7s}: IC={result.ic:+.4f} "
-                  f"adj_S={result.top_k_sharpe_adjusted:+.3f} "
-                  f"vs p50_adj={rows[-1]['vs_random_p50_adjusted']:+.3f} "
-                  f"non_overlap={result.top_k_sharpe_non_overlap:+.3f}")
+            rows.append(
+                {
+                    "step": step,
+                    "label": label,
+                    "checkpoint": str(ckpt_path),
+                    "ic": result.ic,
+                    "ic_ir": result.ic_ir,
+                    # adjusted is the primary metric; keep all three so we can
+                    # compare across regimes without re-running.
+                    "top_k_sharpe_adjusted": result.top_k_sharpe_adjusted,
+                    "top_k_sharpe_legacy": result.top_k_sharpe_legacy,
+                    "top_k_sharpe_non_overlap": result.top_k_sharpe_non_overlap,
+                    "top_k_cumret": result.top_k_cumret,
+                    "random_p50_sharpe_adjusted": rand_p50_adj,
+                    "random_p95_sharpe_adjusted": rb.get("p95_sharpe_adjusted", 0.0),
+                    "random_p50_sharpe_legacy": rand_p50_legacy,
+                    "random_p50_sharpe_non_overlap": rand_p50_nov,
+                    "vs_random_p50_adjusted": result.top_k_sharpe_adjusted - rand_p50_adj,
+                    "vs_random_p50_non_overlap": result.top_k_sharpe_non_overlap - rand_p50_nov,
+                    "forward_period": forward_period,
+                }
+            )
+            if split_idx is not None:
+                # Edge effect: run_backtest_with_series() re-truncates the
+                # trailing `forward_period` rows RELATIVE TO EACH SLICE's end,
+                # so the selection slice silently drops ~forward_period legit
+                # days straddling the selection/confirmation boundary (their
+                # forward returns would reach into the confirmation window).
+                # Accepted deliberately — it is the leak-free choice (a
+                # selection-window forward return must not peek past the
+                # boundary); the loss is at most `forward_period` days.
+                sel_result, _ = run_backtest_with_series(
+                    predictions=preds[:split_idx],
+                    returns=panel.return_array[:split_idx],
+                    dates=panel.dates[:split_idx],
+                    top_k=args.top_k,
+                    n_random_simulations=args.n_random_simulations,
+                    random_seed=0,
+                    forward_period=forward_period,
+                    tradeable_mask=tradeable[:split_idx],
+                )
+                confirm_result, _ = run_backtest_with_series(
+                    predictions=preds[split_idx:],
+                    returns=panel.return_array[split_idx:],
+                    dates=panel.dates[split_idx:],
+                    top_k=args.top_k,
+                    n_random_simulations=args.n_random_simulations,
+                    random_seed=0,
+                    forward_period=forward_period,
+                    tradeable_mask=tradeable[split_idx:],
+                )
+                rows[-1]["sel_ic"] = sel_result.ic
+                rows[-1]["sel_top_k_sharpe_adjusted"] = sel_result.top_k_sharpe_adjusted
+                rows[-1]["confirm_ic"] = confirm_result.ic
+                rows[-1]["confirm_top_k_sharpe_adjusted"] = confirm_result.top_k_sharpe_adjusted
+            print(
+                f"[eval] {label:>7s}: IC={result.ic:+.4f} "
+                f"adj_S={result.top_k_sharpe_adjusted:+.3f} "
+                f"vs p50_adj={rows[-1]['vs_random_p50_adjusted']:+.3f} "
+                f"non_overlap={result.top_k_sharpe_non_overlap:+.3f}"
+            )
+            if split_idx is not None:
+                print(
+                    f"           sel_adj_S={rows[-1]['sel_top_k_sharpe_adjusted']:+.3f} "
+                    f"confirm_adj_S={rows[-1]['confirm_top_k_sharpe_adjusted']:+.3f} "
+                    "(selection chooses nothing here; confirmation is the honest OOS number)"
+                )
         except Exception as e:
             label = f"{step}" if step >= 0 else "final"
             print(f"[eval] {label}: FAILED - {e!r}")
@@ -206,15 +284,23 @@ def main() -> int:
                 torch.cuda.empty_cache()
 
     out_json = args.run_dir / "oos_sweep.json"
-    out_json.write_text(json.dumps({
-        "run_dir": str(args.run_dir),
-        "val_start": args.val_start,
-        "val_end": args.val_end,
-        "top_k": args.top_k,
-        "n_dates": n_dates,
-        "forward_period": forward_period,
-        "rows": rows,
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    out_json.write_text(
+        json.dumps(
+            {
+                "run_dir": str(args.run_dir),
+                "val_start": args.val_start,
+                "val_end": args.val_end,
+                "top_k": args.top_k,
+                "n_dates": n_dates,
+                "forward_period": forward_period,
+                "confirm_frac": args.confirm_frac,  # issue #6, additive: None unless --confirm-frac set
+                "rows": rows,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     print(f"[eval] wrote {out_json}")
 
     # Markdown table
@@ -249,6 +335,35 @@ def main() -> int:
             f"{r['top_k_sharpe_non_overlap']:+.3f} | "
             f"{r['top_k_sharpe_legacy']:+.3f} |"
         )
+    if split_idx is not None and all("sel_top_k_sharpe_adjusted" in r for r in valid):
+        # Issue #6, additive section: honest selection-vs-confirmation reporting.
+        # `best` above is UNCHANGED (still the full-window argmax). This section
+        # additionally shows what happens if you select on the selection window
+        # only and report the confirmation window's number for that same pick —
+        # the number that survives a held-out check, not the number that was
+        # optimized for.
+        best_by_selection = max(valid, key=lambda r: r["sel_top_k_sharpe_adjusted"])
+        md += [
+            "",
+            "## Selection / confirmation split (issue #6, additive)",
+            "",
+            f"- selection window: first {split_idx} dates; confirmation window: "
+            f"last {n_dates - split_idx} dates (confirm_frac={args.confirm_frac}, tail, "
+            "no overlap).",
+            f"- best BY SELECTION WINDOW: step={best_by_selection['label']}  "
+            f"sel_adj_Sharpe={best_by_selection['sel_top_k_sharpe_adjusted']:+.3f}  "
+            f"→ CONFIRMATION adj_Sharpe={best_by_selection['confirm_top_k_sharpe_adjusted']:+.3f} "
+            "(the honest OOS number for this pick; not used to choose it).",
+            "",
+            "| step | sel IC | sel adj Sharpe | confirm IC | confirm adj Sharpe |",
+            "|---:|---:|---:|---:|---:|",
+        ]
+        for r in valid:
+            md.append(
+                f"| {r['label']} | {r['sel_ic']:+.4f} | {r['sel_top_k_sharpe_adjusted']:+.3f} | "
+                f"{r['confirm_ic']:+.4f} | {r['confirm_top_k_sharpe_adjusted']:+.3f} |"
+            )
+
     out_md = args.run_dir / "oos_sweep.md"
     out_md.write_text("\n".join(md), encoding="utf-8")
     print(f"[eval] wrote {out_md}")

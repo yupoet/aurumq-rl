@@ -7,12 +7,15 @@ import pytest
 
 from aurumq_rl.backtest import (
     BacktestResult,
+    _top_k_returns_series,
     compute_ic,
     compute_ic_ir,
+    compute_ic_spearman,
     compute_top_k_sharpe,
     random_baseline,
     run_backtest,
     run_backtest_with_series,
+    top_k_returns_series_cost_adjusted,
 )
 
 
@@ -164,3 +167,184 @@ def test_backtest_result_to_json_roundtrip(tmp_path):
     assert loaded.ic == 0.05
     assert loaded.top_k_sharpe == 1.2
     assert loaded.random_baseline["mean_sharpe"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# Issue #6 — additive: ic_spearman, cost-adjusted top-k series
+# ---------------------------------------------------------------------------
+
+
+def test_compute_ic_spearman_present_and_does_not_change_pearson():
+    rng = np.random.default_rng(11)
+    scores = rng.normal(size=(30, 60))
+    returns = scores**3 + rng.normal(scale=0.001, size=(30, 60))  # monotone-nonlinear + noise
+    pearson = compute_ic(scores, returns)
+    spearman = compute_ic_spearman(scores, returns)
+    assert spearman > pearson  # Spearman survives the nonlinearity better
+
+
+def test_run_backtest_ic_spearman_field_is_additive():
+    rng = np.random.default_rng(12)
+    rets = rng.normal(0.001, 0.02, size=(30, 60))
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    result = run_backtest(preds, rets, top_k=10, n_random_simulations=10)
+    assert isinstance(result.ic_spearman, float)
+    assert -1.0 <= result.ic_spearman <= 1.0
+    # existing fields untouched by the new one being present
+    assert result.ic == compute_ic(preds, rets)
+
+
+def test_top_k_returns_cost_adjusted_default_off_matches_gross_byte_for_byte():
+    rng = np.random.default_rng(13)
+    rets = rng.normal(0.001, 0.02, size=(40, 50))
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    gross = _top_k_returns_series(preds, rets, top_k=8)
+    cost_off = top_k_returns_series_cost_adjusted(preds, rets, top_k=8, cost_bps=0.0)
+    assert cost_off == gross  # byte-for-byte (list of python floats)
+
+
+def test_top_k_returns_cost_adjusted_zero_turnover_equals_gross():
+    """Predictions are identical every day -> the top-K set never changes
+    -> zero turnover -> cost-adjusted return equals the gross return even
+    with cost_bps > 0."""
+    n_dates, n_stocks = 20, 30
+    preds = np.tile(np.arange(n_stocks, dtype=np.float64), (n_dates, 1))
+    rng = np.random.default_rng(14)
+    rets = rng.normal(0.001, 0.02, size=(n_dates, n_stocks))
+    gross = _top_k_returns_series(preds, rets, top_k=5)
+    cost_adj = top_k_returns_series_cost_adjusted(preds, rets, top_k=5, cost_bps=50.0)
+    assert cost_adj == pytest.approx(gross, abs=1e-12)
+
+
+def test_top_k_returns_cost_adjusted_high_turnover_reduces_return():
+    """Predictions completely reshuffle every day -> maximal (or near-
+    maximal) turnover every day after the first -> cost-adjusted series
+    strictly below gross on those days."""
+    n_dates, n_stocks, top_k = 15, 40, 5
+    rng = np.random.default_rng(15)
+    rets = rng.normal(0.001, 0.02, size=(n_dates, n_stocks))
+    # Disjoint top-5 block each day: day t picks stocks [5t : 5t+5).
+    preds = np.zeros((n_dates, n_stocks))
+    for t in range(n_dates):
+        start = (t * top_k) % (n_stocks - top_k)
+        preds[t, start : start + top_k] = 1.0
+    gross = _top_k_returns_series(preds, rets, top_k=top_k)
+    cost_adj = top_k_returns_series_cost_adjusted(preds, rets, top_k=top_k, cost_bps=100.0)
+    assert len(cost_adj) == len(gross)
+    # First day: no prior portfolio -> no cost -> equal.
+    assert cost_adj[0] == pytest.approx(gross[0])
+    # Every subsequent day has full turnover -> strictly reduced by the fixed cost.
+    for g, c in zip(gross[1:], cost_adj[1:], strict=True):
+        assert c == pytest.approx(g - 100.0 / 1e4)
+
+
+def test_run_backtest_cost_bps_default_zero_leaves_existing_fields_unchanged():
+    rng = np.random.default_rng(16)
+    rets = rng.normal(0.001, 0.02, size=(30, 60))
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    baseline = run_backtest(preds, rets, top_k=10, n_random_simulations=10, random_seed=5)
+    with_cost_default = run_backtest(
+        preds, rets, top_k=10, n_random_simulations=10, random_seed=5, cost_bps=0.0
+    )
+    assert with_cost_default.top_k_sharpe_cost_adjusted == 0.0
+    assert with_cost_default.top_k_cumret_cost_adjusted == 0.0
+    assert with_cost_default.cost_bps == 0.0
+    assert with_cost_default.ic == baseline.ic
+    assert with_cost_default.top_k_sharpe == baseline.top_k_sharpe
+    assert with_cost_default.top_k_cumret == baseline.top_k_cumret
+
+
+def test_run_backtest_with_series_cost_bps_populates_series_field_only_when_positive():
+    rng = np.random.default_rng(17)
+    rets = rng.normal(0.001, 0.02, size=(20, 40))
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    dates = list(range(20))
+    _, series_off = run_backtest_with_series(preds, rets, dates=dates, top_k=8)
+    assert series_off.top_k_returns_cost_adjusted == []
+    _, series_on = run_backtest_with_series(preds, rets, dates=dates, top_k=8, cost_bps=30.0)
+    assert len(series_on.top_k_returns_cost_adjusted) > 0
+    # unaffected fields identical between the two calls
+    assert series_on.top_k_returns == series_off.top_k_returns
+    assert series_on.ic == series_off.ic
+
+
+def test_series_skip_degenerate_truncates_trailing_loader_zero_rows():
+    """Review fix: FactorPanelLoader leaves the trailing `forward_period`
+    rows of return_array as literal 0.0 (finite, so NOT caught by the
+    degenerate-day guard). The skip-degenerate / cost-adjusted series must
+    truncate them exactly like run_backtest()'s scalar path, otherwise they
+    leak in as spurious all-zero observations that understate the HAC SE
+    and bias the mean toward zero."""
+    from aurumq_rl.backtest import (
+        _top_k_returns_series,
+        _truncate_trailing_forward_rows,
+    )
+    from aurumq_rl.eval_metrics import hac_mean_ci, hac_standard_error
+
+    rng = np.random.default_rng(23)
+    n_dates, n_stocks, fp, top_k = 60, 40, 10, 8
+    rets = rng.normal(0.003, 0.02, size=(n_dates, n_stocks))
+    # Fabricate the loader's trailing all-zero forward-return rows.
+    rets[n_dates - fp :] = 0.0
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    dates = list(range(n_dates))
+
+    _, series = run_backtest_with_series(
+        preds, rets, dates=dates, top_k=top_k, forward_period=fp, n_random_simulations=5
+    )
+
+    # Reference: the correctly-truncated series computed directly.
+    tp, tr, _ = _truncate_trailing_forward_rows(preds, rets, fp)
+    expected = _top_k_returns_series(tp, tr, top_k)
+
+    # The series must equal the truncated computation, not the untruncated one.
+    assert series.top_k_returns_skip_degenerate == expected
+    # It is strictly shorter than the untruncated series (the fp zero rows are gone).
+    untruncated = _top_k_returns_series(preds, rets, top_k)
+    assert len(series.top_k_returns_skip_degenerate) == len(untruncated) - fp
+    # None of the retained observations is one of the fabricated all-zero rows.
+    assert all(v != 0.0 for v in series.top_k_returns_skip_degenerate[-fp:])
+
+    # HAC on the shipped series == HAC on the correctly-truncated series,
+    # and both differ from the (biased) untruncated HAC.
+    lag = fp - 1
+    assert hac_standard_error(series.top_k_returns_skip_degenerate, lag) == pytest.approx(
+        hac_standard_error(expected, lag)
+    )
+    assert hac_mean_ci(series.top_k_returns_skip_degenerate, lag)["mean"] == pytest.approx(
+        hac_mean_ci(expected, lag)["mean"]
+    )
+    # The untruncated series' HAC SE is contaminated by the fabricated zero
+    # rows, so it differs from the correctly-truncated estimate. The direction
+    # of the bias is data-dependent (the zeros pull the mean toward zero and
+    # distort the autocovariance structure), so we assert only that truncation
+    # changes the result — which is the whole point of the fix.
+    assert hac_standard_error(untruncated, lag) != pytest.approx(hac_standard_error(expected, lag))
+
+
+def test_series_cost_adjusted_also_truncates_trailing_zero_rows():
+    """The cost-adjusted series shares the same truncation as skip-degenerate."""
+    from aurumq_rl.backtest import (
+        _truncate_trailing_forward_rows,
+        top_k_returns_series_cost_adjusted,
+    )
+
+    rng = np.random.default_rng(24)
+    n_dates, n_stocks, fp, top_k = 50, 30, 10, 6
+    rets = rng.normal(0.002, 0.02, size=(n_dates, n_stocks))
+    rets[n_dates - fp :] = 0.0
+    preds = rets + rng.normal(0, 0.01, size=rets.shape)
+    dates = list(range(n_dates))
+
+    _, series = run_backtest_with_series(
+        preds,
+        rets,
+        dates=dates,
+        top_k=top_k,
+        forward_period=fp,
+        n_random_simulations=5,
+        cost_bps=30.0,
+    )
+    tp, tr, _ = _truncate_trailing_forward_rows(preds, rets, fp)
+    expected = top_k_returns_series_cost_adjusted(tp, tr, top_k=top_k, cost_bps=30.0)
+    assert series.top_k_returns_cost_adjusted == expected
