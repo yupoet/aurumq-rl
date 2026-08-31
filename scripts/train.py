@@ -197,9 +197,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # PortfolioWeight env extras
     parser.add_argument(
         "--reward-type",
-        choices=["return", "sharpe", "sortino", "mean_variance"],
+        choices=["return", "sharpe", "sortino", "mean_variance", "differential_sharpe"],
         default="return",
         help="Reward type (portfolio_weight env only, default return)",
+    )
+    parser.add_argument(
+        "--dsr-eta",
+        type=float,
+        default=0.05,
+        help="Differential Sharpe Ratio decay rate (differential_sharpe reward only, default 0.05)",
     )
     parser.add_argument(
         "--max-position-pct",
@@ -466,6 +472,7 @@ def make_env(
                 forward_period=args.forward_period,
                 reward_type=args.reward_type,
                 risk_aversion=args.risk_aversion,
+                dsr_eta=args.dsr_eta,
                 cost_bps=args.cost_bps,
                 max_position_pct=args.max_position_pct,
                 max_industry_pct=args.max_industry_pct,

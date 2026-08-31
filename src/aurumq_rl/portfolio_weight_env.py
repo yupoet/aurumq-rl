@@ -8,10 +8,11 @@ Difference vs StockPickingEnv
 
 Reward types
 ------------
-* return        — simple forward return
-* sharpe        — rolling Sharpe ratio
-* sortino       — rolling Sortino ratio
-* mean_variance — Markowitz mean - λ * variance
+* return              — simple forward return
+* sharpe              — rolling Sharpe ratio
+* sortino             — rolling Sortino ratio
+* mean_variance       — Markowitz mean - λ * variance
+* differential_sharpe — recurrent per-step Sharpe increment (Moody & Saffell 1998)
 
 State
 -----
@@ -47,6 +48,8 @@ from aurumq_rl.env import (
     _apply_trading_mask,
 )
 from aurumq_rl.reward_functions import (
+    DEFAULT_DSR_ETA,
+    DifferentialSharpe,
     mean_variance_reward,
     sharpe_reward,
     sortino_reward,
@@ -57,6 +60,8 @@ DEFAULT_MAX_POSITION_PCT: float = 0.05
 DEFAULT_MAX_INDUSTRY_PCT: float = 0.30
 _SOFTMAX_TEMP: float = 1.0
 _MIN_WEIGHT_SUM: float = 1e-8
+
+_REWARD_TYPES = ("return", "sharpe", "sortino", "mean_variance", "differential_sharpe")
 
 
 @dataclass(frozen=True)
@@ -70,10 +75,13 @@ class PortfolioWeightConfig:
     max_industry_pct: float = DEFAULT_MAX_INDUSTRY_PCT
     rolling_window: int = 20
     forward_period: int = 10
-    reward_type: Literal["return", "sharpe", "sortino", "mean_variance"] = "sharpe"
+    reward_type: Literal["return", "sharpe", "sortino", "mean_variance", "differential_sharpe"] = (
+        "sharpe"
+    )
     risk_aversion: float = 1.0
     cost_bps: float = 30.0
     turnover_penalty: float = 0.001
+    dsr_eta: float = DEFAULT_DSR_ETA
 
     def __post_init__(self) -> None:
         if self.start_date >= self.end_date:
@@ -88,12 +96,14 @@ class PortfolioWeightConfig:
             raise ValueError(f"max_position_pct={self.max_position_pct} must be in (0, 1]")
         if not 0.0 < self.max_industry_pct <= 1.0:
             raise ValueError(f"max_industry_pct={self.max_industry_pct} must be in (0, 1]")
-        if self.reward_type not in {"return", "sharpe", "sortino", "mean_variance"}:
+        if self.reward_type not in _REWARD_TYPES:
             raise ValueError(f"reward_type={self.reward_type!r} not supported")
         if self.risk_aversion < 0.0:
             raise ValueError(f"risk_aversion={self.risk_aversion} must be >= 0")
         if self.rolling_window < 1:
             raise ValueError(f"rolling_window={self.rolling_window} must be >= 1")
+        if not 0.0 < self.dsr_eta <= 1.0:
+            raise ValueError(f"dsr_eta={self.dsr_eta} must be in (0, 1]")
 
 
 def _project_weights(
@@ -276,6 +286,7 @@ if GYM_AVAILABLE:
             self._returns_history: list[np.ndarray] = []
             self._cumulative_reward: float = 0.0
             self._episode_rewards: list[float] = []
+            self._dsr = DifferentialSharpe(eta=config.dsr_eta)
 
         def reset(
             self,
@@ -290,6 +301,7 @@ if GYM_AVAILABLE:
             self._returns_history = []
             self._cumulative_reward = 0.0
             self._episode_rewards = []
+            self._dsr.reset()
 
             obs = self._get_obs(0)
             info = {"step": 0, "n_stocks": self.n_stocks, "n_factors": self.n_factors}
@@ -395,6 +407,12 @@ if GYM_AVAILABLE:
 
             if rtype == "return":
                 return float(np.dot(weights, masked_returns))
+
+            if rtype == "differential_sharpe":
+                # Same realized per-step portfolio return the rolling
+                # sharpe/sortino modes consume, so the modes stay comparable.
+                realized_return = float(np.dot(weights, masked_returns))
+                return self._dsr.update(realized_return)
 
             wh = np.array(self._weights_history, dtype=np.float64)
             rh = np.array(self._returns_history, dtype=np.float64)
