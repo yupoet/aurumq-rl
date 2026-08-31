@@ -12,6 +12,8 @@ See SPEC §2.B.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 from .events import Event
@@ -21,6 +23,29 @@ __all__ = ["detect_events_trend_scanning"]
 
 
 L_GRID = (5, 10, 15, 20)
+
+# Part 3 (issue #8): opt-in t-stat quality squashing. Default "raw" reproduces
+# current (unbounded) event_quality exactly — see `_transform_tstat`.
+TstatTransform = Literal["raw", "tanh", "clip"]
+_TANH_SCALE = 10.0  # tanh(t / _TANH_SCALE) stays ~linear for |t| << _TANH_SCALE
+_TSTAT_CAP = 10.0  # bound used by both "tanh" (asymptote) and "clip" (hard cap)
+
+
+def _transform_tstat(t_stat: float, mode: TstatTransform) -> float:
+    """Squash/cap a raw t-stat quality score. Default "raw" is the identity.
+
+    Low-vol micro-drifts can produce raw t-stats in the hundreds/thousands
+    that dominate `search_threshold`-based selection, favoring smooth drifts
+    over genuine main waves. "tanh" and "clip" bound the score while
+    preserving sign (direction) and relative ordering for |t_stat| << cap.
+    """
+    if mode == "raw":
+        return t_stat
+    if mode == "tanh":
+        return float(np.tanh(t_stat / _TANH_SCALE) * _TSTAT_CAP)
+    if mode == "clip":
+        return float(np.clip(t_stat, -_TSTAT_CAP, _TSTAT_CAP))
+    raise ValueError(f"Unknown tstat_transform {mode!r}; expected 'raw', 'tanh', or 'clip'")
 
 
 def _vectorized_ols_tstat(y: np.ndarray, L: int) -> tuple[np.ndarray, np.ndarray]:
@@ -79,6 +104,7 @@ def _detect_events_one_stock(
     L_grid: tuple[int, ...] = L_GRID,
     amt_ma_window: int = 20,
     amt_min: float = 1e8,
+    tstat_transform: TstatTransform = "raw",
 ) -> list[Event]:
     n = len(adj_close)
     if n < max(L_grid) + 2:
@@ -127,12 +153,14 @@ def _detect_events_one_stock(
         if L_used <= 0:
             continue
         peak_idx = min(n - 1, t + L_used)
+        # Selection/gating above always uses the raw t-stat (best_t); the
+        # transform only affects the reported event_quality (Part 3, issue #8).
         events.append(
             Event(
                 ts_code=ts_code,
                 event_start_idx=t,
                 event_peak_idx=peak_idx,
-                event_quality=float(best_t[t]),
+                event_quality=_transform_tstat(float(best_t[t]), tstat_transform),
                 event_method="B",
             )
         )
@@ -141,8 +169,36 @@ def _detect_events_one_stock(
 
 
 def detect_events_trend_scanning(
-    panel: MarketPanel, L_grid: tuple[int, ...] = L_GRID
+    panel: MarketPanel,
+    L_grid: tuple[int, ...] = L_GRID,
+    *,
+    tstat_transform: TstatTransform = "raw",
 ) -> list[Event]:
+    """Detect Method B (trend-scanning) events.
+
+    Parameters
+    ----------
+    panel
+        Market panel (see `MarketPanel`).
+    L_grid
+        Forward-window lengths to fit OLS trends over.
+    tstat_transform
+        OPT-IN quality squashing (Part 3, issue #8). "raw" (default) reproduces
+        the current unbounded `event_quality = t_stat` exactly. "tanh" and
+        "clip" bound the reported quality so low-vol micro-drift t-stats in
+        the hundreds/thousands no longer dominate `search_threshold`-based
+        selection; "tanh" is the recommended setting (smoothly bounded,
+        sign-preserving, near-linear for small |t|). Selection of which
+        forward window `L` wins per `t` (and the up/down direction gate)
+        always uses the raw t-stat — the transform only affects the reported
+        `event_quality`.
+    """
+    # Validate eagerly: a typo'd mode must fail immediately, not silently
+    # pass on a zero-event run and only raise once some event happens to fire.
+    if tstat_transform not in ("raw", "tanh", "clip"):
+        raise ValueError(
+            f"Unknown tstat_transform {tstat_transform!r}; expected 'raw', 'tanh', or 'clip'"
+        )
     events: list[Event] = []
     for j, ts_code in enumerate(panel.ts_codes):
         evs = _detect_events_one_stock(
@@ -151,6 +207,7 @@ def detect_events_trend_scanning(
             amount=panel.amount[:, j],
             ts_code=ts_code,
             L_grid=L_grid,
+            tstat_transform=tstat_transform,
         )
         events.extend(evs)
     return events

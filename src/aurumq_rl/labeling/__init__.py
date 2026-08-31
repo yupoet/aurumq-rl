@@ -22,6 +22,11 @@ Public API
 - derive_labels:                  events → (t, j) binary labels at horizon
 - search_threshold:               target-pos-rate threshold search
 - scan_main_wave_p0:              top-level convenience: A_t3 with τ=1.2327
+- cusum_filter:                   symmetric CUSUM event sampler (opt-in seeding, issue #8 Part 1)
+- label_concurrency:              per-bar overlap count for outcome windows (issue #8 Part 2)
+- average_uniqueness:             per-label sample_weight from concurrency (issue #8 Part 2)
+- adaptive_threshold:             v2_excess_adaptive threshold formula, opt-in √horizon scaling
+                                   (issue #8 Part 4; P0-locked default unaffected)
 
 Example
 -------
@@ -35,10 +40,11 @@ Example
 from .directional_change import detect_events_directional_change
 from .events import Event, dedupe_events, derive_labels, events_to_dataframe
 from .panels import MarketPanel
+from .sampling import average_uniqueness, cusum_filter, label_concurrency
 from .thresholds import ThresholdResult, search_threshold
 from .trend_scanning import detect_events_trend_scanning
 from .triple_barrier import detect_events_triple_barrier
-from .v2_excess_adaptive import detect_events_v2
+from .v2_excess_adaptive import adaptive_threshold, detect_events_v2
 
 # ---------------------------------------------------------------------------
 # P0 locked configuration (data-side ablation winner)
@@ -89,6 +95,10 @@ __all__ = [
     "detect_events_triple_barrier",
     "detect_events_directional_change",
     "scan_main_wave_p0",
+    "cusum_filter",
+    "label_concurrency",
+    "average_uniqueness",
+    "adaptive_threshold",
     "P0_LABEL_NAME",
     "P0_HORIZON",
     "P0_THRESHOLD",
