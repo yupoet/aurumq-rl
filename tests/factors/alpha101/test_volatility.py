@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import polars as pl
 import pytest
@@ -11,8 +13,12 @@ from aurumq_rl.factors.alpha101.volatility import (
     alpha018,
     alpha034,
     alpha040,
+    alpha_custom_garman_klass_vol,
     alpha_custom_kurt_filter,
     alpha_custom_skew_reversal,
+    alpha_custom_yang_zhang_vol,
+    garman_klass_volatility,
+    yang_zhang_volatility,
 )
 
 
@@ -106,6 +112,8 @@ _REF_STATUS_VOL = {
     "alpha040": "match",
     "alpha_custom_skew_reversal": "missing",
     "alpha_custom_kurt_filter": "missing",
+    "alpha_custom_yang_zhang_vol": "missing",
+    "alpha_custom_garman_klass_vol": "missing",
 }
 
 
@@ -257,3 +265,153 @@ class TestAlphaCustomKurtFilter:
         last = df["trade_date"].max()
         late = df.filter(pl.col("trade_date") >= last - pl.duration(days=5))
         assert late["a"].drop_nulls().drop_nans().shape[0] > 0
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — Yang-Zhang / Garman-Klass volatility (new custom factors, no
+# parity constraint). A tiny 6-day hand-crafted OHLC series with a
+# limit-locked day (high == low) at index 3 lets us cross-check against a
+# hand/reference computation and verify degenerate-day exclusion.
+# ---------------------------------------------------------------------------
+
+
+def _ohlc_panel_with_limit_lock() -> pl.DataFrame:
+    open_ = [10.0, 10.2, 10.5, 10.4, 10.6, 10.9]
+    high = [10.3, 10.6, 10.7, 10.4, 10.9, 11.1]
+    low = [9.9, 10.1, 10.3, 10.4, 10.4, 10.7]
+    close = [10.2, 10.5, 10.4, 10.4, 10.8, 11.0]
+    return pl.DataFrame(
+        {
+            "stock_code": ["A"] * 6,
+            "trade_date": list(range(6)),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+        }
+    )
+
+
+def _hand_yang_zhang(idx: int, window: int) -> float:
+    open_ = [10.0, 10.2, 10.5, 10.4, 10.6, 10.9]
+    high = [10.3, 10.6, 10.7, 10.4, 10.9, 11.1]
+    low = [9.9, 10.1, 10.3, 10.4, 10.4, 10.7]
+    close = [10.2, 10.5, 10.4, 10.4, 10.8, 11.0]
+
+    o_list, c_list, rs_list = [], [], []
+    for i in range(idx - window + 1, idx + 1):
+        if i - 1 < 0:
+            return float("nan")
+        prev_close = close[i - 1]
+        o_list.append(math.log(open_[i] / prev_close))
+        c_list.append(math.log(close[i] / open_[i]))
+        if high[i] != low[i]:
+            rs_list.append(
+                math.log(high[i] / close[i]) * math.log(high[i] / open_[i])
+                + math.log(low[i] / close[i]) * math.log(low[i] / open_[i])
+            )
+    v_o = np.var(o_list, ddof=1)
+    v_c = np.var(c_list, ddof=1)
+    v_rs = float(np.mean(rs_list)) if rs_list else float("nan")
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
+    yz_var = v_o + k * v_c + (1.0 - k) * v_rs
+    return math.sqrt(max(yz_var, 0.0))
+
+
+def _hand_garman_klass(idx: int, window: int) -> float:
+    open_ = [10.0, 10.2, 10.5, 10.4, 10.6, 10.9]
+    high = [10.3, 10.6, 10.7, 10.4, 10.9, 11.1]
+    low = [9.9, 10.1, 10.3, 10.4, 10.4, 10.7]
+    close = [10.2, 10.5, 10.4, 10.4, 10.8, 11.0]
+    ln2_term = 2.0 * math.log(2.0) - 1.0
+
+    vals = []
+    for i in range(idx - window + 1, idx + 1):
+        if i < 0:
+            return float("nan")
+        if high[i] == low[i]:
+            continue
+        vals.append(
+            0.5 * math.log(high[i] / low[i]) ** 2 - ln2_term * math.log(close[i] / open_[i]) ** 2
+        )
+    if not vals:
+        return float("nan")
+    return math.sqrt(max(float(np.mean(vals)), 0.0))
+
+
+class TestYangZhangVolatility:
+    def test_matches_hand_computation(self):
+        df = _ohlc_panel_with_limit_lock()
+        out = df.with_columns(yang_zhang_volatility(window=3).alias("yz"))["yz"].to_list()
+        for idx in range(6):
+            expected = _hand_yang_zhang(idx, 3)
+            if math.isnan(expected):
+                assert out[idx] is None
+            else:
+                assert out[idx] == pytest.approx(expected, rel=1e-9)
+
+    def test_limit_locked_day_excluded_not_nan_or_inf(self):
+        # Index 3 is limit-locked (high == low). The rolling estimate that
+        # includes it (idx 3, 4, 5) must still be finite — not NaN/inf —
+        # because the degenerate RS term is excluded rather than corrupting
+        # the whole window.
+        df = _ohlc_panel_with_limit_lock()
+        out = df.with_columns(yang_zhang_volatility(window=3).alias("yz"))["yz"]
+        vals = out.to_list()
+        for idx in (3, 4, 5):
+            assert vals[idx] is not None
+            assert math.isfinite(vals[idx])
+
+    def test_dtype_and_length(self, synthetic_panel):
+        s = alpha_custom_yang_zhang_vol(synthetic_panel)
+        assert s.dtype == pl.Float64
+        assert len(s) == synthetic_panel.height
+
+    def test_steady_state_has_values(self, synthetic_panel):
+        s = alpha_custom_yang_zhang_vol(synthetic_panel)
+        df = synthetic_panel.with_columns(s.alias("a"))
+        last = df["trade_date"].max()
+        late = df.filter(pl.col("trade_date") >= last - pl.duration(days=5))
+        assert late["a"].drop_nulls().drop_nans().shape[0] > 0
+
+    def test_values_non_negative(self, synthetic_panel):
+        s = alpha_custom_yang_zhang_vol(synthetic_panel)
+        finite = s.drop_nulls().drop_nans()
+        assert (finite >= 0.0).all()
+
+
+class TestGarmanKlassVolatility:
+    def test_matches_hand_computation(self):
+        df = _ohlc_panel_with_limit_lock()
+        out = df.with_columns(garman_klass_volatility(window=3).alias("gk"))["gk"].to_list()
+        for idx in range(6):
+            expected = _hand_garman_klass(idx, 3)
+            if math.isnan(expected):
+                assert out[idx] is None
+            else:
+                assert out[idx] == pytest.approx(expected, rel=1e-9)
+
+    def test_limit_locked_day_excluded_not_nan_or_inf(self):
+        df = _ohlc_panel_with_limit_lock()
+        out = df.with_columns(garman_klass_volatility(window=3).alias("gk"))["gk"]
+        vals = out.to_list()
+        for idx in (3, 4, 5):
+            assert vals[idx] is not None
+            assert math.isfinite(vals[idx])
+
+    def test_dtype_and_length(self, synthetic_panel):
+        s = alpha_custom_garman_klass_vol(synthetic_panel)
+        assert s.dtype == pl.Float64
+        assert len(s) == synthetic_panel.height
+
+    def test_steady_state_has_values(self, synthetic_panel):
+        s = alpha_custom_garman_klass_vol(synthetic_panel)
+        df = synthetic_panel.with_columns(s.alias("a"))
+        last = df["trade_date"].max()
+        late = df.filter(pl.col("trade_date") >= last - pl.duration(days=5))
+        assert late["a"].drop_nulls().drop_nans().shape[0] > 0
+
+    def test_values_non_negative(self, synthetic_panel):
+        s = alpha_custom_garman_klass_vol(synthetic_panel)
+        finite = s.drop_nulls().drop_nans()
+        assert (finite >= 0.0).all()

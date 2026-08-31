@@ -10,12 +10,14 @@ import polars as pl
 import pytest
 
 from aurumq_rl.data_loader import (
+    DEFAULT_MAD_WINSORIZE_K,
     FACTOR_COL_PREFIXES,
     REQUIRED_COLUMNS,
     FactorPanel,
     FactorPanelLoader,
     UniverseFilter,
     _cross_section_zscore,
+    _mad_winsorize,
     discover_factor_columns,
     filter_universe,
 )
@@ -250,6 +252,89 @@ def test_cross_section_zscore_replaces_nan_with_zero() -> None:
     assert np.isfinite(out).all()
     assert np.all(out[0, :, 0] == 0.0)
     assert np.all(out[1, :, 0] == 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Part 3 — opt-in per-day MAD winsorize before z-score (issue #9)
+# ---------------------------------------------------------------------------
+
+
+def test_default_mad_winsorize_k_constant() -> None:
+    assert DEFAULT_MAD_WINSORIZE_K == 5.0
+
+
+def test_cross_section_zscore_winsorize_mad_none_is_byte_identical_to_default() -> None:
+    """``winsorize_mad=None`` (the default) must reproduce today's z-scores
+    byte-for-byte -- this is the opt-in / no-behavior-change guardrail."""
+    rng = np.random.default_rng(7)
+    arr = rng.normal(size=(3, 15, 4)).astype(np.float32)
+    arr[0, 2, 1] = np.nan
+    arr[1, 5, 0] = np.inf
+    arr[1, 6, 0] = -np.inf
+
+    out_default = _cross_section_zscore(arr.copy())
+    out_explicit_none = _cross_section_zscore(arr.copy(), winsorize_mad=None)
+
+    assert np.array_equal(out_default, out_explicit_none)
+
+
+def test_mad_winsorize_nan_cells_stay_nan() -> None:
+    """NaN cells must NOT be fabricated by winsorize -- they stay NaN and
+    only get 0-filled by the z-score step downstream, as today."""
+    arr = np.array([1.0, 2.0, np.nan, 4.0, 5.0]).reshape(1, 5, 1)
+    out = _mad_winsorize(arr, k=5.0)
+    assert np.isnan(out[0, 2, 0])
+    assert np.isfinite(out[0, [0, 1, 3, 4], 0]).all()
+
+
+def test_mad_winsorize_zero_mad_skips_clipping() -> None:
+    """When MAD is exactly 0 (degenerate cross-section), clipping is
+    skipped rather than crushing every value to the median."""
+    arr = np.array([1.0] * 9 + [1e6]).reshape(1, 10, 1)
+    out = _mad_winsorize(arr, k=5.0)
+    assert out[0, 9, 0] == 1e6
+    assert np.all(out[0, :9, 0] == 1.0)
+
+
+def test_mad_winsorize_caps_outlier_other_stocks_close_to_no_outlier_case() -> None:
+    """The exact property the fix exists for: one 1e6 outlier in a cross-
+    section crushes std (everyone's z-score collapses toward 0) unless
+    winsorized first. After MAD-winsorize, the OTHER stocks' z-scores are
+    close to what they would be had the outlier simply not been present.
+    """
+    rng = np.random.default_rng(1)
+    n = 199
+    normal_vals = rng.normal(loc=0.0, scale=1.0, size=n).astype(np.float64)
+
+    z_no_outlier = _cross_section_zscore(normal_vals.reshape(1, n, 1).copy())
+
+    arr_with_outlier = np.concatenate([normal_vals, [1e6]]).reshape(1, n + 1, 1)
+    z_unwinsorized = _cross_section_zscore(arr_with_outlier.copy())
+    z_winsorized = _cross_section_zscore(
+        arr_with_outlier.copy(), winsorize_mad=DEFAULT_MAD_WINSORIZE_K
+    )
+
+    # Bug reproduction: without winsorize, the huge outlier inflates std so
+    # much that every normal stock's z-score is crushed toward 0.
+    assert np.max(np.abs(z_unwinsorized[0, :n, 0])) < 0.5
+    # Sanity: the no-outlier reference has "normal" full-scale z-scores.
+    assert np.max(np.abs(z_no_outlier[0, :, 0])) > 2.0
+
+    # Fix: with winsorize, the other stocks' z-scores are close to the
+    # no-outlier reference (not crushed, and not distorted).
+    np.testing.assert_allclose(z_winsorized[0, :n, 0], z_no_outlier[0, :, 0], atol=0.15)
+
+
+def test_build_synthetic_winsorize_mad_threaded_end_to_end() -> None:
+    """``FactorPanelLoader.build_synthetic`` accepts ``winsorize_mad`` and
+    the resulting panel is still finite / correctly shaped — confirms the
+    opt-in knob is threaded through, not just present on the private
+    helper."""
+    panel = FactorPanelLoader.build_synthetic(
+        n_dates=10, n_stocks=20, n_factors=3, winsorize_mad=DEFAULT_MAD_WINSORIZE_K
+    )
+    assert np.isfinite(panel.factor_array).all()
+    assert panel.factor_array.shape == (10, 20, 3)
 
 
 def test_build_synthetic_dates_are_weekdays() -> None:

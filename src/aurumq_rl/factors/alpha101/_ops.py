@@ -29,6 +29,7 @@ the divergence.
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 
 # ---------------------------------------------------------------------------
@@ -477,6 +478,162 @@ def ind_neutralize(col: pl.Expr, group: str | pl.Expr) -> pl.Expr:
     return col - col.mean().over([pl.col(CS_PART), group_expr])
 
 
+DEFAULT_MIN_GROUP_SIZE: int = 2
+"""Default ``min_group_size`` for :func:`ind_neutralize_regression`.
+
+Below this many eligible members, a ``(date, industry)`` cell is not
+big enough to estimate a stable group effect against — see that
+function's docstring for the exact behaviour of undersized cells.
+"""
+
+
+def _regress_out_industry_batch(
+    s: pl.Series, *, has_log_cap: bool, min_group_size: int
+) -> pl.Series:
+    """Per-date callback for :func:`ind_neutralize_regression`.
+
+    ``s`` is a Struct series (one date's worth of rows) with fields
+    ``__y`` (the column to neutralise), ``__ind`` (industry key) and,
+    if ``has_log_cap``, ``__logcap``. Returns a Float64 series of the
+    same length: OLS residuals for eligible rows, the *original* ``__y``
+    value for rows in undersized groups, and null for rows that cannot
+    be assigned to a group at all (null industry / null col / null
+    log_cap). Pure numpy — vectorised, no per-row Python loop.
+    """
+    unn = s.struct.unnest()
+    n = unn.height
+    y = unn.get_column("__y").to_numpy().astype(np.float64)
+    ind_series = unn.get_column("__ind")
+    ind_null = ind_series.is_null().to_numpy()
+    ind_np = ind_series.to_numpy()
+    y_nan = np.isnan(y)
+
+    if has_log_cap:
+        log_cap = unn.get_column("__logcap").to_numpy().astype(np.float64)
+        log_cap_nan = np.isnan(log_cap)
+    else:
+        log_cap = None
+        log_cap_nan = np.zeros(n, dtype=bool)
+
+    out = np.full(n, np.nan, dtype=np.float64)
+    eligible = ~ind_null & ~y_nan & ~log_cap_nan
+    if not eligible.any():
+        return pl.Series(out)
+
+    elig_idx = np.nonzero(eligible)[0]
+    ind_elig = ind_np[elig_idx]
+    _uniques, inverse = np.unique(ind_elig, return_inverse=True)
+    counts = np.bincount(inverse)
+    big_enough = counts >= min_group_size
+    keep_for_fit = big_enough[inverse]
+
+    # Undersized (date, industry) cells: leave the original value unchanged
+    # (documented behaviour — NOT demeaned/regressed to 0, NOT NaN'd, so a
+    # single-stock sub-industry is not permanently muted).
+    small_idx = elig_idx[~keep_for_fit]
+    out[small_idx] = y[small_idx]
+
+    fit_idx = elig_idx[keep_for_fit]
+    if fit_idx.size == 0:
+        return pl.Series(out)
+
+    fit_inverse = inverse[keep_for_fit]
+    fit_codes = np.unique(fit_inverse)
+    code_to_col = {code: j for j, code in enumerate(fit_codes)}
+    dummy_col = np.array([code_to_col[code] for code in fit_inverse])
+    x_ind = np.zeros((fit_idx.size, fit_codes.size), dtype=np.float64)
+    x_ind[np.arange(fit_idx.size), dummy_col] = 1.0
+    if has_log_cap:
+        design = np.hstack([x_ind, log_cap[fit_idx].reshape(-1, 1)])  # type: ignore[index]
+    else:
+        design = x_ind
+
+    y_fit = y[fit_idx]
+    beta, *_ = np.linalg.lstsq(design, y_fit, rcond=None)
+    out[fit_idx] = y_fit - design @ beta
+    return pl.Series(out)
+
+
+def ind_neutralize_regression(
+    col: pl.Expr,
+    industry: str | pl.Expr,
+    log_cap: pl.Expr | None = None,
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+) -> pl.Expr:
+    """Industry-neutralise via per-day cross-sectional OLS, controlling for size.
+
+    Unlike :func:`ind_neutralize` (plain per-``(date, group)`` demean), this
+    regresses ``col`` on one dummy variable per industry (no shared
+    intercept) plus, when ``log_cap`` is given, a single shared
+    ``log_cap`` slope, and returns the residual. Because ``log_cap`` is a
+    *continuous* regressor fit jointly across all industries, the returned
+    residual is uncorrelated with market-cap even when industry membership
+    and size are themselves correlated (a real A-share pattern that plain
+    demeaning does not fix — the group mean still bakes in the cap
+    confound).
+
+    ``min_group_size`` guard
+    -------------------------
+    Group size is counted per ``(trade_date, industry)`` among rows
+    *eligible* for the regression (non-null industry, non-NaN ``col``,
+    and — if supplied — non-NaN ``log_cap``). Cells with fewer than
+    ``min_group_size`` eligible members are **not** included in the OLS
+    fit and are **not** demeaned/regressed to 0 (which would permanently
+    mute single-stock sub-industries, exactly the failure mode of naive
+    per-group demeaning at n=1); instead their ``col`` value is passed
+    through **unchanged**. This is a deliberate design choice — the
+    alternative (NaN) would silently drop those stocks from downstream
+    consumers; passing the raw value through keeps them informative while
+    making clear (via this docstring / the accompanying test) that they
+    were not neutralised.
+
+    Null propagation
+    -----------------
+    Rows with a null ``industry``, NaN ``col``, or (when ``log_cap`` is
+    given) NaN ``log_cap`` cannot be assigned to any regression group and
+    are returned as NaN.
+
+    Parameters
+    ----------
+    col:
+        Column to neutralise.
+    industry:
+        Column name or :class:`pl.Expr` giving the per-row group key.
+    log_cap:
+        Optional continuous control (e.g. ``log(market_cap)``). When
+        given, one shared slope is fit jointly across all industry groups
+        for that date.
+    min_group_size:
+        Minimum number of eligible members a ``(date, industry)`` cell
+        must have to participate in the OLS fit. Default
+        :data:`DEFAULT_MIN_GROUP_SIZE`.
+
+    Implementation notes
+    ---------------------
+    Computed via ``pl.struct(...).map_batches(...).over(CS_PART)``: the
+    Python callback runs once per **date** (not per row), and within a
+    date the regression is fully vectorised numpy (``np.unique`` for
+    group codes, one dense ``np.linalg.lstsq`` solve). No per-row Python
+    loop over the panel.
+
+    This is a NEW, additive, opt-in function — :func:`ind_neutralize` and
+    all of its callers are untouched.
+    """
+    industry_expr = pl.col(industry) if isinstance(industry, str) else industry
+    has_log_cap = log_cap is not None
+    fields = [col.alias("__y"), industry_expr.alias("__ind")]
+    if has_log_cap:
+        fields.append(log_cap.alias("__logcap"))  # type: ignore[union-attr]
+    struct = pl.struct(fields)
+
+    def _callback(s: pl.Series) -> pl.Series:
+        return _regress_out_industry_batch(
+            s, has_log_cap=has_log_cap, min_group_size=min_group_size
+        )
+
+    return struct.map_batches(_callback, return_dtype=pl.Float64).over(CS_PART)
+
+
 # ---------------------------------------------------------------------------
 # Conditional helper
 # ---------------------------------------------------------------------------
@@ -539,6 +696,8 @@ __all__ = [
     "cs_rank",
     "cs_scale",
     "ind_neutralize",
+    "ind_neutralize_regression",
+    "DEFAULT_MIN_GROUP_SIZE",
     # Conditional
     "if_then_else",
 ]

@@ -511,7 +511,42 @@ def filter_universe(
 # ---------------------------------------------------------------------------
 
 
-def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
+DEFAULT_MAD_WINSORIZE_K: float = 5.0
+"""Recommended ``k`` for the opt-in MAD-winsorize step (median +/- k*MAD).
+
+Not applied automatically — callers must pass ``winsorize_mad=DEFAULT_MAD_WINSORIZE_K``
+(or another value) explicitly. See :func:`_cross_section_zscore`.
+"""
+
+
+def _mad_winsorize(arr: np.ndarray, k: float) -> np.ndarray:
+    """Clip each ``(date, factor)`` cross-section to ``median +/- k*MAD``.
+
+    Operates along axis=1 (stock dim), the same partitioning as
+    :func:`_cross_section_zscore`. NaN-aware: NaN cells are ignored when
+    computing the median/MAD (``np.nanmedian``) and are left as NaN in the
+    output — winsorize does not fabricate values for missing cells; the
+    z-score step's NaN -> 0 fill still happens exactly as before, just on
+    the winsorized array.
+
+    When a cross-section's MAD is exactly 0 (e.g. most stocks share one
+    factor value that day), clipping is skipped for that ``(date,
+    factor)`` slice — a zero MAD carries no information about scale, so
+    clamping would crush legitimate variation (or the very outlier we
+    want to keep informative-but-bounded) down to a single point instead
+    of correcting a genuine tail value.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        median = np.nanmedian(arr, axis=1, keepdims=True)
+        mad = np.nanmedian(np.abs(arr - median), axis=1, keepdims=True)
+
+    lo = np.where(mad > 0, median - k * mad, -np.inf)
+    hi = np.where(mad > 0, median + k * mad, np.inf)
+    return np.clip(arr, lo, hi)
+
+
+def _cross_section_zscore(arr: np.ndarray, winsorize_mad: float | None = None) -> np.ndarray:
     """Cross-sectional z-score normalize along axis=1 (stock dim).
 
     For each (date, factor), normalize across stocks:
@@ -531,9 +566,27 @@ def _cross_section_zscore(arr: np.ndarray) -> np.ndarray:
     like a regular missing value, so only the offending stock's z is set
     to 0 rather than the whole column. Phase 26 audit found ~22 factors
     with inf rates 1e-5..2.5%; gtja_005 alone had 108k inf cells.
+
+    Parameters
+    ----------
+    winsorize_mad:
+        Opt-in per-day MAD-winsorize applied BEFORE the mean/std are
+        computed: each ``(date, factor)`` cross-section is clipped to
+        ``median +/- winsorize_mad * MAD`` (see :func:`_mad_winsorize`).
+        ``None`` (the default) preserves today's behavior byte-for-byte —
+        only the existing ±inf handling runs. A single surviving huge
+        value (e.g. an upstream overflow that slipped past the ±1e6
+        registry clip) inflates ``std`` enough to crush every other
+        stock's z-score toward 0 for that day; winsorizing first bounds
+        that value's influence on ``mean``/``std`` while leaving NaN
+        cells untouched. Pass :data:`DEFAULT_MAD_WINSORIZE_K` for the
+        recommended ``k=5``.
     """
     if not np.all(np.isfinite(arr) | np.isnan(arr)):
         arr = np.where(np.isinf(arr), np.nan, arr)
+
+    if winsorize_mad is not None:
+        arr = _mad_winsorize(arr, winsorize_mad)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -760,6 +813,7 @@ class FactorPanelLoader:
         universe_filter: UniverseFilter = UniverseFilter.MAIN_BOARD_NON_ST,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        winsorize_mad: float | None = None,
     ) -> FactorPanel:
         """Load a factor panel from Parquet.
 
@@ -786,6 +840,11 @@ class FactorPanelLoader:
             column missing from the parquet raises. Use this when the panel
             schema has changed between train and eval (e.g., a new factor
             prefix was added) and you must preserve the model's input layout.
+        winsorize_mad:
+            Opt-in per-day MAD-winsorize applied before the cross-section
+            z-score (default ``None`` = current behavior, unchanged). Pass
+            :data:`DEFAULT_MAD_WINSORIZE_K` for the recommended ``k=5``.
+            See :func:`_cross_section_zscore`.
 
         Returns
         -------
@@ -812,6 +871,7 @@ class FactorPanelLoader:
             universe_filter=universe_filter,
             feature_group_weights=feature_group_weights,
             factor_names=factor_names,
+            winsorize_mad=winsorize_mad,
         )
 
     def _load_from_parquet(
@@ -823,6 +883,7 @@ class FactorPanelLoader:
         universe_filter: UniverseFilter,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        winsorize_mad: float | None = None,
     ) -> FactorPanel:
         """Internal Parquet → FactorPanel conversion."""
         # Use polars scan for memory efficiency
@@ -861,6 +922,7 @@ class FactorPanelLoader:
             forward_period=forward_period,
             feature_group_weights=feature_group_weights,
             factor_names=factor_names,
+            winsorize_mad=winsorize_mad,
         )
 
     def _df_to_panel(
@@ -870,6 +932,7 @@ class FactorPanelLoader:
         forward_period: int,
         feature_group_weights: dict[str, float] | None = None,
         factor_names: list[str] | None = None,
+        winsorize_mad: float | None = None,
     ) -> FactorPanel:
         """Convert polars DataFrame to numpy 3D panel."""
         dates = df["trade_date"].unique().sort().to_list()
@@ -998,7 +1061,7 @@ class FactorPanelLoader:
             )
 
         # Cross-section z-score
-        factor_array = _cross_section_zscore(factor_array)
+        factor_array = _cross_section_zscore(factor_array, winsorize_mad=winsorize_mad)
 
         # Optional per-prefix scalar weighting AFTER z-score so that a
         # subsequent VecNormalize wrapper cannot re-standardise the boost
@@ -1050,6 +1113,7 @@ class FactorPanelLoader:
         seed: int = 42,
         prefix: str = "alpha_",
         feature_group_weights: dict[str, float] | None = None,
+        winsorize_mad: float | None = None,
     ) -> FactorPanel:
         """Build a synthetic panel for smoke testing — no real data needed.
 
@@ -1058,6 +1122,8 @@ class FactorPanelLoader:
 
         ``feature_group_weights`` mirrors :meth:`load_panel` so unit tests
         can exercise the weighting path without writing a Parquet.
+        ``winsorize_mad`` mirrors :meth:`load_panel` (default ``None`` =
+        current behavior, unchanged). See :func:`_cross_section_zscore`.
         """
         rng = np.random.default_rng(seed)
 
@@ -1084,7 +1150,7 @@ class FactorPanelLoader:
         ).astype(np.float32)
 
         # Cross-section z-score
-        factor_array = _cross_section_zscore(factor_array)
+        factor_array = _cross_section_zscore(factor_array, winsorize_mad=winsorize_mad)
 
         # Synthetic codes (NOT real stock codes)
         factor_names = [f"{prefix}{i:03d}" for i in range(n_factors)]
